@@ -23,12 +23,10 @@
 
 **파이썬 가상환경과 모델 파일은 OneDrive에 두지 않는다.** 5_녹취록의 환경은 torch 와 음성 모델을 포함해 수 GB이고, PC마다 따로 설치해야 한다. 동기화하면 용량만 먹는 것이 아니라 서로의 환경을 깨뜨린다.
 
-**시스템 파일은 git으로 관리하고, 사건 자료는 git에 올리지 않는다.** `.git/`을 OneDrive 안에 두면 두 PC의 index·lock 파일이 충돌해 저장소가 깨지므로, **저장소만 `%LOCALAPPDATA%\labor-automation
-epo.git` 에 두고 작업본은 이 폴더 그대로 쓴다.** 폴더를 옮기지 않으므로 상대경로 규칙과 기존 스크립트가 그대로 돈다.
+**시스템 파일은 git으로 관리하고, 사건 자료는 git에 올리지 않는다.** `.git/`을 OneDrive 안에 두면 두 PC의 index·lock 파일이 충돌해 저장소가 깨지므로, **저장소만 `%LOCALAPPDATA%\labor-automation\repo.git` 에 두고 작업본은 이 폴더 그대로 쓴다.** 폴더를 옮기지 않으므로 상대경로 규칙과 기존 스크립트가 그대로 돈다.
 
 ```
-%LOCALAPPDATA%\labor-automation
-epo.git\   ← .git (PC마다 따로, 동기화하지 않음)
+%LOCALAPPDATA%\labor-automation\repo.git\   ← .git (PC마다 따로, 동기화하지 않음)
 %OneDrive%\노동사건자동화\                    ← 작업본
 %LOCALAPPDATA%\노동사건자동화\                ← 파이썬 가상환경, 음성 모델
 ```
@@ -114,28 +112,11 @@ python 공통/scripts/dashboard.py --open
 
 **같은 파일을 양쪽 PC에서 동시에 열지 않는다.** OneDrive는 충돌하면 병합하지 않고 `파일명-PC이름.md` 같은 사본을 만든다. 사건 단위로 한쪽에서만 작업하는 편이 안전하다.
 
-시스템 파일을 고쳤으면 커밋한다.
+**git 은 사람이 치지 않는다.** 시스템 파일(지침·명령어·엔진·스크립트)을 고치면, 작업을 맡은 AI 가 그 작업을 마칠 때와
+다음 작업을 시작할 때 알아서 올린다. 다른 PC에서 따로 받을 것도 없다 — 파일은 OneDrive 가 맞춰 두고, 그 PC의 AI 가
+작업을 시작할 때 이력을 맞춘다. 절차는 `공통/운영.md` '시스템 파일 올리기' 에 있다.
 
-```
-공통\scripts\g.bat status
-공통\scripts\g.bat add -A
-공통\scripts\g.bat commit -m "무엇을 고쳤는지"
-공통\scripts\g.bat push
-```
-
-**다른 PC에서 받을 때는 `pull` 이 아니라 아래 세 줄이다.** 작업본은 OneDrive 가 이미 날라 주었는데
-`.git` 은 PC마다 따로여서, 그 PC의 git 은 이미 도착한 파일을 '커밋 안 한 내 변경'으로 본다.
-그 상태에서 `pull` 하면 `Your local changes to the following files would be overwritten by merge` 로 멈춘다.
-
-```
-공통\scripts\g.bat fetch origin main
-공통\scripts\g.bat diff origin/main --stat     ← 비어 있으면 OneDrive 가 이미 날라 준 것
-공통\scripts\g.bat reset --mixed origin/main   ← 파일은 그대로 두고 이력만 맞춘다
-```
-
-**가운데 줄이 비어 있을 때만 `reset` 한다.** 비어 있지 않으면 OneDrive 동기화가 덜 끝났거나
-그 PC에서 따로 고친 것이 있다는 뜻이다. 동기화를 기다려 다시 보고, 그래도 남으면
-그 PC에서 먼저 커밋한 뒤 `g.bat pull` 한다.
+처음 한 번은 Claude 가 `g.bat` 실행 허락을 물으니 '다시 묻지 않기'로 허락한다. 이력을 직접 보고 싶을 때만 `공통\scripts\g.bat log --oneline -10` 을 쓴다.
 
 사건 자료는 git 에 올라가지 않는다. 사건 산출물(서면초안·호증목록·작업 메모)의 별도 묶음이 필요하면 `.\백업.ps1` 이 `%OneDrive%\노동사건자동화-백업\` 에 zip 을 남긴다. 다만 이 PC의 PowerShell 실행 정책이 `Restricted` 이면 `powershell -ExecutionPolicy Bypass -File .\백업.ps1` 로 실행해야 한다.
 
