@@ -1,0 +1,33 @@
+# 노동 금액 사건 형식 예시 (가상 사건 — 실제 사건 아님)
+# 부당해고 후 복직: 해고기간 임금 상당액, 중간수입 공제(휴업수당 한도), 지연손해금
+kind: labor
+case_no: "2024가합0000"
+name: "김가상"
+employer: "주식회사 가상"
+
+worker:
+  hire_date: 2019-04-01
+  employer_merchant: true
+  pay_period_start_day: 1
+  pay_day: 25
+
+dismissal:
+  claim_basis: wage_538_invalid_dismissal     # 해고무효 임금청구(민법 제538조 제1항)
+  invalidity_basis: lsa_23
+  dismissal_date: 2024-03-01                  # 해고 효력발생일 (근거: 해고통지서 1쪽)
+  reinstatement_date: 2025-03-01              # 복직일 (근거: 복직명령서)
+  wage_items:
+    - {name: 기본급, category: base, monthly: 3000000}          # 근거: 급여명세서 2024-02
+    - {name: 정기상여금, category: regular_bonus, annual_rate: 4.0, base_items: [기본급]}   # 근거: 급여규정 7조
+  interim_income:                             # 사용자가 주장한 다른 직장 소득 (근거: 을 제5호증)
+    - {start: 2024-09-01, end: 2025-02-28, monthly_amount: 2000000, type: employment, raised_by: employer}
+  interim_cap: {avg_monthly_wage: 4000000}    # 해고 전 3개월 월평균임금 (근거: 임금대장)
+
+interest:
+  service_date: 2024-06-10
+  suit_filed_date: 2024-05-20
+  first_instance_judgment_date: 2025-06-12
+  calc_until: 2025-06-12
+
+options:
+  ii_cap_base: B_monthly_avg                  # 휴업수당 기초 방식 — 판례가 갈려 기본값 없음(사람이 고름)

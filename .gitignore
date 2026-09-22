@@ -27,7 +27,10 @@
 !6_손해배상계산/02_결과/.gitkeep
 !6_손해배상계산/03_보관/.gitkeep
 !6_손해배상계산/99_오류/.gitkeep
-!6_손해배상계산/cases/sample.yaml
+# 형식 예시는 가상 사건이고 README·CLAUDE.md 가 안내하며 테스트가 쓴다. 이름에 sample 이
+# 들어간 것만 추적한다. 2026. 9. 22. sample.yaml 하나만 예외로 두었다가 클라우드 clone 에
+# labor_sample.yaml 이 빠져 pytest 10건이 무너졌다.
+!6_손해배상계산/cases/*sample*.yaml
 6_손해배상계산/_추출.txt
 **/_추출.txt
 *.case.yaml
