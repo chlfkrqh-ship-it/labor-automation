@@ -1,0 +1,33 @@
+# 골든 케이스 3 재현용 가상 사건 (실제 사건 아님)
+case_no: "2024가단1"
+name: "홍길동"
+sex: M
+case_type: "손해배상(자)"
+injury_type: "부상"
+judgment_type: "판결"
+
+birth: 1990-01-01
+accident: 2024-01-01
+cure_end: 2024-06-30
+work_limit_years: 65
+argument_end: 2026-03-08
+legal_rate: 5
+life_expectancy: 47.6
+life_end: 2071-07-27
+
+impairments:
+  - {dept: 정형외과, rate: 40, prior: 20}
+  - {dept: 안과, rate: 20}
+
+occupation: 보통인부
+wages:
+  "2024-1": 165545
+  "2024-2": 167081
+  "2025-1": 169804
+  "2025-2": 171037
+  "2026-1": 172068
+
+fault_rate: 30
+paid_cure: 1000000
+advance: 2000000
+solatium: 20000000

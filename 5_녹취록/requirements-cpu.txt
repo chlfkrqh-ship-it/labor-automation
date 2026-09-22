@@ -1,0 +1,12 @@
+# 5_녹취록 실행에 필요한 것 전부. GPU 도 HuggingFace 토큰도 필요 없다.
+#
+# faster-whisper : 전사 (CTranslate2 기반. torch 를 쓰지 않는다)
+# sherpa-onnx    : 화자 분리 (ONNX Runtime. CPU 에서 돈다)
+# av, numpy      : diarize.py 가 오디오를 16kHz mono 로 디코딩할 때 쓴다
+# certifi        : Windows Store 파이썬이 시스템 CA 를 못 찾는 경우 대비
+
+faster-whisper>=1.1
+sherpa-onnx>=1.10
+av>=12
+numpy>=1.24
+certifi

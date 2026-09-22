@@ -1,0 +1,14 @@
+{
+  "model": "opus[1m]",
+  "cleanupPeriodDays": 10,
+  "desktopSessionCleanupPeriodDays": 10,
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(python3:*)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)"
+    ]
+  }
+}

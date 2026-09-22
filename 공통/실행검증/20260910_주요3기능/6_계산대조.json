@@ -1,0 +1,231 @@
+{
+  "scope": "가상사건 engine 재계산 및 XLSX 생성. CLI YAML 로더·폴더 감시·실사건 값 추출·대법원 프로그램 신규 실행 제외",
+  "source": "6_손해배상계산\\02_결과\\테스트_계산표.xlsx",
+  "original_sha256": "241e2735457767393cf4599aa10c52f5ef6e68b3b691aa65924ee6547cad5a07",
+  "original_unchanged": true,
+  "new_sha256": "800809e632b888c3a9bf51f45ec98d19fb5d201bf8ea0dc945265df620b0672e",
+  "tests": [
+    {
+      "test": "test_240_상한이_순번3에_걸린다",
+      "status": "passed"
+    },
+    {
+      "test": "test_과실_일실수입_전순번",
+      "status": "passed"
+    },
+    {
+      "test": "test_과실비율액",
+      "status": "passed"
+    },
+    {
+      "test": "test_기간일실수입과_안분액",
+      "status": "passed"
+    },
+    {
+      "test": "test_노임_구간판정",
+      "status": "passed"
+    },
+    {
+      "test": "test_사고시연령_34세",
+      "status": "passed"
+    },
+    {
+      "test": "test_사망_사고시연령",
+      "status": "passed"
+    },
+    {
+      "test": "test_사망_월소득과_생계비",
+      "status": "passed"
+    },
+    {
+      "test": "test_사망_합계",
+      "status": "passed"
+    },
+    {
+      "test": "test_사망_호프만",
+      "status": "passed"
+    },
+    {
+      "test": "test_순번_구성이_같다",
+      "status": "passed"
+    },
+    {
+      "test": "test_위자료_자동계산",
+      "status": "passed"
+    },
+    {
+      "test": "test_일실수입_전체합계",
+      "status": "passed"
+    },
+    {
+      "test": "test_일실퇴직금_산출방식B",
+      "status": "passed"
+    },
+    {
+      "test": "test_재직기간_월할_일할",
+      "status": "passed"
+    },
+    {
+      "test": "test_중복장해율_프로그램출력과_일치",
+      "status": "passed"
+    },
+    {
+      "test": "test_지급치료비_기왕증_과실분",
+      "status": "passed"
+    },
+    {
+      "test": "test_최종합계는_과실비율액을_빼는_경로",
+      "status": "passed"
+    },
+    {
+      "test": "test_향후치료비",
+      "status": "passed"
+    },
+    {
+      "test": "test_호프만_수치가_같다",
+      "status": "passed"
+    }
+  ],
+  "sheets": [
+    "종합",
+    "치료비",
+    "개호비",
+    "보조구",
+    "퇴직금(일반)"
+  ],
+  "nonempty_cells_compared": 450,
+  "value_differences": [
+    {
+      "sheet": "종합",
+      "cell": "D6",
+      "old": null,
+      "new": "2024가단1"
+    },
+    {
+      "sheet": "종합",
+      "cell": "L7",
+      "old": null,
+      "new": "47.6년"
+    },
+    {
+      "sheet": "종합",
+      "cell": "H9",
+      "old": null,
+      "new": "2071.07.27"
+    },
+    {
+      "sheet": "종합",
+      "cell": "H11",
+      "old": null,
+      "new": "2026.03.08"
+    },
+    {
+      "sheet": "치료비",
+      "cell": "D6",
+      "old": null,
+      "new": "2024가단1"
+    },
+    {
+      "sheet": "치료비",
+      "cell": "L7",
+      "old": null,
+      "new": "47.6년"
+    },
+    {
+      "sheet": "치료비",
+      "cell": "H9",
+      "old": null,
+      "new": "2071.07.27"
+    },
+    {
+      "sheet": "치료비",
+      "cell": "H11",
+      "old": null,
+      "new": "2026.03.08"
+    },
+    {
+      "sheet": "개호비",
+      "cell": "D6",
+      "old": null,
+      "new": "2024가단1"
+    },
+    {
+      "sheet": "개호비",
+      "cell": "L7",
+      "old": null,
+      "new": "47.6년"
+    },
+    {
+      "sheet": "개호비",
+      "cell": "H9",
+      "old": null,
+      "new": "2071.07.27"
+    },
+    {
+      "sheet": "개호비",
+      "cell": "H11",
+      "old": null,
+      "new": "2026.03.08"
+    },
+    {
+      "sheet": "보조구",
+      "cell": "D6",
+      "old": null,
+      "new": "2024가단1"
+    },
+    {
+      "sheet": "보조구",
+      "cell": "L7",
+      "old": null,
+      "new": "47.6년"
+    },
+    {
+      "sheet": "보조구",
+      "cell": "H9",
+      "old": null,
+      "new": "2071.07.27"
+    },
+    {
+      "sheet": "보조구",
+      "cell": "H11",
+      "old": null,
+      "new": "2026.03.08"
+    },
+    {
+      "sheet": "퇴직금(일반)",
+      "cell": "D6",
+      "old": null,
+      "new": "2024가단1"
+    },
+    {
+      "sheet": "퇴직금(일반)",
+      "cell": "L7",
+      "old": null,
+      "new": "47.6년"
+    },
+    {
+      "sheet": "퇴직금(일반)",
+      "cell": "H9",
+      "old": null,
+      "new": "2071.07.27"
+    },
+    {
+      "sheet": "퇴직금(일반)",
+      "cell": "H11",
+      "old": null,
+      "new": "2026.03.08"
+    }
+  ],
+  "income_total": "362157144",
+  "settlement": {
+    "선공제_후_재산적손해": "362157144",
+    "원고측_과실비율액": "108647143",
+    "과실상계_후_표시값": "253510000",
+    "기왕증_과실분": "386100",
+    "공제액_합계": "2386100",
+    "재산상손해_합계": "251123901",
+    "위자료_합계": "20000000",
+    "합계": "271123901"
+  },
+  "visual_qa": "미실시"
+}
