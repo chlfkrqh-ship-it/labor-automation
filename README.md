@@ -123,7 +123,19 @@ python 공통/scripts/dashboard.py --open
 공통\scripts\g.bat push
 ```
 
-다른 PC에서는 `공통\scripts\g.bat pull` 로 받는다. **작업본은 OneDrive 로도 동기화되므로, 먼저 OneDrive 동기화가 끝난 것을 보고 `g.bat status` 로 차이를 확인한 뒤 커밋한다.**
+**다른 PC에서 받을 때는 `pull` 이 아니라 아래 세 줄이다.** 작업본은 OneDrive 가 이미 날라 주었는데
+`.git` 은 PC마다 따로여서, 그 PC의 git 은 이미 도착한 파일을 '커밋 안 한 내 변경'으로 본다.
+그 상태에서 `pull` 하면 `Your local changes to the following files would be overwritten by merge` 로 멈춘다.
+
+```
+공통\scripts\g.bat fetch origin main
+공통\scripts\g.bat diff origin/main --stat     ← 비어 있으면 OneDrive 가 이미 날라 준 것
+공통\scripts\g.bat reset --mixed origin/main   ← 파일은 그대로 두고 이력만 맞춘다
+```
+
+**가운데 줄이 비어 있을 때만 `reset` 한다.** 비어 있지 않으면 OneDrive 동기화가 덜 끝났거나
+그 PC에서 따로 고친 것이 있다는 뜻이다. 동기화를 기다려 다시 보고, 그래도 남으면
+그 PC에서 먼저 커밋한 뒤 `g.bat pull` 한다.
 
 사건 자료는 git 에 올라가지 않는다. 사건 산출물(서면초안·호증목록·작업 메모)의 별도 묶음이 필요하면 `.\백업.ps1` 이 `%OneDrive%\노동사건자동화-백업\` 에 zip 을 남긴다. 다만 이 PC의 PowerShell 실행 정책이 `Restricted` 이면 `powershell -ExecutionPolicy Bypass -File .\백업.ps1` 로 실행해야 한다.
 
