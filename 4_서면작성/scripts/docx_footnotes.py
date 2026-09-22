@@ -205,6 +205,8 @@ def convert(path, check_only=False, list_only=False):
 
 
 if __name__ == '__main__':
+    if len(sys.argv) > 1 and sys.argv[1] in ('-h', '--help'):
+        print(__doc__); sys.exit(0)
     if len(sys.argv) < 2:
         print(__doc__); sys.exit(2)
     sys.exit(convert(sys.argv[1], check_only='--check' in sys.argv, list_only='--list' in sys.argv))

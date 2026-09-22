@@ -28,6 +28,8 @@
 !6_손해배상계산/03_보관/.gitkeep
 !6_손해배상계산/99_오류/.gitkeep
 !6_손해배상계산/cases/sample.yaml
+!6_손해배상계산/cases/labor_sample.yaml
+!6_손해배상계산/cases/labor_dismissal_sample.yaml
 6_손해배상계산/_추출.txt
 **/_추출.txt
 *.case.yaml

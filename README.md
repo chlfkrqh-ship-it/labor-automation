@@ -23,10 +23,12 @@
 
 **파이썬 가상환경과 모델 파일은 OneDrive에 두지 않는다.** 5_녹취록의 환경은 torch 와 음성 모델을 포함해 수 GB이고, PC마다 따로 설치해야 한다. 동기화하면 용량만 먹는 것이 아니라 서로의 환경을 깨뜨린다.
 
-**시스템 파일은 git으로 관리하고, 사건 자료는 git에 올리지 않는다.** `.git/`을 OneDrive 안에 두면 두 PC의 index·lock 파일이 충돌해 저장소가 깨지므로, **저장소만 `%LOCALAPPDATA%\labor-automationepo.git` 에 두고 작업본은 이 폴더 그대로 쓴다.** 폴더를 옮기지 않으므로 상대경로 규칙과 기존 스크립트가 그대로 돈다.
+**시스템 파일은 git으로 관리하고, 사건 자료는 git에 올리지 않는다.** `.git/`을 OneDrive 안에 두면 두 PC의 index·lock 파일이 충돌해 저장소가 깨지므로, **저장소만 `%LOCALAPPDATA%\labor-automation
+epo.git` 에 두고 작업본은 이 폴더 그대로 쓴다.** 폴더를 옮기지 않으므로 상대경로 규칙과 기존 스크립트가 그대로 돈다.
 
 ```
-%LOCALAPPDATA%\labor-automationepo.git\   ← .git (PC마다 따로, 동기화하지 않음)
+%LOCALAPPDATA%\labor-automation
+epo.git\   ← .git (PC마다 따로, 동기화하지 않음)
 %OneDrive%\노동사건자동화\                    ← 작업본
 %LOCALAPPDATA%\노동사건자동화\                ← 파이썬 가상환경, 음성 모델
 ```
@@ -56,12 +58,16 @@
 
 ### 1-3. 파이썬 환경
 
-**6_손해배상계산** — 의존성이 가벼워 시스템에 그대로 깐다.
+**6_손해배상계산 · 4_서면작성** — 의존성이 가벼워 시스템에 그대로 깐다. **두 폴더 모두 깐다.**
+`4_서면작성` 을 빠뜨리면 증거 정리(`evidence_check.py`)가 PyMuPDF 를 찾지 못해 멈춘다.
 
 ```powershell
 cd "$env:OneDrive\노동사건자동화\6_손해배상계산"
 pip install -r requirements.txt
 python -m pytest tests\ -q
+
+cd "$env:OneDrive\노동사건자동화\4_서면작성"
+pip install -r requirements.txt
 ```
 
 409건이 모두 통과해야 한다(신체손해 62건 + 노동 금액 347건). 이어서 `6_손해배상계산\노임표-추출-절차.md` 를 보고 노임표·생명표를 뽑는다. **대법원 프로그램이 깔린 PC에서 한 번만 하면 되고**, 결과 CSV는 OneDrive로 다른 PC에도 넘어간다.
@@ -82,7 +88,7 @@ cd "$env:OneDrive\노동사건자동화\5_녹취록"
 같은 OneDrive 계정으로 로그인하면 폴더가 그대로 내려온다. 그다음 이 PC에서 할 일은 셋이다.
 
 1. 폴더를 **"이 디바이스에 항상 유지"** 로 지정
-2. `6_손해배상계산` — `pip install -r requirements.txt`
+2. `6_손해배상계산` 과 `4_서면작성` — 각각 `pip install -r requirements.txt`
 3. `5_녹취록` — `.\setup.ps1` (이 PC에도 가상환경과 모델을 새로 받는다)
 
 노임표 CSV와 양식·샘플은 이미 동기화되어 있으므로 다시 준비하지 않는다.
@@ -154,5 +160,6 @@ LBOX 검색·하이라이트, 녹취, 손해배상 계산은 모두 로컬 실�
 - `/서면` — 프레임 병합과 최종 docx 생성까지
 - `/손배계산` — 짧은 사건 하나로 사건.yaml 초안까지
 - `python -m pytest tests/ -q` — 6_손해배상계산에서 409건
+- `python 4_서면작성/scripts/evidence_check.py --help` — 증거 스크립트가 PyMuPDF 를 찾는지
 - `python cli.py cases/labor_sample.yaml -o "$env:TEMP\노동.xlsx"` — 노동 금액 계산표가 나오는지
 - 녹취 — 짧은 음성 하나로 전사·화자 분리

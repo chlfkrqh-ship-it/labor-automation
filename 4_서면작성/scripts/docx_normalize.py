@@ -17,7 +17,7 @@ from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
 CIRC = re.compile(r"[①-⑳]")
-BANNED = re.compile(r"뒷받침|국가기관인|객관적으로 확인|우선,|먼저,|다음으로,|마지막으로,|첫째|둘째|셋째|사료|살피건대|생각건대|요컨대|할 것입니다|다름 아|알 수 있습니다|입증합니다|증명합니다|방증|예상됩니다|본건|금번|재판장님")
+BANNED = re.compile(r"뒷받침|국가기관인|객관적으로 확인|우선,|먼저,|다음으로,|마지막으로,|첫째|둘째|셋째|살피건대|생각건대|요컨대|할 것입니다|다름 아|알 수 있습니다|입증합니다|증명합니다|방증|예상됩니다|본건|금번|재판장님")
 
 
 def body_font(doc):
@@ -95,6 +95,8 @@ def scan_words(path):
 
 
 if __name__ == '__main__':
+    if len(sys.argv) > 1 and sys.argv[1] in ('-h', '--help'):
+        print(__doc__); sys.exit(0)
     if len(sys.argv) < 2:
         print(__doc__); sys.exit(2)
     path = sys.argv[1]

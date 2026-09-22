@@ -172,6 +172,13 @@ class SearchEvalTests(unittest.TestCase):
         self.assertEqual(search_eval.lbox_score(self.dir / 'r.json', self.dir)['중단'], 'status 403')
 
     def test_repository_data_is_consistent(self):
+        # 공통/검증/ 은 실제 사건으로 시험한 자료라 git 에 올리지 않는다(공통/git-분리-검토.md).
+        # 새로 clone 한 PC·클라우드에는 없는 것이 정상이므로, 있을 때만 대조한다.
+        missing = [n for n in (search_eval.ANSWERS, search_eval.QUERIES, search_eval.LOWER)
+                   if not (search_eval.DATA / n).exists()]
+        if missing:
+            raise unittest.SkipTest(
+                '검증 자료가 없어 건너뜁니다(git 제외 대상): ' + ', '.join(missing))
         cases = search_eval.load(search_eval.DATA / search_eval.ANSWERS)
         queries = search_eval.load(search_eval.DATA / search_eval.QUERIES)
         self.assertEqual({str(c['번호']) for c in cases}, set(queries))

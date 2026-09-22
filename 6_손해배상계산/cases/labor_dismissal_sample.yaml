@@ -1,0 +1,59 @@
+# 노동 금액 계산 입력 형식 예시 — 부당해고 사건의 해고기간 임금과 중간수입 공제.
+#
+# 실제 사건 자료가 아니라 형식을 보여 주기 위해 지어낸 값이다. 사람 이름과 회사 이름,
+# 금액, 날짜 모두 가공한 것이다. 사건 자료는 이 폴더에 두되 git 에 올리지 않는다.
+#
+# 통상임금 재산정(수당·퇴직금·연차수당 차액) 사건의 형식은 cases/labor_sample.yaml 에 있다.
+# 절마다 어떤 키를 쓸 수 있는지는 engine/labor/dismissal.py 머리 docstring 에 있다.
+#
+#     python cli.py cases/labor_dismissal_sample.yaml -o 노동금액계산표.xlsx
+
+kind: labor
+case_no: "2026가합100002"
+name: 이복직
+employer: 주식회사 평안물류
+
+worker:
+  hire_date: 2018-03-01
+  pay_day: 25                 # 매월 25일 지급
+  pay_period_start_day: 1
+  employer_merchant: true
+
+# ── 해고기간 임금 ───────────────────────────────────────────────────────
+# 해고가 무효인지, 중간수입을 어느 기간에 귀속시킬지 같은 법적 판단은 사람이 정해 적는다.
+# 엔진은 판단하지 않고 적힌 값으로 계산만 한다.
+dismissal:
+  mode: back_pay
+  claim_basis: wage_538_invalid_dismissal
+  discipline_type: dismissal
+  invalidity_basis: lsa_23
+  dismissal_date: 2023-01-01        # 해고 효력발생일. 이날부터 기산(dw_start_rule=effective_date)
+  reinstatement_date: 2024-01-01    # 실제 복직일. 종기는 그 전날(2023. 12. 31.) — 모두 12개월
+  closing_date: 2025-06-10
+  wage_items:
+    - {name: 기본급, category: base, monthly: 3000000}
+    # 연 400% 상여를 12로 나누어 매월 가산한다(dw_bonus_allocation=annual_div_12).
+    # 3,000,000 × 4 ÷ 12 = 1,000,000 → 월 임금 4,000,000원
+    - {name: 정기상여, category: regular_bonus, annual_rate: 4.0, base_items: [기본급]}
+  interim_income:
+    # 해고 후 다른 곳에서 얻은 수입. 뒤 6개월만 있었다.
+    # 공제액은 월별로 min(중간수입, 임금 − 휴업수당) 이다.
+    # = min(2,000,000, 4,000,000 − 2,800,000) = 1,200,000원 × 6개월
+    - {start: 2023-07-01, end: 2023-12-31, monthly_amount: 2000000,
+       type: employment, raised_by: employer}
+
+# ── 지연손해금 ──────────────────────────────────────────────────────────
+# 복직하여 근로관계가 이어졌으므로 구법 도래분에는 연 20%가 붙지 않는다
+# (대법원 2014. 8. 26. 선고 2014다28305). 정기지급일 다음 날부터 연 6%,
+# 사실심 선고 다음 날부터 소송촉진법 이율이 붙는다.
+interest:
+  employer_merchant: true
+  service_date: 2024-05-10               # 소장 부본 송달일
+  first_instance_judgment_date: 2025-06-20   # 선고(예정)일
+  suit_filed_date: 2024-04-25
+  calc_until: 2025-06-20
+
+# ── 법적 판단(옵션) ─────────────────────────────────────────────────────
+options:
+  # 중간수입 공제 한도의 기초(판결 관찰 빈도가 가장 높은 방식)
+  ii_cap_base: C_contract_wage_ratio
