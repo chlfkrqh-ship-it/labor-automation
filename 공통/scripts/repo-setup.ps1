@@ -57,10 +57,14 @@ if ($원격) {
 Write-Host ""
 Write-Host "이제 이렇게 쓴다(PowerShell 실행 정책과 무관하게 도는 .bat 을 기본으로 한다):" -ForegroundColor Cyan
 Write-Host "  공통\scripts\g.bat status"
-Write-Host "  공통\scripts\g.bat pull"
 Write-Host "  공통\scripts\g.bat add -A"
 Write-Host "  공통\scripts\g.bat commit -m '무엇을 고쳤는지'"
 Write-Host "  공통\scripts\g.bat push"
+Write-Host ""
+Write-Host "다른 PC에서 받을 때는 pull 이 아니라 아래 세 줄이다(작업본은 OneDrive 가 날라 주므로):" -ForegroundColor Cyan
+Write-Host "  공통\scripts\g.bat fetch origin main"
+Write-Host "  공통\scripts\g.bat diff origin/main --stat     (비어 있으면 OneDrive 가 이미 날라 준 것)"
+Write-Host "  공통\scripts\g.bat reset --mixed origin/main   (파일은 그대로 두고 이력만 맞춘다)"
 Write-Host ""
 Write-Host "래퍼 위치: $작업본\공통\scripts\g.bat" -ForegroundColor Cyan
 Write-Host "매번 경로를 치기 번거로우면 프로필에 함수로 등록한다. 방법은 시작하기.md 에 있다."
