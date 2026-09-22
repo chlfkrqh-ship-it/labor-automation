@@ -23,7 +23,15 @@
 
 **파이썬 가상환경과 모델 파일은 OneDrive에 두지 않는다.** 5_녹취록의 환경은 torch 와 음성 모델을 포함해 수 GB이고, PC마다 따로 설치해야 한다. 동기화하면 용량만 먹는 것이 아니라 서로의 환경을 깨뜨린다.
 
-**git은 쓰지 않는다.** OneDrive가 `.git/`을 동기화하면 두 PC의 index·lock 파일이 충돌해 저장소가 깨진다. 되돌리기가 필요하면 OneDrive의 파일 버전 기록을 쓰고, 시스템 파일 묶음은 `백업.ps1`로 따로 보관한다.
+**시스템 파일은 git으로 관리하고, 사건 자료는 git에 올리지 않는다.** `.git/`을 OneDrive 안에 두면 두 PC의 index·lock 파일이 충돌해 저장소가 깨지므로, **저장소만 `%LOCALAPPDATA%\labor-automationepo.git` 에 두고 작업본은 이 폴더 그대로 쓴다.** 폴더를 옮기지 않으므로 상대경로 규칙과 기존 스크립트가 그대로 돈다.
+
+```
+%LOCALAPPDATA%\labor-automationepo.git\   ← .git (PC마다 따로, 동기화하지 않음)
+%OneDrive%\노동사건자동화\                    ← 작업본
+%LOCALAPPDATA%\노동사건자동화\                ← 파이썬 가상환경, 음성 모델
+```
+
+원격은 `https://github.com/chlfkrqh-ship-it/labor-automation`(private)이다. 무엇이 왜 제외되는지와 시행 기록은 `공통/git-분리-검토.md` 에 있다.
 
 ---
 
@@ -100,13 +108,18 @@ python 공통/scripts/dashboard.py --open
 
 **같은 파일을 양쪽 PC에서 동시에 열지 않는다.** OneDrive는 충돌하면 병합하지 않고 `파일명-PC이름.md` 같은 사본을 만든다. 사건 단위로 한쪽에서만 작업하는 편이 안전하다.
 
-시스템 파일을 크게 고쳤으면 백업을 남긴다.
+시스템 파일을 고쳤으면 커밋한다.
 
-```powershell
-.\백업.ps1
+```
+공통\scripts\g.bat status
+공통\scripts\g.bat add -A
+공통\scripts\g.bat commit -m "무엇을 고쳤는지"
+공통\scripts\g.bat push
 ```
 
-`%OneDrive%\노동사건자동화-백업\` 에 날짜가 붙은 zip이 쌓인다. 사건의 원자료(법원에서 다시 받을 수 있는 PDF)는 제외하고, **우리가 만든 산출물(서면초안·최종서면·호증목록·작업 메모)은 담는다.** 잃으면 되찾을 수 없고 전부 합쳐 20MB 남짓이기 때문이다.
+다른 PC에서는 `공통\scripts\g.bat pull` 로 받는다. **작업본은 OneDrive 로도 동기화되므로, 먼저 OneDrive 동기화가 끝난 것을 보고 `g.bat status` 로 차이를 확인한 뒤 커밋한다.**
+
+사건 자료는 git 에 올라가지 않는다. 사건 산출물(서면초안·호증목록·작업 메모)의 별도 묶음이 필요하면 `.\백업.ps1` 이 `%OneDrive%\노동사건자동화-백업\` 에 zip 을 남긴다. 다만 이 PC의 PowerShell 실행 정책이 `Restricted` 이면 `powershell -ExecutionPolicy Bypass -File .\백업.ps1` 로 실행해야 한다.
 
 ---
 
@@ -126,10 +139,11 @@ LBOX 검색·하이라이트, 녹취, 손해배상 계산은 모두 로컬 실�
 
 | 방법 | 되는 것 | 조건 |
 |---|---|---|
-| Cowork에서 데스크톱 원격 구동 | 전부 | 그 PC가 켜져 있고 Claude 데스크톱 앱 실행 중 |
+| Remote Control · Cowork 로 데스크톱 원격 구동 | 전부 | 그 PC가 켜져 있고 Claude 데스크톱 앱 실행 중 |
+| Claude Code 웹/모바일(claude.ai/code) | **시스템 파일 작업만** | GitHub 저장소에서 clone 한다. 사건 자료가 없고, LBOX·Word·한컴·음성 모델도 없다 |
 | 휴대폰 OneDrive 앱 | 산출물 열람 | 편집은 충돌 위험이 있어 권하지 않음 |
 
-git을 쓰지 않으므로 Claude Code 웹/모바일(claude.ai/code)로는 이 폴더에 접근할 수 없다. 휴대폰에서 작업이 필요하면 Cowork 쪽 경로를 쓴다.
+**사건 작업을 다른 곳에서 이어가는 수단은 Remote Control 이다.** LBOX 검색·하이라이트는 사용자가 로그인한 브라우저를, docx 면수 확인은 Word 를, 한글 양식은 한컴오피스를, 녹취는 로컬 음성 모델을 각각 필요로 하므로 클라우드로 옮길 수 없다. 클라우드에서 되는 것은 계산 엔진·스크립트·지침 작업이고, `6_손해배상계산` 의 pytest 409건은 그대로 돈다.
 
 ---
 
