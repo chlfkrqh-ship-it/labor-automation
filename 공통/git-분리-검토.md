@@ -83,6 +83,24 @@ git --git-dir=$GD config core.worktree "$env:OneDrive\노동사건자동화"
 
 **A안을 권한다.** 지금 구조를 건드리지 않고 이득만 가져온다.
 
+## 두 PC 운영 — OneDrive 와 git 이 같은 파일을 나른다
+
+작업본이 OneDrive 로도 동기화되므로, 다른 PC 에서 고친 내용은 **git 으로 받기 전에 이미 파일로 도착해 있다.** 그래서 보통의 `git pull` 이 "local changes would be overwritten" 으로 거부되는 일이 생긴다. 파일 내용은 같은데 git 이 그것을 모르기 때문이다.
+
+**규칙은 하나다. OneDrive 동기화가 끝난 것을 먼저 보고, 그 다음에 이력을 맞춘다.**
+
+```
+공통\scripts\g.bat fetch
+공통\scripts\g.bat status          # OneDrive 가 이미 가져온 것이 변경으로 보인다
+공통\scripts\g.bat reset --hard origin/main
+```
+
+`reset --hard` 가 위험해 보이지만, **OneDrive 가 같은 내용을 이미 내려놓은 뒤라면 파일은 달라지지 않고 인덱스만 맞는다.** 반대로 이 PC 에서만 고친 것이 섞여 있으면 그것까지 지우므로, `g.bat status` 로 무엇이 바뀌었는지 먼저 본다.
+
+- **한 번에 한 PC 에서만 작업한다.** OneDrive 는 충돌하면 병합하지 않고 `파일명-PC이름.md` 사본을 만든다(`README.md` 3항). git 을 붙였다고 이 규칙이 느슨해지지 않는다.
+- **고친 PC 에서 바로 커밋·푸시한다.** 커밋하지 않고 다른 PC 로 넘어가면, 그 PC 에서는 파일만 바뀌고 이력이 없어 무엇이 달라졌는지 git 이 설명해 주지 못한다.
+- 사건 자료는 git 에 없으므로 언제나 OneDrive 만 본다.
+
 ## 원격 — GitHub private
 
 클라우드 세션은 원격 저장소에서 clone 하므로 GitHub(또는 동급 호스팅)이 필요하다.

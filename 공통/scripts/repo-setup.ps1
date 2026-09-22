@@ -50,7 +50,7 @@ if ($원격) {
         git --git-dir=$저장소 --work-tree=$작업본 reset --mixed origin/main   # 파일은 건드리지 않고 이력만 맞춘다
         git --git-dir=$저장소 branch --set-upstream-to=origin/main main 2>$null
         Write-Host "받았다. 작업본의 파일은 그대로 두었다(reset --mixed)." -ForegroundColor Green
-        Write-Host "차이를 보려면:  .\공통\scripts\g.ps1 status" -ForegroundColor Cyan
+        Write-Host "차이를 보려면:  공통\scripts\g.bat status" -ForegroundColor Cyan
     }
 }
 
