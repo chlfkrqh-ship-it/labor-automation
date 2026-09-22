@@ -1,7 +1,7 @@
 {
   "version": 1,
   "files": {
-    "CLAUDE.md": "c1d993ca9c0ea4670919afb5f9d182ea851fadc086c39e10f1d9dba2a0b59b56",
+    "CLAUDE.md": "453f565881d9dd3f6f9292745b6271e6c902ec8b7131415f713b9de43e2fcedc",
     "1_검토의견/AGENTS.md": "a6f5be553e0e429b9dbfb448f765148064af70baad55d6b95537033ecd1dcae4",
     "2_판례검색/AGENTS.md": "227ea4cf492bdb158eb4c7d2d1f43b493d91f0d65f2a02c3354abde17af26d8e",
     "3_서면보강/AGENTS.md": "3661f437acd51a1297718d97b747ee4d6541bed44798aa3c59d46ae054a95d16",
@@ -21,10 +21,10 @@
     ".claude/commands/판례검색.md": "79ae8c5bbaf8f62d4ce380aa4f5d6ee9fe0fe53d82432c64b5f9608c3398d934",
     ".agents/skills/labor-workflow/SKILL.md": "97b951f64d5077a63a8fb590910fa9da86601d64ad874c538b76028f014a0ab7",
     ".claude/skills/labor-workflow/SKILL.md": "97b951f64d5077a63a8fb590910fa9da86601d64ad874c538b76028f014a0ab7",
-    ".agents/skills/lbox-검색/SKILL.md": "9ba273b010f82b4129fb679b9632bd17c08653691466bb846e7653e67e309dec",
-    ".claude/skills/lbox-검색/SKILL.md": "9ba273b010f82b4129fb679b9632bd17c08653691466bb846e7653e67e309dec",
-    ".agents/skills/lbox-하이라이트/SKILL.md": "63576b1622b27608fa9afd9cb0ceb381b2387bb88f6c34d6bfc3120fa1c19fd8",
-    ".claude/skills/lbox-하이라이트/SKILL.md": "63576b1622b27608fa9afd9cb0ceb381b2387bb88f6c34d6bfc3120fa1c19fd8",
+    ".agents/skills/lbox-검색/SKILL.md": "2ca887af5d64664258a1b81169489447e84ab060f2be46e0e349588d7078f46a",
+    ".claude/skills/lbox-검색/SKILL.md": "2ca887af5d64664258a1b81169489447e84ab060f2be46e0e349588d7078f46a",
+    ".agents/skills/lbox-하이라이트/SKILL.md": "2b4736b9a620fe0530f0b331bedde3b919b52acef24e7566d23d4ca71eb1b5a2",
+    ".claude/skills/lbox-하이라이트/SKILL.md": "2b4736b9a620fe0530f0b331bedde3b919b52acef24e7566d23d4ca71eb1b5a2",
     ".agents/skills/법제처-검색/SKILL.md": "44e0d3ca245104cdf1d6aad3496585b91dcdc98371a10f4bed030aac5212a528",
     ".claude/skills/법제처-검색/SKILL.md": "44e0d3ca245104cdf1d6aad3496585b91dcdc98371a10f4bed030aac5212a528",
     ".agents/skills/사업자-확인/SKILL.md": "d6a7e0ea8b38ca3f95f0d53c65f8d6daf6af1164da97c21e5f48b4bdcd379d07",
