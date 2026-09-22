@@ -21,8 +21,11 @@ from pathlib import Path
 
 BANNED = re.compile(
     r'뒷받침|국가기관인|객관적으로 확인|우선,|먼저,|다음으로,|마지막으로,|첫째|둘째|셋째'
-    r'|사료|살피건대|생각건대|요컨대|할 것입니다|다름 아|알 수 있습니다|입증합니다'
+    r'|살피건대|생각건대|요컨대|할 것입니다|다름 아|알 수 있습니다|입증합니다'
     r'|증명합니다|방증|예상됩니다|본건|금번|재판장님|한자\(|（')
+# '사료됩니다' 는 루트 AGENTS.md 의 완충 종결 예시이면서 서면 스킬이 피하라고 한 표현이라
+# 위반으로 막지 않고 참고로만 센다. 평가·전망을 맺는 자리인지 사람이 보고 정한다.
+HEDGE = re.compile(r'사료')
 CONJUNCTION = re.compile(r'^(그러나|따라서|또한|다만|가사|한편|그리고)(?!,)')
 MEMO = re.compile(r'\[[^\]]*(확인|보완|필요)[^\]]*\]|【[^】]*】')
 SENTENCE = re.compile(r'다\.')
@@ -134,6 +137,8 @@ def check(path: Path):
                 CONJUNCTION.match(text)[1])
         for hit in set(m[0] for m in MEMO.finditer(text)):
             add(violations, '대괄호 메모 잔존', line, text, hit[:30])
+        if HEDGE.search(text):
+            add(notes, '사료 종결', line, text, HEDGE.search(text)[0])
 
         count = len(SENTENCE.findall(text))
         if count >= 3:

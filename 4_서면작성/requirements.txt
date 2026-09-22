@@ -1,0 +1,13 @@
+# 4_서면작성 스크립트 실행에 필요한 것. 시스템 파이썬에 그대로 깐다(가상환경 없음).
+#
+# python-docx : docx_merge·docx_restyle·docx_footnotes·docx_normalize·citation_check·style_check
+# lxml        : docx_footnotes 가 각주 XML 을 직접 다룬다(python-docx 가 함께 깔지만 명시해 둔다)
+# PyMuPDF     : evidence_check 가 호증 PDF 의 도장·면 이미지를 읽는다. 없으면 /증거정리 가 바로 멈춘다
+# Pillow      : docx_merge 가 발췌 이미지의 크기를 읽어 폭 15cm 로 맞춘다
+# numpy       : evidence_check 의 도장 검출(오른쪽 여백 붉은 픽셀 세기)
+
+python-docx>=1.1
+lxml>=5.0
+PyMuPDF>=1.24
+Pillow>=10.0
+numpy>=1.24
