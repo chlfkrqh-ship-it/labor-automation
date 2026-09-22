@@ -55,11 +55,12 @@ if ($원격) {
 }
 
 Write-Host ""
-Write-Host "이제 이렇게 쓴다:" -ForegroundColor Cyan
-Write-Host "  .\공통\scripts\g.ps1 status"
-Write-Host "  .\공통\scripts\g.ps1 add -A"
-Write-Host "  .\공통\scripts\g.ps1 commit -m '무엇을 고쳤는지'"
-Write-Host "  .\공통\scripts\g.ps1 push"
+Write-Host "이제 이렇게 쓴다(PowerShell 실행 정책과 무관하게 도는 .bat 을 기본으로 한다):" -ForegroundColor Cyan
+Write-Host "  공통\scripts\g.bat status"
+Write-Host "  공통\scripts\g.bat pull"
+Write-Host "  공통\scripts\g.bat add -A"
+Write-Host "  공통\scripts\g.bat commit -m '무엇을 고쳤는지'"
+Write-Host "  공통\scripts\g.bat push"
 Write-Host ""
-Write-Host "매번 경로를 치기 번거로우면 프로필에 등록한다(시작하기.md 참조):" -ForegroundColor Cyan
-Write-Host "  function g { & `"`$env:OneDrive\노동사건자동화\공통\scripts\g.ps1`" @args }"
+Write-Host "래퍼 위치: $작업본\공통\scripts\g.bat" -ForegroundColor Cyan
+Write-Host "매번 경로를 치기 번거로우면 프로필에 함수로 등록한다. 방법은 시작하기.md 에 있다."
