@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import unittest
 
-SKILL = Path(__file__).parents[1] / '스킬' / 'lbox-검색' / 'SKILL.md'
+SKILL = Path(__file__).parents[2] / '.claude' / 'skills' / 'lbox-검색' / 'SKILL.md'
 HARNESS = Path(__file__).with_name('lbox_code_harness.js')
 
 

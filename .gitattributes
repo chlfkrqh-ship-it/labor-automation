@@ -1,20 +1,14 @@
 # 줄끝 통일. 두 PC(회사·집)와 클라우드 세션이 같은 저장소를 보는데 줄끝이 섞여 있으면
 # 내용은 그대로인데 파일 전체가 바뀐 것처럼 보이는 diff 가 난다.
-# 저장소에도 작업본에도 LF 로 둔다. eol=lf 를 붙이는 이유는 두 가지다.
-#   - repo-setup.ps1 이 core.autocrlf false 로 '줄끝을 건드리지 않는다'고 정해 두었다.
-#     eol 을 지정하지 않으면 .gitattributes 가 그 설정을 덮어 Windows 에서 CRLF 로 꺼내 간다.
-#   - 공통/배포상태.json 이 작업본 바이트의 해시를 적는다. 플랫폼마다 줄끝이 다르면
-#     같은 파일의 해시가 달라져 sync --apply 가 '직접 수정된 연결 파일' 오류로 멈춘다.
+# 저장소에도 작업본에도 LF 로 둔다. eol=lf 를 붙이는 것은 repo-setup.ps1 이 core.autocrlf false 로
+# '줄끝을 건드리지 않는다'고 정해 두었기 때문이다. eol 을 지정하지 않으면 .gitattributes 가
+# 그 설정을 덮어 Windows 에서 CRLF 로 꺼내 간다.
 * text=auto eol=lf
 
 # .bat 은 CRLF 로 꺼낸다. cmd 는 LF 줄끝에서 여러 줄 블록·레이블을 잘못 읽는 일이 있고,
-# 공통/scripts/g.bat 도 CRLF 를 전제로 쓰였다. .bat 은 system.py 관리 대상이 아니어서
-# 배포상태.json 해시와도 무관하다.
+# 공통/scripts/g.bat 도 CRLF 를 전제로 쓰였다.
 *.bat text eol=crlf
 *.cmd text eol=crlf
-
-# 생성본을 원본의 바이트 복사로 만드는 공통/scripts/system.py 는 줄끝을 바꾸지 않으므로
-# 원본과 생성본이 항상 같은 줄끝을 갖는다.
 
 # 바이너리는 손대지 않는다
 *.docx binary
