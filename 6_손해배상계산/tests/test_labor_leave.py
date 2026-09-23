@@ -865,3 +865,10 @@ def test_잘못된_옵션():
 def test_약정_월액에_제수_누락():
     with pytest.raises(LaborError, match="monthly_divisor"):
         load_leave({"hire_date": "2019-01-01", "agreed_ordinary_wage": [{"from": "2019-01-01", "monthly": 3000000}]})
+
+
+def test_따옴표_없는_회계연도_시작일은_오류():
+    raw = {"hire_date": "2019-01-01", "period_basis": "fiscal_year", "fiscal_year_start": 1.1,   # YAML 01.10
+           "periods": [{"start": "2020-01-01"}]}
+    with pytest.raises(LaborError, match="따옴표"):
+        run(raw, worker={"pay_day": 25}, daily=1)

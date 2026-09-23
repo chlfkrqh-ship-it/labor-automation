@@ -687,7 +687,12 @@ def load_leave(raw: dict, worker: dict | None = None) -> LeaveInput:
     basis = raw.get("period_basis") or "hire_date"
     if basis not in ("hire_date", "fiscal_year"):
         raise LaborError(f"연차: period_basis 는 hire_date 또는 fiscal_year 여야 합니다: {basis!r}")
-    fys = str(raw.get("fiscal_year_start") or "01-01").replace(".", "-").strip("-").split("-")
+    fy_raw = raw.get("fiscal_year_start") or "01-01"
+    if not isinstance(fy_raw, str):
+        # YAML 은 따옴표 없는 01.10 을 숫자 1.1 로 읽는다 — 10월 1일과 1월 1일을 가를 수 없으니 받지 않는다.
+        raise LaborError(f"연차: fiscal_year_start 가 숫자 {fy_raw!r} 로 읽혔습니다 — YAML 에서 따옴표 없는 01.10 은 "
+                         "숫자 1.1 이 됩니다. \"10-01\" 처럼 따옴표로 감싸 적으십시오")
+    fys = fy_raw.replace(".", "-").strip("-").split("-")
     try:
         fy_start = (int(fys[0]), int(fys[1]))
         date(2001, *fy_start)

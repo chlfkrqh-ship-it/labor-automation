@@ -204,6 +204,20 @@ def test_노임표_마지막_반기_뒤의_사고와_개호도_마지막_단가�
             break
 
 
+
+def test_농촌_사건은_직종을_찾지_않고_직종명이_다르면_후보를_보여_준다(tmp_path, capsys):
+    if not (ROOT / "data" / "wage_occupation.csv").exists():
+        pytest.skip("data/ 노임표가 없다")
+    base = replace(load(SAMPLE), wages={}, cure_end=None)
+    rural, _ = _calc(replace(base, rural=True, occupation="농업"))      # 노임표에 '농업' 직종은 없다
+    assert rural.income_rows and rural.wage_basis.startswith("농촌 일용노임")
+    with pytest.raises(cli.InputError, match="후보: .*배관공"):
+        cli._wage_lookup(replace(base, occupation="배관"))
+    # 고른 직종은 계산표에 적히고, 엔진 경고는 요약의 '확인:' 줄로 나온다
+    cli.run_injury(replace(base, injury_type="사망", funeral_cost=5000000), tmp_path / "사망.xlsx")
+    out = capsys.readouterr().out
+    assert "확인:" in out and "장례비" in out and "자동계산" not in out
+
 def test_노임표_중간에_빠진_반기는_알아볼_수_있는_오류로_멈춘다():
     if not (ROOT / "data" / "wage_occupation.csv").exists():
         pytest.skip("data/ 노임표가 없다")

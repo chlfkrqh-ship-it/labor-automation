@@ -104,22 +104,24 @@ def _wage_lookup(case: Case):
         from engine.tables import WageTable
 
         wt = WageTable.load()
-        matches = wt.find_occupation(case.occupation)
-        if not matches:
-            raise InputError(
-                f"직종 '{case.occupation}' 을 노임표에서 찾지 못했습니다. "
-                f"입력서의 [{WAGE_TABLE}] 표(사건 파일이면 wages)에 단가를 넣거나 직종명을 확인하세요."
-            )
-        oid = matches[0]["id"]
-        if rural:
+        if rural:                                         # 농촌 일용노임은 직종과 무관하다
             what = "농촌 일용노임"
+            basis = f"농촌 일용노임({'남' if case.sex == 'M' else '여'}, 분기)"
             keys = {(int(r["year"]), int(r["quarter"])) for r in wt.quarterly}
             newest = max(keys, default=None)
 
             def get(key):
                 return wt.rural_wage(key[0], key[1], case.sex)
         else:
+            from engine.tables import OccupationNotFound
+
+            try:
+                matches = wt.resolve_occupation(case.occupation)
+            except OccupationNotFound as exc:
+                raise InputError(f"{exc} (입력서는 [{WAGE_TABLE}] 표, 사건 파일은 wages)") from None
+            oid = matches[0]["id"]
             what = f"직종 '{matches[0]['name']}' 노임"
+            basis = wt.occupation_label(matches[0])
             keys = {(y, h) for (o, y, h) in wt.by_half if o == oid}
             newest = max(((y, h) for (_, y, h) in wt.by_half), default=None)
 
@@ -156,6 +158,7 @@ def _wage_lookup(case: Case):
             return raw_wage(last)
         return raw_wage(key)
 
+    wage_of.basis = None if case.wages else basis         # 계산표 [일실수입] 옆에 적을 노임 기준
     return wage_of, has_wage, notes
 
 
@@ -198,8 +201,8 @@ def run_injury(case: Case, out) -> Path:
     """신체손해 계산표를 만들고 요약을 출력한다."""
     wage_of, has_wage, notes = _wage_lookup(case)
     care, care_notes = _caregiving_lookup(case)
-    result = calculate(case, wage_of, has_wage, **care)
-    notes = notes + [f"개호 단가 — {n}" for n in care_notes]
+    result = calculate(case, wage_of, has_wage, wage_basis=wage_of.basis, **care)
+    notes = notes + [f"개호 단가 — {n}" for n in care_notes] + list(result.warnings)
     out = write_workbook(result, out)
 
     st = result.settlement
@@ -214,7 +217,8 @@ def run_injury(case: Case, out) -> Path:
     print(f"과실비율액      {int(st['원고측_과실비율액']):>15,} 원  ({case.fault_rate}%)")
     print(f"공제액          {int(st['공제액_합계']):>15,} 원")
     print(f"재산상손해      {int(st['재산상손해_합계']):>15,} 원")
-    print(f"위자료          {int(case.solatium):>15,} 원  (자동계산 {int(result.solatium_auto):,})")
+    auto = "" if case.injury_type == "사망" else f"  (자동계산 {int(result.solatium_auto):,})"
+    print(f"위자료          {int(case.solatium):>15,} 원{auto}")
     print(f"합계            {int(st['합계']):>15,} 원")
     for n in notes:
         print(f"  확인: {n}")
