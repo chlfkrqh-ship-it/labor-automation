@@ -12,15 +12,19 @@ fetch 뒤 HEAD 를 origin/main 으로 옮기고(reset --mixed, 파일은 그대�
 - 없음: 원격에 있는데 작업본에 없는 파일은 받는다(원격에서 새로 생긴 것. 이 PC에서 지우고 올리지 않은 경우는 드물고,
   되살아나도 다시 지우면 된다).
 - 새 파일: 원격 이력에 있던 파일이고 내용이 예전 커밋 판과 같으면 원격에서 지운 것이므로 지운다.
-- 어느 커밋과도 다른 내용은 이 PC에서 고친 것이므로 건드리지 않는다. 그 파일을 원격도 고쳤으면 '충돌'로 알린다.
+- 어느 커밋과도 다른 내용은 이 PC에서 고친 것이므로 건드리지 않는다. 그 파일을 원격도 고쳤으면 두 고침을 합치고
+  (git merge-file, 고친 곳이 겹치지 않을 때), 겹치면 '충돌'로 알리고 그대로 둔다.
 
 사건 자료(.gitignore 대상)는 보지 않는다. .git 은 g.bat 과 같이 %LOCALAPPDATA%\\labor-automation\\repo.git
 이고, 없으면 작업본 안의 .git 을 쓴다. 저장소가 없거나 fetch 가 실패하면 종료 코드 1 — 건너뛰고 본 작업을 한다.
 """
+from __future__ import annotations
+
 import argparse
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ZERO = '0' * 40
@@ -56,6 +60,34 @@ def blobs_in_history(git: Git, path: str) -> set[str]:
     return found - {ZERO}
 
 
+def merge_both(git: Git, root: Path, path: str, old: str) -> bool:
+    """이 PC의 고침과 원격의 고침을 합친다. 고친 곳이 겹치지 않아 합쳐지면 True."""
+    def blob(rev):
+        r = subprocess.run(git.base + ['cat-file', '-p', f'{rev}:{path}'], cwd=root, capture_output=True)
+        return r.stdout if r.returncode == 0 else None
+
+    base_b, theirs = blob(old), blob('origin/main')
+    if base_b is None or theirs is None:
+        return False
+    file = root / path
+    mine = file.read_bytes()
+    if b'\0' in mine + base_b + theirs:
+        return False                                    # 바이너리는 합치지 않는다
+    crlf = b'\r\n' in mine
+    parts = []
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, data in (('mine', mine.replace(b'\r\n', b'\n')), ('base', base_b), ('theirs', theirs)):
+            f = Path(tmp) / name
+            f.write_bytes(data)
+            parts.append(str(f))
+        r = subprocess.run(git.base + ['merge-file', '-p', *parts], cwd=root, capture_output=True)
+    if r.returncode != 0:
+        return False
+    merged = r.stdout.replace(b'\n', b'\r\n') if crlf else r.stdout
+    file.write_bytes(merged)
+    return True
+
+
 def receive(root: Path) -> int:
     git = Git(root)
     if git.base is None:
@@ -71,7 +103,7 @@ def receive(root: Path) -> int:
         if old else set()
     git('reset', '-q', '--mixed', 'origin/main')
 
-    got, removed, conflicts, local = [], [], [], []
+    got, removed, merged, conflicts, local = [], [], [], [], []
     entries = git('status', '--porcelain=v1', '-z', '--untracked-files=all').split('\0')
     for entry in filter(None, entries):
         code, path = entry[:2], entry[3:]
@@ -81,7 +113,10 @@ def receive(root: Path) -> int:
                 git('checkout', '--', path)
                 got.append(path)
             elif path in remote_since_old:
-                conflicts.append(path)
+                if merge_both(git, root, path, old):
+                    merged.append(path)
+                else:
+                    conflicts.append(path)
             else:
                 local.append(entry)
         elif code == ' D':
@@ -102,6 +137,8 @@ def receive(root: Path) -> int:
         print(f'  받음  {p}')
     for p in removed:
         print(f'  지움  {p}')
+    for p in merged:
+        print(f'  합침  {p}  (원격 고침과 이 PC 고침을 함께 살림 — 올릴 때 이 PC 변경으로 잡힌다)')
     if conflicts:
         print('충돌 — 원격도 고치고 이 PC에서도 고친 파일입니다. 올리지 말고 사용자에게 확인하십시오:')
         for p in conflicts:

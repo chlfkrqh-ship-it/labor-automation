@@ -31,6 +31,7 @@ class ReceiveTests(unittest.TestCase):
         git(t, 'clone', '-q', str(self.remote), str(self.pc))
         for name in ('지침/a.md', 'b.md', 'c.md', 'd.md'):
             write(self.pc, name, '1\n')
+        write(self.pc, '판례기록.md', '첫 줄\n둘째\n셋째\n넷째\n끝 줄\n')
         git(self.pc, 'add', '-A')
         git(self.pc, 'commit', '-q', '-m', 'A')
         git(self.pc, 'push', '-q', 'origin', 'HEAD:main')
@@ -40,6 +41,7 @@ class ReceiveTests(unittest.TestCase):
         (self.cloud / 'b.md').unlink()
         write(self.cloud, 'e.md', 'new\n')
         write(self.cloud, 'd.md', '2\n')
+        write(self.cloud, '판례기록.md', '첫 줄(클라우드)\n둘째\n셋째\n넷째\n끝 줄\n')
         git(self.cloud, 'add', '-A')
         git(self.cloud, 'commit', '-q', '-m', 'B')
         git(self.cloud, 'push', '-q', 'origin', 'HEAD:main')
@@ -87,6 +89,14 @@ class ReceiveTests(unittest.TestCase):
         self.assertIn('충돌  d.md', r.stdout)
         self.assertEqual(self.read('d.md'), 'pc\n')
         self.assertEqual(self.read('지침/a.md'), '2\n')        # 나머지는 받음
+
+    def test_changes_to_different_parts_of_one_file_are_merged(self):
+        write(self.pc, '판례기록.md', '첫 줄\r\n둘째\r\n셋째\r\n넷째\r\n끝 줄\r\n더한 줄(PC)\r\n')     # PC 편집기가 CRLF 로 저장
+        r = self.run_receive()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn('합침  판례기록.md', r.stdout)
+        text = (self.pc / '판례기록.md').read_bytes().decode('utf-8')
+        self.assertEqual(text, '첫 줄(클라우드)\r\n둘째\r\n셋째\r\n넷째\r\n끝 줄\r\n더한 줄(PC)\r\n')   # 줄끝은 이 PC 것 그대로
 
     def test_missing_repository_is_skipped(self):
         empty = Path(self.tmp.name) / 'empty'
