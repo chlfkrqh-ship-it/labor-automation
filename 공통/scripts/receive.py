@@ -15,6 +15,10 @@ fetch 뒤 HEAD 를 origin/main 으로 옮기고(reset --mixed, 파일은 그대�
 - 어느 커밋과도 다른 내용은 이 PC에서 고친 것이므로 건드리지 않는다. 그 파일을 원격도 고쳤으면 두 고침을 합치고
   (git merge-file, 고친 곳이 겹치지 않을 때), 겹치면 '충돌'로 알리고 그대로 둔다.
 
+새 작업(세션)을 열면 `.claude/settings.json` 의 시작 훅이 `--auto` 로 부른다. `--auto` 는 PC 구성(아래 repo.git)일 때만
+돌고, 클라우드 세션처럼 그 구성이 없으면 아무것도 하지 않는다. 오류가 나도 작업 시작을 막지 않고(종료 코드 0), 받은 것이
+있을 때만 몇 줄 알린다.
+
 사건 자료(.gitignore 대상)는 보지 않는다. .git 은 g.bat 과 같이 %LOCALAPPDATA%\\labor-automation\\repo.git
 이고, 없으면 작업본 안의 .git 을 쓴다. 저장소가 없거나 fetch 가 실패하면 종료 코드 1 — 건너뛰고 본 작업을 한다.
 """
@@ -31,12 +35,12 @@ ZERO = '0' * 40
 
 
 class Git:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, pc_only: bool = False):
         self.root = root
         gd = Path(os.environ.get('LOCALAPPDATA') or '/nonexistent') / 'labor-automation' / 'repo.git'
         if gd.is_dir():
             self.base = ['git', f'--git-dir={gd}', f'--work-tree={root}']
-        elif (root / '.git').exists():
+        elif (root / '.git').exists() and not pc_only:
             self.base = ['git']
         else:
             self.base = None
@@ -88,15 +92,16 @@ def merge_both(git: Git, root: Path, path: str, old: str) -> bool:
     return True
 
 
-def receive(root: Path) -> int:
-    git = Git(root)
+def receive(root: Path, auto: bool = False) -> int:
+    git = Git(root, pc_only=auto)
     if git.base is None:
-        print('저장소를 찾지 못했습니다 — 건너뜁니다.')
-        return 1
+        if not auto:
+            print('저장소를 찾지 못했습니다 — 건너뜁니다.')
+        return 0 if auto else 1
     r = git('fetch', '-q', 'origin', 'main', check=False)
     if r.returncode:
         print(f'원격에 연결하지 못했습니다 — 건너뜁니다. ({r.stderr.strip()})')
-        return 1
+        return 0 if auto else 1
     head = git('rev-parse', '-q', '--verify', 'HEAD', check=False)
     old = head.stdout.strip() if head.returncode == 0 else None
     remote_since_old = set(git('diff', '--name-only', '-z', '--no-renames', old, 'origin/main').split('\0')) - {''} \
@@ -132,6 +137,11 @@ def receive(root: Path) -> int:
         else:
             local.append(entry)
 
+    if auto and not (got or removed or merged or conflicts):
+        return 0
+    if auto:
+        print('[시스템 파일 받기] 새 작업을 열면서 원격(main)의 시스템 파일을 받았다. 이번 작업에 쓰는 지침이 아래 목록에 있으면 '
+              '다시 읽는다. 사용자에게는 받은 개수와 충돌만 한 줄로 알린다.')
     print(f'원격에서 받은 파일 {len(got)}개, 원격에서 지운 파일 {len(removed)}개.')
     for p in got:
         print(f'  받음  {p}')
@@ -144,7 +154,7 @@ def receive(root: Path) -> int:
         for p in conflicts:
             print(f'  충돌  {p}')
     print(f'이 PC의 변경 {len(local)}건은 그대로 두었습니다(다음 단계에서 status 로 확인).')
-    return 2 if conflicts else 0
+    return 2 if conflicts and not auto else 0
 
 
 def main():
@@ -152,8 +162,15 @@ def main():
         sys.stdout.reconfigure(encoding='utf-8')
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[2], help=argparse.SUPPRESS)
+    ap.add_argument('--auto', action='store_true', help='새 작업 시작 훅용: PC 구성일 때만, 막지 않고 조용히')
     args = ap.parse_args()
-    sys.exit(receive(args.root.resolve()))
+    if not args.auto:
+        sys.exit(receive(args.root.resolve()))
+    try:
+        sys.exit(receive(args.root.resolve(), auto=True))
+    except Exception as exc:                            # 시작 훅은 작업을 막지 않는다
+        print(f'[시스템 파일 받기] 실패 — 건너뜀: {exc}')
+        sys.exit(0)
 
 
 if __name__ == '__main__':
