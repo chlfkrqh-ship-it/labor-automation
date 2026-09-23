@@ -39,7 +39,23 @@ def test_기왕증기여도():
 
 def test_한시장해_영구환산():
     # 설명서 15쪽: 13% x 2년/10년 = 2.6%
-    assert Impairment(13.0, years=2).as_permanent_rate() == 2.6
+    assert Impairment(13.0, years=2).as_permanent_rate() == Decimal("2.6")
+
+
+def test_단일_장해는_부동소수점_오차로_깎이지_않는다():
+    # float 로 1 - (1 - 0.10) 을 구하면 9.999999999999998 -> 절사 9.99 가 된다
+    for rate in (8, 10, 20, 45, 58):
+        assert truncate2(combined_with_prior([Impairment(float(rate))])) == Decimal(rate)
+    wrong = [r for r in range(1, 101) if truncate2(combined_with_prior([Impairment(r)])) != r]
+    assert wrong == []
+
+
+def test_중복장해율과_기왕증_기여도는_10진수로_계산한다():
+    # 1 - 0.99 x 0.92 = 0.0892 -> 8.92 (float 로는 8.91)
+    assert truncate2(combined_with_prior([Impairment(1), Impairment(8)])) == Decimal("8.92")
+    # 10% 중 기왕증 30% -> 기여도 30 (float 로는 29.99)
+    assert truncate2(prior_contribution([Impairment(10, prior=30)])) == Decimal("30.00")
+    assert truncate2(combined_with_prior([Impairment(1, prior=5)])) == Decimal("0.95")
 
 
 # ---------------------------------------------------------------- 호프만
@@ -374,3 +390,353 @@ def test_개호_노임연도는_자르기_전_기준_직종별만():
     rural = split_caregiving_periods(date(2024, 3, 15), date(2026, 12, 31),
                                      rural=True, month_mode=False)
     assert rural[-1].end == date(2026, 12, 31) and rural[-1].year == 2026
+
+
+# ================================================================ 사건 전체 계산 (감사 수정 회귀)
+# 아래는 골든 케이스 3(검증 목적으로 만든 가상 사건)의 입력과 data/ 의 공개 노임표·생명표를 쓴다.
+from datetime import date
+
+import openpyxl
+import pytest
+
+from tests.golden import case_fault_deduction as F
+
+
+def _case(**kw):
+    """골든 케이스 3 입력으로 만든 사건. kw 로 항목을 바꾼다."""
+    from engine.case import Case, ImpairmentInput
+
+    base = dict(
+        case_no="2024가단1", name="홍길동", birth=F.BIRTH, accident=F.ACCIDENT,
+        cure_end=F.CURE_END, life_expectancy=F.LIFE_EXPECTANCY, life_end=F.LIFE_END,
+        impairments=[ImpairmentInput(d, Decimal(r), Decimal(p or 0)) for d, r, p, *_ in F.IMPAIRMENTS],
+        wages={f"{y}-{i}": v for (y, i), v in F.WAGES.items()},
+        fault_rate=F.FAULT_RATE, paid_cure=F.PAID_CURE, advance=F.ADVANCE,
+        solatium=F.SOLATIUM_APPLIED,
+    )
+    base.update(kw)
+    return Case(**base)
+
+
+def _lookup(case):
+    """노임 직접입력 표의 조회기. cli·watch 의 직접입력 경로와 같은 모양이다."""
+    table = {tuple(int(x) for x in k.split("-")): v for k, v in case.wages.items()}
+    last = table[max(table)]
+    return (lambda p: table.get((p.year, p.index), last)), (lambda y, i: (y, i) in table)
+
+
+def _calc(case, **kw):
+    from engine.calculate import calculate
+
+    return calculate(case, *_lookup(case), **kw)
+
+
+def _book(result, tmp_path):
+    from engine.excel import write_workbook
+
+    return openpyxl.load_workbook(write_workbook(result, tmp_path / "계산표.xlsx"))
+
+
+def _first_row(ws, text, col=2):
+    return next(r for r in range(1, ws.max_row + 1) if ws.cell(r, col).value == text)
+
+
+def test_계산은_장해율을_10진수로_넘긴다():
+    from engine.case import ImpairmentInput
+
+    r = _calc(_case(impairments=[ImpairmentInput("정형외과", Decimal(10))]))
+    assert r.combined_rate == Decimal("10.00")
+    assert [x.loss_rate for x in r.income_rows][2:] == [Decimal("10.00")] * 4
+
+
+# ---------------------------------------------------------------- 노임표 조회 (data/)
+def _wage_table():
+    from engine.tables import WageTable
+
+    return WageTable.load()
+
+
+def test_직종은_이름이_같은_것을_고른다():
+    wt = _wage_table()
+    # 부분일치의 첫 항목을 쓰면 원자력배관공·원자력특별인부·특고압케이블전공 등이 뽑혔다
+    for name, oid in [("배관공", "7204"), ("특별인부", "6736"), ("고압케이블전공", "7698"),
+                      ("비계공", "6775"), ("용접공", "6853"), ("타일공", "7061"), ("석공", "7126")]:
+        assert [o["id"] for o in wt.find_occupation(name)] == [oid], name
+
+
+def test_노임표의_모든_직종이_자기_이름으로_풀린다():
+    wt = _wage_table()
+    for o in wt.occupations:
+        found = wt.find_occupation(o["name"])
+        assert o in found and all(f["name"] == o["name"] for f in found), o["name"]
+
+
+def test_이름이_같은_계열은_최근_계열부터_이어서_찾는다():
+    wt = _wage_table()
+    assert [o["id"] for o in wt.find_occupation("제철축로공")] == ["7555", "3922"]
+    assert wt.find_occupation("전기공사기사")[0]["id"] == "8257"
+    # 원본은 직종 이름으로 단가를 찾는다 — 최근 계열 id 로도 2009년 단가가 나온다
+    assert wt.occupation_wage("7555", 2009, 2) == wt.occupation_wage("3922", 2009, 2)
+
+
+def test_부분일치로는_직종을_고르지_않는다():
+    from engine.tables import OccupationNotFound
+
+    wt = _wage_table()
+    assert wt.find_occupation("용접") == []
+    assert wt.find_occupation("") == []
+    with pytest.raises(OccupationNotFound, match="용접공"):
+        wt.resolve_occupation("용접")
+    assert wt.resolve_occupation("배관공")[0]["id"] == "7204"
+
+
+def test_노임표에_없는_반기는_이유를_적고_멈춘다():
+    wt = _wage_table()
+    # 원자력배관공은 2024-2 까지만 단가가 있고 플랜트배관공으로 통합됐다
+    with pytest.raises(KeyError, match="플랜트배관공"):
+        wt.occupation_wage("4773", 2025, 1)
+
+
+def test_노임표_단가():
+    wt = _wage_table()
+    assert wt.occupation_wage("6736", 2026, 1) == 226122      # 특별인부
+    assert wt.occupation_wage("7698", 2026, 1) == 373640      # 고압케이블전공
+    assert (wt.rural_wage(2026, 1, "M"), wt.rural_wage(2026, 1, "F")) == (153783, 122176)
+    # 도시일용(TB_SUT001)은 보통인부(TB_SUT004) 반기 단가와 같다. 1·2분기가 상반기, 3·4분기가 하반기
+    common = wt.find_occupation("보통인부")[0]["id"]
+    assert wt.city_wage(2025, 2) == wt.occupation_wage(common, 2025, 1) == 169804
+    assert wt.city_wage(2025, 3) == wt.occupation_wage(common, 2025, 2) == 171037
+
+
+def test_생명표_기대여명():
+    from engine.tables import LifeTable
+
+    lt = LifeTable.load()
+    assert lt.expectancy(2024, 34, "M") == float(F.LIFE_EXPECTANCY)   # 2024년 생명표 34세 남
+    assert lt.expectancy(2024, 34, "F") > lt.expectancy(2024, 34, "M")
+
+
+def test_직종만_적은_사건은_그_직종_노임으로_계산한다():
+    # 노임을 직접 넣지 않은 기본 경로: 직종명 -> find_occupation -> occupation_wage
+    from engine.calculate import calculate
+
+    wt = _wage_table()
+    case = _case(occupation="배관공", wages={})
+    oid = wt.find_occupation(case.occupation)[0]["id"]
+
+    def wage_of(p):
+        return wt.occupation_wage(oid, p.year, p.index)
+
+    def has_wage(y, i):
+        try:
+            wt.occupation_wage(oid, y, i)
+            return True
+        except KeyError:
+            return False
+
+    r = calculate(case, wage_of, has_wage)
+    assert [int(x.wage) for x in r.income_rows[:6]] == [229482, 229664, 229664, 238145, 239439, 247897]
+    assert r.wage_basis == "직종별 노임 — 배관공"
+
+
+# ---------------------------------------------------------------- 향후 개호비 단가
+CARE = dict(caregiving_start=date(2026, 1, 1), caregiving_end=date(2045, 12, 31))
+
+
+def test_향후_개호비는_피해자_노임으로_대신하지_않는다():
+    with pytest.raises(ValueError, match="caregiving_wages"):
+        _calc(_case(occupation="철근공", **CARE))
+
+
+def test_향후_개호비는_개호_노임단가_표로_계산한다():
+    victim = {k: v * 2 for k, v in _case().wages.items()}     # 피해자 직종 노임(개호 단가와 다름)
+    r = _calc(_case(wages=victim, caregiving_wages={"2025-2": 171037, "2026-1": 172068}, **CARE))
+    assert [(x.start, x.end, x.unit_price) for x in r.caregiving_rows] == [
+        (date(2026, 1, 1), date(2045, 12, 31), Decimal(172068))
+    ]
+    assert r.caregiving_basis == "개호 노임단가 직접입력(반기)"
+
+
+def test_개호_단가가_농촌_분기면_분기로_나눈다():
+    # 피해자는 직종별(반기)이어도 개호 표가 분기면 분기 경계와 개호 표의 단가 유무로 나눈다
+    r = _calc(_case(caregiving_rural=True, caregiving_wages={
+        "2025-4": 122880, "2026-1": 122176, "2026-2": 124927}, **CARE))
+    assert [(x.start, x.end, x.unit_price) for x in r.caregiving_rows] == [
+        (date(2026, 1, 1), date(2026, 3, 31), Decimal(122176)),
+        (date(2026, 4, 1), date(2045, 12, 31), Decimal(124927)),
+    ]
+
+
+def test_개호_노임단가_표를_검사한다():
+    for wages, text in [({"2026-3": 1}, "caregiving_rural"),
+                        ({"2024-1": 1, "2025-1": 1}, "2024-2"),
+                        ({"2026-2": 1}, "2026년 1반기"),
+                        ({"2026/1": 1}, "형식")]:
+        with pytest.raises(ValueError, match=text):
+            _calc(_case(caregiving_wages=wages, **CARE))
+
+
+def test_호출자가_넘긴_개호_단가_조회기를_쓴다():
+    r = _calc(_case(**CARE), caregiving_price_of=lambda p: 150000,
+              caregiving_has_wage=lambda y, i: True, caregiving_basis="도시일용(보통인부)")
+    assert r.caregiving_rows and all(x.unit_price == 150000 for x in r.caregiving_rows)
+    assert r.caregiving_basis == "도시일용(보통인부)"
+
+
+# ---------------------------------------------------------------- 여명단축
+def test_여명단축_구간은_상실률_66_66666666():
+    from engine.constants import SHORTENED_LIFE_LOSS_RATE
+
+    r = _calc(_case(life_end=date(2035, 12, 31)))
+    before = [x for x in r.income_rows if x.end <= date(2035, 12, 31)]
+    after = [x for x in r.income_rows if x.start > date(2035, 12, 31)]
+    assert before[-1].end == date(2035, 12, 31) and after[0].start == date(2036, 1, 1)
+    assert [x.loss_rate for x in after] == [SHORTENED_LIFE_LOSS_RATE]
+    # 여명 종료 전 순번은 골든 케이스 3과 같다(6순번만 여명 종료일에서 끊긴다)
+    for x, g in zip(before[:5], F.INCOME_ROWS[:5]):
+        assert x.amount == g[12]
+    assert before[5].loss_rate == F.COMBINED_RATE
+    assert sum(x.factor for x in r.income_rows) <= 240
+    assert any("여명단축" in w for w in r.warnings)
+
+
+def test_여명_종료일이_가동종료일_뒤면_그대로다():
+    r = _calc(_case())
+    assert r.income_total == F.INCOME_TOTAL and r.warnings == []
+
+
+def test_여명_종료일이_입원치료_종료일_이전이면_멈춘다():
+    with pytest.raises(ValueError, match="대법원 프로그램"):
+        _calc(_case(life_end=date(2024, 5, 31)))
+
+
+def test_사망_사건은_여명_종료일로_나누지_않는다():
+    r = _calc(_case(injury_type="사망", cure_end=None, impairments=[], life_end=date(2035, 12, 31)))
+    assert all(x.loss_rate == 100 for x in r.income_rows)
+    assert not any("여명단축" in w for w in r.warnings)
+
+
+# ---------------------------------------------------------------- 2월 29일생
+def test_2월29일생_가동종료일은_정하지_않고_멈춘다():
+    from engine.case import Case
+
+    with pytest.raises(ValueError, match="work_end") as err:
+        Case(birth=date(1996, 2, 29), accident=date(2024, 1, 1)).resolved_work_end()
+    assert "2061. 2. 28." in str(err.value) and "2061. 2. 27." in str(err.value)
+    # 가동종료일을 적으면 그 값을 쓴다. 가동연한이 끝나는 해가 윤년이면 대응일이 있다
+    assert Case(birth=date(1996, 2, 29), work_end=date(2061, 2, 28)).resolved_work_end() == date(2061, 2, 28)
+    assert Case(birth=date(1996, 2, 29), work_limit_years=64).resolved_work_end() == date(2060, 2, 28)
+    r = _calc(_case(birth=date(1996, 2, 29), work_end=date(2061, 2, 28)))
+    assert r.income_rows[-1].end == date(2061, 2, 28)
+
+
+# ---------------------------------------------------------------- 사건 파일 -> 계산 -> 계산표
+EXTRA = """
+past_treatment: 3000000
+treatments:
+  - {name: 물리치료, cost: 300000, first: 2025-01-01, last: 2034-12-31, duration_month: 12}
+  - {name: 반흔교정술, cost: 2000000, first: 2025-10-30}
+  - {name: 약제, cost: 10000, first: 2025-01-01, last: 2025-12-31, repeating: false}
+orthoses:
+  - {name: 의족, cost: 3000000, first: 2025-01-01, last: 2054-12-31, duration_month: 60}
+past_caregiving_days: 30
+past_caregiving_price: 150000
+past_caregiving_actual: 4000000
+caregiving_start: 2024-07-01
+caregiving_end: 2054-12-31
+caregiving_headcount: 0.5
+caregiving_wages:
+  "2024-2": 167081
+  "2025-1": 169804
+  "2025-2": 171037
+  "2026-1": 172068
+"""
+
+
+def _loaded(tmp_path):
+    from engine.case import load
+
+    root = Path(__file__).resolve().parent.parent
+    path = tmp_path / "사건.yaml"
+    path.write_text((root / "cases" / "sample.yaml").read_text(encoding="utf-8") + EXTRA,
+                    encoding="utf-8")
+    return load(path)
+
+
+def test_사건파일의_치료비_구분과_개호_단가표를_읽는다(tmp_path):
+    case = _loaded(tmp_path)
+    # repeating 을 적지 않으면 최종 필요일이 최초 필요일과 다른지로 정한다(입력서와 같다)
+    assert [t.repeating for t in case.treatments] == [True, False, False]
+    assert case.caregiving_wages["2026-1"] == 172068 and case.caregiving_rural is False
+
+
+def test_적극손해를_사건파일부터_계산표까지_잇는다(tmp_path):
+    case = _loaded(tmp_path)
+    r = _calc(case)
+    assert r.treatment_total == sum(c.total() for c in r.treatment_rows) > 0
+    assert r.orthosis_total == sum(c.total() for c in r.orthosis_rows) > 0
+    assert r.future_caregiving_total == sum(x.amount for x in r.caregiving_rows) > 0
+    assert r.past_caregiving_total == Decimal(3946500)      # min(150,000 x 30 x (1 - 12.3%), 4,000,000)
+    assert r.active_total == (case.past_treatment + r.treatment_total + r.past_caregiving_total
+                              + r.future_caregiving_total + r.orthosis_total)
+    assert r.property_damage == r.income_total + r.active_total
+
+    wb = _book(r, tmp_path)
+
+    def total(sheet, label):
+        ws = wb[sheet]
+        return ws.cell(_first_row(ws, label), 11).value
+
+    assert total("치료비", "향후 치료비 합계 : ") == int(r.treatment_total)
+    assert total("보조구", "향후 보조구 합계 : ") == int(r.orthosis_total)
+    assert total("개호비", "향후 개호비 합계 : ") == int(r.future_caregiving_total)
+    assert total("개호비", "기왕 개호비 합계 : ") == int(r.past_caregiving_total)
+    ws = wb["치료비"]
+    assert [ws.cell(_first_row(ws, t.name), 3).value for t in case.treatments] == ["반복", "1회", "1회"]
+    ws = wb["개호비"]
+    assert ws.cell(_first_row(ws, "[향후 개호비]"), 4).value == "개호비 단가 기준 : 개호 노임단가 직접입력(반기)"
+
+    ws = wb["종합"]
+    start, end = _first_row(ws, "[적극손해]"), _first_row(ws, "적극손해 합계 : ")
+    assert sum(ws.cell(row, 5).value or 0 for row in range(start + 1, end)) == ws.cell(end, 14).value
+    assert ws.cell(end, 14).value == int(r.active_total)
+
+
+# ---------------------------------------------------------------- 계산표 표시
+def test_위자료_표는_과실상계_공제_뒤_금액을_쓴다(tmp_path):
+    wb = _book(_calc(_case()), tmp_path)
+    ws = wb["종합"]
+    row = next(rr for rr in range(1, ws.max_row + 1)
+               if ws.cell(rr, 2).value == 1 and ws.cell(rr, 3).value == "홍길동")
+    assert ws.cell(row, 4).value == int(F.SOLATIUM_AUTO)
+    assert ws.cell(row, 8).value == int(F.PROPERTY_FINAL)      # 과실상계 전 362,157,144 가 아니다
+    assert ws.cell(row, 10).value == int(F.GRAND_TOTAL)
+    # 확인할 점이 없으면 '경고' 시트를 두지 않는다
+    assert "경고" not in wb.sheetnames and ws["B3"].value is None
+    assert ws.cell(_first_row(ws, "[일실수입]"), 4).value == "노임 기준 : 노임단가 직접입력"
+
+
+def test_한시장해만_있으면_머리글을_덮어쓰지_않는다(tmp_path):
+    from engine.case import ImpairmentInput
+
+    r = _calc(_case(impairments=[ImpairmentInput("정형외과", Decimal(30), years=Decimal(3))]))
+    ws = _book(r, tmp_path)["종합"]
+    head = _first_row(ws, "진료과")
+    assert ws.cell(head, 7).value == "중복장해(%)" and ws.cell(head, 11).value == "기왕증 기여도(%)"
+    assert ws.cell(head + 1, 7).value == 9                     # 30% x 3년/10년
+
+
+def test_경고는_계산표_경고_시트에_남긴다(tmp_path):
+    wb = _book(_calc(_case(life_end=date(2035, 12, 31))), tmp_path)
+    assert wb.sheetnames[-1] == "경고"
+    assert "여명단축" in wb["경고"]["A3"].value
+    assert "1건" in wb["종합"]["B3"].value
+
+
+def test_노임단가_0원_순번은_경고한다():
+    from engine.calculate import calculate
+
+    case = _case()
+    wage_of, has_wage = _lookup(case)
+    r = calculate(case, lambda p: 0 if (p.year, p.index) == (2025, 1) else wage_of(p), has_wage)
+    assert any("노임단가가 0원" in w and "순번 4" in w for w in r.warnings)

@@ -7,6 +7,12 @@ docx_restyle.py — 병합된 서면 docx의 제목·본문 문단에 프레임�
   python scripts/docx_restyle.py <파일.docx> --check    # 바꾸지 않고 계층에 맞지 않는 문단 수만 보고
   python scripts/docx_restyle.py <파일.docx> --dry      # 바꿀 문단을 스타일과 함께 출력만 함
 
+--check 는 아래 구조 이상도 함께 보고하고, 하나라도 있으면 종료 코드 1을 낸다.
+  - 범위('다음' 뒤 ~ '입 증 방 법' 앞)에 '1.번호매기기' 대제목 문단이 하나도 없음
+  - 대제목 누락 의심: 'N. 제목' 꼴 글자로 시작하는데 본문(또는 대제목 앞 Normal)으로 남은 문단
+  - 캡션 붙임 없음: 발췌 그림 바로 앞 캡션 문단에 keepNext 가 없음(공통/문서변환.md 나. 증거 이미지)
+  대제목 앞의 그 밖의 문단은 스타일을 정할 수 없어 그대로 두고 '참고'로만 알린다.
+
 규칙(2026. 9. 8. 변호사 지시: 제목 스타일과 _내용 스타일은 1:1 대응)
   제목                               그 아래 본문
   '1.번호매기기'  (자동 번호)         '1.번호매기기_내용'
@@ -71,6 +77,45 @@ def _one_sentence(t):
     if t.endswith('.'):
         return True
     return len(t) <= NOUN_HEAD_MAX and not SENT.search(t) and not ENDING.search(t)
+
+
+H1_RE = re.compile(r'^([1-9]\d?)\.\s+(\S.*)$')
+PLAIN_END = re.compile(r'(?:(?<!니)다|라)\.$')   # '…지급하라.', '…부담한다.' 같은 주문·청구취지 문장
+
+
+def h1_candidate(text):
+    """'N. 제목' 꼴의 대제목감이면 (N, 제목), 아니면 None.
+    번호는 한두 자리이고('2025. 3. 1.' 같은 날짜는 아님), 제목은 90자 이내이며
+    '…지급하라.'·'…부담한다.'처럼 해라체로 끝나는 주문·청구취지 문장이 아니어야 한다.
+    docx_merge 가 프레임 목차와 짝이 없는 대제목 줄을 가를 때와 --check 의 '대제목 누락 의심'에 같이 쓴다."""
+    m = H1_RE.match(text.strip().lstrip('\ufeff'))
+    if not m:
+        return None
+    title = m.group(2).strip()
+    if len(title) > HEAD_MAX or PLAIN_END.search(title):
+        return None
+    return int(m.group(1)), title
+
+
+def _on(el):
+    return el is not None and el.get(qn('w:val'), 'true') not in ('0', 'false', 'off')
+
+
+def _keeps_next(p, styles_by_id):
+    """문단에 keepNext 가 걸려 있는지(직접 서식, 없으면 스타일과 그 basedOn 을 따라 본다)."""
+    ppr = p.find(qn('w:pPr'))
+    if ppr is not None and ppr.find(qn('w:keepNext')) is not None:
+        return _on(ppr.find(qn('w:keepNext')))
+    ps = ppr.find(qn('w:pStyle')) if ppr is not None else None
+    sid, seen = (ps.get(qn('w:val')) if ps is not None else None), set()
+    while sid and sid not in seen and sid in styles_by_id:
+        seen.add(sid)
+        spr = styles_by_id[sid].find(qn('w:pPr'))
+        if spr is not None and spr.find(qn('w:keepNext')) is not None:
+            return _on(spr.find(qn('w:keepNext')))
+        based = styles_by_id[sid].find(qn('w:basedOn'))
+        sid = based.get(qn('w:val')) if based is not None else None
+    return False
 
 
 class Numbering:
@@ -148,25 +193,43 @@ def _apply(p, sid, num_id=None, strip=None):
 
 
 def plan(doc):
-    """[(p, kind, target_style, strip)]  kind: h1 | sub | sub2 | body | blank"""
+    """([(p, kind, target_style, strip)], styles, sid2name, issues)  kind: h1 | sub | sub2 | body | blank
+    issues: {'no_h1': bool, 'suspects': [문단 글자], 'orphans': [문단 글자], 'loose_captions': [캡션 글자]}"""
     styles = _styles(doc)
     sid2name = {s.get(qn('w:styleId')): n for n, s in styles.items()}
+    by_id = {s.get(qn('w:styleId')): s for s in styles.values()}
     paras = [k for k in doc.element.body.iterchildren() if k.tag == qn('w:p')]
     i_start = next((i for i, p in enumerate(paras) if _text(p).replace('\t', '').replace(' ', '') == '다음'), None)
-    i_end = next((i for i, p in enumerate(paras) if _style_name(p, sid2name) == EV_TITLE), None)
-    if i_start is None or i_end is None:
-        raise SystemExit("'다음' 또는 '별지제목'(입증방법) 문단을 찾지 못했습니다")
+    if i_start is None:
+        raise SystemExit("'다음' 문단을 찾지 못했습니다")
+    # 끝 경계는 '다음' 뒤의 입증방법 제목이다. 서면명 제목('재심답변서(2)')에 별지제목을 쓰는 프레임도 있어
+    # 스타일만 보고 '다음' 앞의 문단을 잡으면 범위가 비어 아무것도 검사하지 않게 된다.
+    i_end = next((i for i, p in enumerate(paras) if i > i_start and _style_name(p, sid2name) == EV_TITLE
+                  and re.sub(r'\s', '', _text(p)) == '입증방법'), None)
+    if i_end is None:
+        raise SystemExit("'다음' 뒤에서 '입 증 방 법'(별지제목) 문단을 찾지 못했습니다. "
+                         "초안 끝에 '입 증 방 법' 줄이 있는지, 프레임의 입증방법 제목이 '별지제목' 스타일인지 확인합니다")
     # 1차: 대제목/소제목/(n)후보/본문/빈 문단 분류
     recs = []          # [p, kind, raw_text]
     ctx = None
+    orphans = []       # 첫 대제목 앞이라 스타일을 정할 수 없는 글자 문단
+    loose = []         # 그림 바로 앞 캡션인데 keepNext 가 없는 문단
     for p in paras[i_start + 1:i_end]:
         sn = _style_name(p, sid2name); raw = _text(p); t = raw.strip()
         if sn == S_H1 and t:
             ctx = 'h1'; recs.append([p, 'h1', raw]); continue
-        if sn == CAPTION or _has_drawing(p) or ctx is None:
+        nxt = p.getnext()
+        if (sn in (CAPTION, 'Caption') and nxt is not None and nxt.tag == qn('w:p') and _has_drawing(nxt)
+                and not _keeps_next(p, by_id)):
+            loose.append(t)
+        if sn == CAPTION or _has_drawing(p):
             continue
         ppr = p.find(qn('w:pPr')); jc = ppr.find(qn('w:jc')) if ppr is not None else None
         if jc is not None and jc.get(qn('w:val')) == 'center':
+            continue
+        if ctx is None:
+            if t:
+                orphans.append(p)
             continue
         if not t:
             recs.append([p, 'blank', raw]); continue
@@ -210,12 +273,39 @@ def plan(doc):
             ctx = 'sub2'; m = SUB2_RE.match(raw.lstrip()); final.append((p, kind, S_SUB2, m.group(0) if m else None))
         else:
             final.append((p, kind, BODY_OF[ctx], None))
-    return final, styles, sid2name
+    suspects = [_text(p).strip() for p in orphans + [p for p, kind, _, _ in final if kind == 'body']
+                if h1_candidate(_text(p))]
+    issues = {'no_h1': not any(kind == 'h1' for _, kind, _, _ in final),
+              'suspects': suspects,
+              'orphans': [_text(p).strip() for p in orphans],
+              'loose_captions': loose}
+    return final, styles, sid2name, issues
+
+
+def _short(texts, n=3):
+    return "; ".join(repr(t[:30]) for t in texts[:n]) + (" …" if len(texts) > n else "")
+
+
+def report(issues):
+    """구조 이상을 출력하고, 점검 실패로 셀 건수를 돌려준다(대제목 앞 문단은 참고로만 알린다)."""
+    bad = 0
+    if issues['no_h1']:
+        print("대제목('1.번호매기기') 문단이 하나도 없습니다 — 초안의 'N. 제목' 줄이 대제목으로 들어갔는지 확인합니다")
+        bad += 1
+    if issues['suspects']:
+        print(f"대제목 누락 의심 {len(issues['suspects'])}건(번호 글자로 시작하는 본문 문단): " + _short(issues['suspects']))
+        bad += len(issues['suspects'])
+    if issues['loose_captions']:
+        print(f"캡션 붙임(keepNext) 없음 {len(issues['loose_captions'])}건: " + _short(issues['loose_captions']))
+        bad += len(issues['loose_captions'])
+    if issues['orphans'] and not issues['no_h1']:
+        print(f"참고: 첫 대제목 앞 문단 {len(issues['orphans'])}건은 스타일을 바꾸지 않았습니다: " + _short(issues['orphans']))
+    return bad
 
 
 def main(path, check=False, dry=False, backup=True):
     doc = Document(path)
-    items, styles, sid2name = plan(doc)
+    items, styles, sid2name, issues = plan(doc)
     for n in (S_H1_BODY, S_SUB, S_SUB_BODY, S_SUB2, S_SUB2_BODY):
         if n not in styles:
             raise SystemExit("프레임에 없는 스타일: " + n)
@@ -224,11 +314,13 @@ def main(path, check=False, dry=False, backup=True):
             if _style_name(p, sid2name) != tgt or strip or (kind == 'body' and _is_bold(p))]
     if check:
         print(f"계층 스타일 비정합 {len(diff)}건 / 대상 문단 {len(items)}건")
-        return 1 if diff else 0
+        bad = report(issues)
+        return 1 if diff or bad else 0
     if dry:
         for p, kind, tgt, strip in diff:
             print(f"{_style_name(p, sid2name):>14} → {tgt:<14} {kind:<5} {_text(p)[:40]!r}")
         print(f"바꿀 문단 {len(diff)}건 / 대상 {len(items)}건")
+        report(issues)
         return 0
     if not diff:
         print("바꿀 문단 없음"); return 0

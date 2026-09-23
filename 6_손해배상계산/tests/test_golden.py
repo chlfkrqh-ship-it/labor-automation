@@ -135,7 +135,56 @@ def test_사망_월소득과_생계비():
 
 
 def test_사망_합계():
+    # 구 프로그램 출력은 장례비 5,000,000원을 [기타손해]에 적고도 재산상 손해를 일실수입과 같게 두었다
+    assert D.PROPERTY_DAMAGE == D.INCOME_TOTAL
     assert D.PROPERTY_DAMAGE + D.SOLATIUM == D.GRAND_TOTAL
+
+
+def _death_result():
+    from engine.calculate import calculate
+    from engine.case import Case
+
+    # 구 프로그램은 사고일~가동종료일을 한 순번으로 잡는다. 다음 반기 단가가 없으면 엔진도 한 순번이다.
+    case = Case(name="가상", injury_type="사망", birth=D.BIRTH, accident=D.ACCIDENT,
+                wages={"2024-2": D.WAGE}, funeral_cost=D.FUNERAL_COST, solatium=D.SOLATIUM)
+    return calculate(case, lambda p: D.WAGE, lambda y, i: (y, i) == occupation_key(D.ACCIDENT))
+
+
+def test_사망_사건을_끝까지_계산하면_프로그램_합계와_같다():
+    r = _death_result()
+    assert r.case.resolved_work_end() == D.WORK_END
+    assert [(x.m1, x.m2, x.factor) for x in r.income_rows] == [(D.M1, D.M2, Decimal(D.ADJUST_HOFFMAN))]
+    assert r.income_total == D.INCOME_TOTAL
+    assert r.active_total == 0                          # 장례비는 적극손해에 넣지 않는다
+    assert r.property_damage == D.PROPERTY_DAMAGE
+    assert r.settlement["합계"] == D.GRAND_TOTAL
+    assert any("장례비 5,000,000원" in w for w in r.warnings)
+
+
+def test_사망_계산표의_적극손해_항목과_합계가_맞물린다(tmp_path):
+    import openpyxl
+
+    from engine.excel import write_workbook
+
+    r = _death_result()
+    wb = openpyxl.load_workbook(write_workbook(r, tmp_path / "사망.xlsx"))
+    assert wb.sheetnames[-1] == "경고"
+    ws = wb["종합"]
+
+    def first(text):
+        return next(row for row in range(1, ws.max_row + 1) if ws.cell(row, 2).value == text)
+
+    start, end = first("[적극손해]"), first("적극손해 합계 : ")
+    assert sum(ws.cell(row, 5).value or 0 for row in range(start + 1, end)) == ws.cell(end, 14).value == 0
+    # 장례비는 [적극손해] 밖의 별도 블록에 적는다
+    assert first("장례비") > end and ws.cell(first("장례비"), 5).value == int(D.FUNERAL_COST)
+    head = first("순번")                                  # [일실수입] 머리글
+    assert ws.cell(head, 8).value == "생계비" and ws.cell(head + 1, 8).value == D.LIVING_COST
+    row = next(rr for rr in range(1, ws.max_row + 1)
+               if ws.cell(rr, 2).value == 1 and ws.cell(rr, 3).value == "가상")
+    assert ws.cell(row, 4).value is None                  # 사망 사건은 위자료 자동계산을 비운다
+    assert ws.cell(row, 8).value == int(D.PROPERTY_DAMAGE)
+    assert ws.cell(row, 10).value == int(D.GRAND_TOTAL)
 
 
 def test_일실퇴직금_산출방식B():
@@ -154,7 +203,13 @@ def test_재직기간_월할_일할():
 
 
 # ================================================ 골든 케이스 3 (과실상계·공제, 신 프로그램)
-from engine.disability import Impairment, combined_with_prior, prior_contribution, truncate2
+from engine.disability import (
+    Impairment,
+    combined_with_prior,
+    combined_without_prior,
+    prior_contribution,
+    truncate2,
+)
 from engine.settlement import (
     after_fault_offset,
     fault_share,
@@ -181,6 +236,17 @@ def test_중복장해율_프로그램출력과_일치():
     items = [Impairment(40, prior=20, dept="정형외과"), Impairment(20, dept="안과")]
     assert truncate2(combined_with_prior(items)) == F.COMBINED_RATE
     assert truncate2(prior_contribution(items)) == F.PRIOR_CONTRIBUTION
+
+
+def test_장해표_행별_표시값이_프로그램출력과_일치():
+    # [노동능력 상실률] 표는 행마다 그 행까지의 중복장해·단순중복장해·기왕증 기여도를 보인다.
+    # float 로 계산하면 1행 기왕증 기여도가 19.999999999999982 -> 19.99 로 깎였다(프로그램 표시 20).
+    items = []
+    for dept, rate, prior, combined, simple, contribution in F.IMPAIRMENTS:
+        items.append(Impairment(rate, prior=prior or 0, dept=dept))
+        assert truncate2(combined_with_prior(items)) == Decimal(combined), f"{dept} 중복장해"
+        assert truncate2(combined_without_prior(items)) == Decimal(simple), f"{dept} 단순중복장해"
+        assert truncate2(prior_contribution(items)) == Decimal(contribution), f"{dept} 기왕증 기여도"
 
 
 def test_과실_일실수입_전순번():

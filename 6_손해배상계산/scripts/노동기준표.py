@@ -22,9 +22,9 @@ HEAD = """# 노동 금액 계산 기준
 > 자동 생성본 — `python scripts/노동기준표.py`. 원본은 `engine/labor/*.py` 의 `RULES`·`OPTIONS` 와 머리 docstring 이다.
 
 엔진은 법적 판단(통상임금성, 해고 무효, 다툼의 적절성, 사용촉진 적법성)을 하지 않는다. 사람이 사건.yaml 에 판정해 넣은 값으로
-계산만 한다. 규칙 상태가 **불명확**이거나 옵션 기본값이 '없음'인 곳은 판례가 갈리거나 확인되지 않은 지점이다.
-기본값이 없는 옵션은 결과가 달라질 때 엔진이 멈추고 선택을 요구한다. 불명확 규칙으로 정한 금액은 서면·검토의견에서 단정하지 않는다
-(루트 공통 규칙).
+계산만 한다. 규칙 상태가 **불명확**이거나 옵션 기본값이 '없음(선택 필수)'인 곳은 판례가 갈리거나 확인되지 않은 지점이다.
+기본값이 '없음(선택 필수)'인 옵션은 결과가 달라질 때 엔진이 멈추고 선택을 요구한다('없음(비우면 미적용)'인 자유값 옵션은 멈추지 않는다).
+불명확 규칙으로 정한 금액은 서면·검토의견에서 단정하지 않는다(루트 공통 규칙).
 
 ## 검증 방식
 
@@ -57,7 +57,12 @@ def main() -> None:
             lines.append(f"| {rid} | {summary.replace('|', '/')} | {mark} |")
         lines.append("\n| 옵션 | 기본값 | 규칙 | 선택지 |\n|---|---|---|---|")
         for key, spec in mod.OPTIONS.items():
-            default = "없음(선택 필수)" if spec.default in (None, "unset") else f"`{spec.default}`"
+            if spec.default in (None, "unset") and spec.choices:
+                default = "없음(선택 필수)"      # 미선택 값이 선택지에 있고, 결과가 달라질 때 엔진이 멈춘다
+            elif spec.default is None:
+                default = "없음(비우면 미적용)"   # 자유값 옵션(예: 이율 상한) — 비워 두어도 멈추지 않는다
+            else:
+                default = f"`{spec.default}`"
             choices = "; ".join(f"`{k}` {v}" for k, v in spec.choices.items()) if spec.choices else spec.description
             lines.append(f"| `{key}` | {default} | {spec.rule} | {choices.replace('|', '/')} |")
     out = ROOT / "노동금액-계산기준.md"

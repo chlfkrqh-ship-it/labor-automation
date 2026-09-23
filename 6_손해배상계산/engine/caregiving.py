@@ -142,6 +142,10 @@ def split_caregiving_periods(
         직종별 그 덮어쓰기가 없다                                  -> 자르기 전 연도
 
     개호 종료일이 구간 경계보다 앞이면 이 차이가 드러난다.
+
+    현재 구간의 단가도 없으면(원본의 `wage == -1m`) 그 키를 그대로 담아 종료일까지 한 순번으로
+    묶는다. 키가 노임표의 마지막 공표 키보다 뒤이면 조회기(cli._wage_lookup)가 마지막 단가
+    (원본의 GetWageFromSalaryDayTableNext)를 돌려주고, 앞인데 빠진 키면 알아볼 수 있는 오류로 멈춘다.
     """
     out: list[WagePeriod] = []
     cur = start
@@ -221,8 +225,8 @@ def build_caregiving_rows(
 ) -> list[CaregivingRow]:
     """향후 개호비 순번을 만든다. 일실수입과 같은 방식으로 240 상한을 건다.
 
-    설명서 24쪽처럼 기간별로 인원을 달리하려면 구간을 나눠 여러 번 호출하고
-    이어 붙이면 된다. 그때는 saved 를 이어받아야 하므로 chain_caregiving 을 쓴다.
+    설명서 24쪽처럼 기간별로 인원을 달리하는 계산은 아직 없다. 구간을 나눠 여러 번 호출하면 240 상한의
+    누적(saved)이 이어지지 않으므로 그렇게 이어 붙이지 않는다(프로그램으로 계산한다).
     """
     head = Decimal(str(headcount))
     prior = Decimal(str(prior_ratio))

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import argparse
 import html
+import http.client
+import importlib.util
 import json
 import os
 import re
@@ -21,6 +23,11 @@ import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
+
+# 사건번호 정규식의 단일 원본은 공통/scripts/system.py 이다.
+_spec = importlib.util.spec_from_file_location('workflow_system', Path(__file__).with_name('system.py'))
+_system = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_system)
 
 BASE = 'https://www.law.go.kr/DRF/'
 PAGE = 100          # API가 한 번에 돌려주는 최대 건수
@@ -127,12 +134,14 @@ def call(path, params, oc, raw=False):
             with OPENER(request, timeout=30) as response:
                 body = response.read()
             break
-        except urllib.error.HTTPError as exc:
+        except urllib.error.HTTPError as exc:            # URLError 의 하위 클래스이므로 먼저 둔다
             if exc.code < 500 or attempt == 2:
                 raise LawGoError(f'HTTP {exc.code}: {path}') from exc
-        except (urllib.error.URLError, TimeoutError) as exc:
+        except (OSError, http.client.HTTPException) as exc:
+            # URLError·시간 초과뿐 아니라 응답 도중 끊긴 연결(RemoteDisconnected·ConnectionResetError·
+            # IncompleteRead)도 다시 시도한다. 한 번 끊겼다고 harvest 전체가 멈추지 않게 하기 위해서다.
             if attempt == 2:
-                raise LawGoError(f'연결 실패: {exc}') from exc
+                raise LawGoError(f'연결 실패: {str(exc) or type(exc).__name__}') from exc
         time.sleep(1.5 * (attempt + 1))
     CALLS['n'] += 1
     time.sleep(DELAY)
@@ -342,10 +351,9 @@ def squash(name):
     return re.sub(r'[\s·ㆍ・]', '', name or '')
 
 
-# 사건번호의 사건부호. '2019년3월'처럼 날짜가 사건번호로 잡히지 않도록 쓰이는 부호만 적는다(긴 것을 앞에)
-CASE_TYPES = ('다카|다라|재다|재두|재누|구합|구단|구소|가합|가단|가소|고합|고단|고정|카합|카단|카기|부해|부노|헌가|헌바|헌마|헌라|헌사|헌아|'
-              '다|두|누|구|나|노|도|마|머|그|스|므|르|브|재|허|후|추|초|모|오|트|즈|느|드|흐|카|라|사|자|차|파')
-CASE_NUMBER = re.compile(r'(?<!\d)(\d{2,4})\s?(' + CASE_TYPES + r')\s?(\d{1,7})(?!\d)')
+# 사건번호의 사건부호와 정규식은 공통/scripts/system.py 한 곳에만 둔다(citation_check 와 같은 정의).
+CASE_TYPES = _system.CASE_TYPES
+CASE_NUMBER = re.compile(_system.CASE_NUMBER)
 # 법원 이름은 실제 이름 꼴로만 잡는다. LBOX 본문 머리는 화면 글자가 붙어 와서('확정원고패서울남부지방법원') 느슨하게 잡으면 앞 글자가 딸려 온다
 REGIONS = '서울|부산|대구|인천|광주|대전|울산|수원|의정부|춘천|청주|전주|창원|제주'
 COURT_NAME = re.compile(r'(대법원|헌법재판소|특허법원|(?:' + REGIONS + r')(?:중앙|동부|남부|북부|서부)?'
@@ -371,7 +379,7 @@ def cited_cases(text):
         if names:
             court = re.sub('|'.join(SHORT_COURTS), lambda s: SHORT_COURTS[s.group(0)], names[-1])
         chain_end = m.end()
-        pair = (court, m.group(1) + m.group(2) + m.group(3))
+        pair = (court, re.sub(r'\s', '', m.group(0)))
         if court and pair not in found:
             found.append(pair)
     return found
@@ -435,8 +443,8 @@ def fetch_file(url, out):
             data = response.read()
             headers = getattr(response, 'headers', None)
             name = (headers.get('Content-Disposition') if headers else '') or ''
-    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as exc:
-        raise LawGoError(f'파일 내려받기 실패: {exc}') from exc
+    except (OSError, http.client.HTTPException) as exc:     # HTTPError·URLError·끊긴 연결
+        raise LawGoError(f'파일 내려받기 실패: {str(exc) or type(exc).__name__}') from exc
     CALLS['n'] += 1
     path = Path(out)
     path.parent.mkdir(parents=True, exist_ok=True)

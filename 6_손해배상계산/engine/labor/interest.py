@@ -15,7 +15,10 @@ DI-01 [법령] 민사 연 5%(민법 제379조), 상사 연 6%(상법 제54조), 
       2003 부칙은 원문 재대조 안 됨 → 1심 변론종결일이 2003. 6. 1. 전이면 경과조치를 적용하지 않고 warning.
 DI-02 [법령·판례확립] 퇴직·사망 청산 금품(Claim.settlement=True)은 지급사유 발생일부터 14일이 되는 날
       (= 마지막 근무일 + 14일, Claim.due_date)까지 미지급이면 그 다음 날부터 20%. 14일째가 일요일이어도
-      다음 날부터(민법 제161조 미적용, 판결 확인).
+      다음 날부터(민법 제161조 미적용, 판결 확인). 지급사유 발생일은 원금 항목의 `trigger_date` 속성이 있으면 그 날,
+      없으면 마지막 근무일(`last_working_day`) 다음 날, 둘 다 없으면 due_date − 13일로 본다(warning).
+      due_date 가 마지막 근무일 + 14일보다 이르면(퇴직금 `rs_due_date=day_after_retirement`, 퇴직 직후 지급기일의
+      연차수당 등) due_date 다음 날부터 6%/5%, 20%는 마지막 근무일 + 15일부터.
 DI-03 [법령/판례확립/불명확] 재직 중 정기임금(Claim.settlement=False)
       - 개정 제37조 제1항 제2호(법률 제20520호, 2025. 10. 23. 시행): 제43조 제2항 정기지급일까지
         미지급이면 다음 날부터 20%. 부칙 제2조 "시행 이후 … 지연이자 지급사유가 발생하는 경우부터".
@@ -47,17 +50,25 @@ DI-09 [판례확립·법령] 재직 중 임금 기본형: 정기지급일 다음
 DI-10 확정 지연손해금의 원금화: 구현하지 않음(원본이 상사채권일 때 이율 미확인) → 필요하면 수동 항목.
 ---------------------------------------------------------------- 일할·끝수·충당
 DI-11 [불명확] `원금 × 연이율 × 기간`, 기산일·종기 모두 산입. 1년 이상이면 기산일부터 만 N년 + 잔여일수/분모.
+      만 N년의 만료일은 민법 제160조(대응일 전날, 대응일이 없으면 그 월 말일 — 2. 29. 기산 1년은 다음 해 2. 28.까지).
       분모: 잔여기간에 2. 29.이 들면 366(`anniv_feb29`, 기본) / 잔여기간 종료연도가 윤년이면 366
       (`anniv_endyear_leap`) — 판결 골든 4건은 둘 다와 일치하고 2024. 3. 1.~12. 31.처럼 갈리는 경우는 판결
       미확인. 그 밖에 `calendar_split`(역년별 분모), `actual_365`.
 DI-12 [실무관행] 구간별 산출 후 원 미만 버림, 합산(`floor_per_segment`) / 합계 후 버림(`floor_total`).
 DI-13 [판례확립] 원금은 세전. 원천징수세액은 실제 납부한 경우 그 납부일에 원금에서 뺀다(대법원 2013다36347,
       다툼으로 소송에 이른 경우 달리 볼 여지 유보) → `payments[].kind = withholding` 은 원금 직접 감액 + warning.
+      납부일 당일부터 줄어든 원금을 쓴다(변제충당 DI-14 와 달리 납부일 이자를 납부 전 원금에 붙이지 않는다).
 DI-14 [법령] 변제충당: 이자(지연손해금) → 원본(민법 제479조). `payments[].kind = payment`.
+      변제일까지는 변제 전 원금에 이자가 붙고, 줄어든 원금은 다음 날부터 적용한다(창원지법 2018가합52160 충당 이자
+      363,464원 = 지급기일 다음 날부터 변제일까지). 이자 기산일 전(지급기일 당일 포함) 변제는 발생한 이자가 없으므로
+      원본에 바로 충당하고 warning, 계산 기준일 뒤 변제는 반영하지 않고 warning.
 DI-15 [법령·판례확립] 소멸시효 3년(근로기준법 제49조, 퇴직급여법 제10조). 임금은 정기지급일부터,
-      청산 금품은 지급사유 발생일(마지막 근무일 다음 날)부터. 초일 불산입 → 만료일 = 기산일의 3년 뒤 해당일.
-      말일이 토·일요일이면 다음 날(민법 제161조, 판례 미확인, `di_limitation_weekend_shift`; 공휴일은 모름).
-      소 제기일(`suit_filed_date`)이 만료일 뒤면 '시효 완성 의심' 표시(재판 외 최고·일부청구는 사람이 판단).
+      청산 금품은 지급사유 발생일(마지막 근무일 다음 날, DI-02 와 같은 방법으로 정함)부터. 초일 불산입 → 만료일 =
+      기산일의 3년 뒤 해당일. 말일이 토·일요일이면 다음 날(민법 제161조, 판례 미확인, `di_limitation_weekend_shift`;
+      공휴일은 모름). 소 제기일(`suit_filed_date`)이 만료일 뒤면 '시효 완성 의심' 표시(재판 외 최고·일부청구는 사람이
+      판단). 청산 금품의 기산일은 0시에 시작하므로 초일 산입(민법 제157조 단서 — 연차 모듈 AL-15 방식)으로 보면
+      만료일이 '기산일 + 3년 − 1일'로 앞당겨진다. 두 규칙은 통일되지 않았으므로 그 날짜를 비고에 적고, 시효 완성
+      의심은 이른 날짜로 판단한다(warning).
 DI-16 DC형 부담금 지연이자(연 10%→20%): 범위 밖, 구현하지 않음.
 DI-18 [법령] 근로기준법 적용 제외 사업(동거 친족만 사용하는 사업·가사 사용인, 제11조 제1항 단서)은 제37조 20% 없음
       → `lsa_not_applicable`. 상시 4명 이하 사업장은 시행령 별표 1이 제36조~제37조를 적용하므로 20% 적용.
@@ -83,11 +94,13 @@ OPTIONS: dict[str, OptionSpec] = {s.key: s for s in [
                "개정 제37조 제1항 제2호를 적용하는 첫 정기지급일", "DI-03"),
     OptionSpec("di_regime", "auto", "재직 중 정기임금의 20% 적용 방식", "DI-03", {
         "auto": "개정법 도래분(정기지급일 ≥ 경계일)은 지급일 다음 날부터 20%, 대안 결과를 함께 출력",
-        "new_2ho_off": "개정법 도래분에도 20% 미적용(보수적)",
-        "old_only": "구법 규칙만 적용(개정법 무시)",
+        "new_2ho_off": "개정법 도래분도 구법 규칙으로 계산 — 재직(복직) 중이면 20% 없음, 근로관계가 끝났으면 "
+                       "마지막 근무일 + 15일부터 20%(di_ended_old_law_20·di_redismissal_20). auto 의 '대안: 개정법 미적용'과 같음",
+        "old_only": "new_2ho_off 와 같은 계산(별칭)",
     }),
     OptionSpec("di_ended_old_law_20", True,
-               "구법 도래분이 퇴직(근로관계 종료) 때까지 미지급이면 마지막 근무일 + 15일부터 20%", "DI-03"),
+               "구법 도래분(di_regime 이 auto 가 아니면 개정법 도래분 포함)이 퇴직(근로관계 종료) 때까지 미지급이면 "
+               "마지막 근무일 + 15일부터 20%", "DI-03"),
     OptionSpec("di_redismissal_20", True,
                "재해고로 근로관계가 끝난 경우에도 위 20% 적용(대전고법 2019나13573 / 반대 서울고법 2021나2031970)",
                "DI-03"),
@@ -124,11 +137,11 @@ RULES: dict[str, tuple[str, str]] = {
     "DI-07": ("소송촉진법 이율은 송달 다음 날부터, 다툼 타당 범위는 선고일까지 배제", "법령·판례확립"),
     "DI-08": ("같은 날 이율 중첩 없음: 20% → 소송촉진법 → 6%/5%", "판례확립"),
     "DI-09": ("재직 중 임금 기본형: 지급일 다음 날부터 6%/5%", "판례확립"),
-    "DI-11": ("일할: 만 N년 + 잔여일수/분모(분모 규칙 옵션)", "불명확"),
+    "DI-11": ("일할: 만 N년(민법 제160조) + 잔여일수/분모(분모 규칙 옵션)", "불명확"),
     "DI-12": ("구간별 원 미만 버림", "실무관행"),
     "DI-13": ("원금은 세전, 실제 납부한 원천세만 납부일에 감액", "판례확립"),
-    "DI-14": ("변제충당: 이자 → 원본", "법령"),
-    "DI-15": ("소멸시효 3년 만료일 표시", "법령·판례확립"),
+    "DI-14": ("변제충당: 이자 → 원본, 변제일까지는 변제 전 원금(창원지법 2018가합52160)", "법령·하급심"),
+    "DI-15": ("소멸시효 3년 만료일 표시 — 청산 금품은 초일 산입 날짜를 함께 적고 이른 날로 완성 의심 판정", "법령·판례확립"),
     "DI-17": ("원고가 구한 이율 상한", "법령"),
     "DI-18": ("근로기준법 적용 제외 사업은 20% 없음, 해고예고수당 20% 여부는 경고", "법령/하급심"),
 }
@@ -190,11 +203,32 @@ def _d(v, label):
         raise LaborError(f"interest.{label}: 날짜 형식이 아닙니다: {v!r}") from exc
 
 
+_KEYS = {"employer_merchant", "calc_until", "service_date", "first_instance_judgment_date", "appellate_judgment_date",
+         "finality_date", "first_instance_close_date", "suit_filed_date", "last_working_day", "end_cause",
+         "dismissal_validity_settled", "lsa_not_applicable", "exclusions", "payments", "items"}
+_ITEM_KEYS = {"category", "label", "amount", "due_date", "settlement", "note"}
+_PAYMENT_KEYS = {"date", "amount", "claim", "kind", "note"}      # note 는 계산에 쓰지 않는 메모(dismissal 절과 같음)
+_EXCLUSION_KEYS = {"start", "end", "reason", "note"}
+_KEY_HINTS = {"first_instance_closing_date": "dismissal 절 이름입니다 — interest 절은 first_instance_close_date"}
+
+
+def _check_keys(v, keys: set, label: str) -> dict:
+    """알 수 없는 키는 오류 — 오타 하나로 이율 구간·20%가 조용히 빠지지 않게 한다(다른 노동 모듈과 같은 규약)."""
+    if not isinstance(v, dict):
+        raise LaborError(f"{label} 은(는) 사전이어야 합니다: {v!r}")
+    unknown = sorted(map(str, set(v) - keys))
+    if unknown:
+        hints = [f"{k}: {_KEY_HINTS[k]}" for k in unknown if k in _KEY_HINTS]
+        raise LaborError(f"{label}{'' if label.endswith('절') else ' '}에 알 수 없는 키: {', '.join(unknown)}"
+                         + (f" ({'; '.join(hints)})" if hints else "") + f". 가능: {', '.join(sorted(keys))}")
+    return v
+
+
 def load_interest(raw: dict | None, worker: dict | None = None) -> InterestInput:
-    """사건.yaml `interest:` 절.
+    """사건.yaml `interest:` 절. 아래에 없는 키는 오류다(items·payments·exclusions 의 하위 키도 같다).
 
     interest:
-      employer_merchant: true           # 필수(없으면 worker.employer_merchant). 회사=상인 6%, 비상인 5%
+      employer_merchant: true           # 필수(비우면 worker.employer_merchant). 회사=상인 6%, 비상인 5%
       calc_until: 2026-10-01            # 금액 계산 기준일. 비우면 구간표·문구만
       service_date: 2025-08-20          # 소장 부본 송달일
       first_instance_judgment_date: 2026-10-01   # 선고(예정)일
@@ -202,16 +236,22 @@ def load_interest(raw: dict | None, worker: dict | None = None) -> InterestInput
       finality_date: null
       first_instance_close_date: null   # 소송촉진법 경과조치용 1심 변론종결일
       suit_filed_date: 2025-08-01       # 시효 표시
+      last_working_day: null            # 근로관계 종료 시 마지막 근무일. 비우면 worker.last_working_day(재직이면 비움)
       end_cause: retirement             # 근로관계 종료 사유: retirement|contract_end|resignation|redismissal|death|other
       dismissal_validity_settled: false # 해고무효(구제명령)가 이미 확정·다툼 없음이면 true → 배제 없음
+      lsa_not_applicable: false         # 근로기준법 적용 제외 사업(동거 친족만 사용·가사 사용인)이면 true
       exclusions: [{start: 2024-01-10, end: 2024-06-30, reason: 회생절차}]   # 제18조 제1·2·4호
       payments: [{date: 2026-01-05, amount: 1000000, claim: "2024. 3.분", kind: payment}]
-      items: [{category: 해고예고수당, label: 해고예고수당, amount: 3000000, due_date: 2024-03-15, settlement: true}]
-    마지막 근무일은 worker.last_working_day 를 쓴다.
+      items: [{category: 해고예고수당, label: 해고예고수당, amount: 3000000, due_date: 2024-03-15, settlement: true, note: ""}]
     """
-    raw = dict(raw or {})
+    raw = _check_keys(dict(raw or {}), _KEYS, "interest 절")
     worker = dict(worker or {})
-    merchant = raw.get("employer_merchant", worker.get("employer_merchant"))
+
+    def pick(key):
+        v = raw.get(key)
+        return worker.get(key) if v in (None, "") else v
+
+    merchant = pick("employer_merchant")
     if merchant is None:
         raise LaborError("interest.employer_merchant(사용자가 상인인지 여부)가 없습니다. "
                          "회사면 true(연 6%), 의료법인·학교법인·비영리법인·개인 비상인이면 false(연 5%).")
@@ -220,6 +260,7 @@ def load_interest(raw: dict | None, worker: dict | None = None) -> InterestInput
         raise LaborError(f"interest.end_cause 값 {end_cause!r} 은 허용되지 않습니다. 가능: {', '.join(END_CAUSES)}")
     items = []
     for i, it in enumerate(raw.get("items") or []):
+        it = _check_keys(it, _ITEM_KEYS, f"interest.items[{i}]")
         for k in ("label", "amount", "due_date"):
             if it.get(k) in (None, ""):
                 raise LaborError(f"interest.items[{i}].{k} 가 없습니다.")
@@ -228,6 +269,7 @@ def load_interest(raw: dict | None, worker: dict | None = None) -> InterestInput
                            str(it.get("note") or "")))
     pays = []
     for i, p in enumerate(raw.get("payments") or []):
+        p = _check_keys(p, _PAYMENT_KEYS, f"interest.payments[{i}]")
         kind = str(p.get("kind") or "payment")
         if kind not in ("payment", "withholding"):
             raise LaborError(f"interest.payments[{i}].kind 는 payment 또는 withholding 입니다.")
@@ -236,6 +278,7 @@ def load_interest(raw: dict | None, worker: dict | None = None) -> InterestInput
         pays.append(Payment(_d(p["date"], f"payments[{i}].date"), dec(p["amount"]), str(p.get("claim") or ""), kind))
     excl = []
     for i, e in enumerate(raw.get("exclusions") or []):
+        e = _check_keys(e, _EXCLUSION_KEYS, f"interest.exclusions[{i}]")
         s, t = _d(e.get("start"), f"exclusions[{i}].start"), _d(e.get("end"), f"exclusions[{i}].end")
         if not s or not t or t < s:
             raise LaborError(f"interest.exclusions[{i}] 의 start·end 가 없거나 순서가 맞지 않습니다.")
@@ -249,7 +292,7 @@ def load_interest(raw: dict | None, worker: dict | None = None) -> InterestInput
         finality_date=_d(raw.get("finality_date"), "finality_date"),
         first_instance_close_date=_d(raw.get("first_instance_close_date"), "first_instance_close_date"),
         suit_filed_date=_d(raw.get("suit_filed_date"), "suit_filed_date"),
-        last_working_day=_d(raw.get("last_working_day", worker.get("last_working_day")), "last_working_day"),
+        last_working_day=_d(pick("last_working_day"), "last_working_day"),
         end_cause=end_cause,
         dismissal_validity_settled=bool(raw.get("dismissal_validity_settled", False)),
         lsa_not_applicable=bool(raw.get("lsa_not_applicable", False)),
@@ -288,7 +331,8 @@ class LimitationRow:
     category: str
     start: date
     expiry: date
-    suspect: bool | None      # 소 제기일이 없으면 None
+    suspect: bool | None      # 소 제기일이 없으면 None. 초일 산입 날짜(비고)가 더 이르면 그 날짜로 판단
+    note: str = ""
 
 
 @dataclass
@@ -317,8 +361,15 @@ def _add_years(d: date, n: int) -> date:
     return add_months(d, 12 * n)
 
 
+def _period_end(start: date, months: int) -> date:
+    """start(초일 산입)부터 months 개월 기간의 만료일 — 민법 제160조 제2항(대응일 전날)·제3항(대응일이 없으면 그 월 말일).
+    retirement.one_year_expiry(civil_code)·leave.period_span 과 같은 규칙."""
+    target = add_months(start, months)
+    return target if target.day != start.day else target - timedelta(days=1)
+
+
 def year_fraction(start: date, end: date, mode: str) -> tuple[Decimal, str]:
-    """[start, end] 양끝 포함 기간의 연 환산값과 설명(DI-11)."""
+    """[start, end] 양끝 포함 기간의 연 환산값과 설명(DI-11). 만 N년은 민법 제160조로 센다."""
     days = (end - start).days + 1
     if mode == "actual_365":
         return Decimal(days) / 365, f"{days}/365"
@@ -331,9 +382,9 @@ def year_fraction(start: date, end: date, mode: str) -> tuple[Decimal, str]:
             parts.append(f"{n}/{den}")
         return total, " + ".join(parts)
     n = 0
-    while _add_years(start, n + 1) - timedelta(days=1) <= end:
+    while _period_end(start, 12 * (n + 1)) <= end:
         n += 1
-    rest_start = _add_years(start, n)
+    rest_start = start if n == 0 else _period_end(start, 12 * n) + timedelta(days=1)
     if rest_start > end:
         return Decimal(n), f"{n}년"
     rem = (end - rest_start).days + 1
@@ -375,15 +426,31 @@ def _exclusion_end(inp: InterestInput, o: dict, warnings: list) -> date | None:
     return inp.appellate_judgment_date or inp.first_instance_judgment_date
 
 
+def _settle_trigger(c: Claim, inp: InterestInput) -> date:
+    """청산 금품의 지급사유 발생일(DI-02·DI-15). 원금 항목의 trigger_date 속성 → 마지막 근무일 다음 날 →
+    due_date − 13일(due_date 가 마지막 근무일 + 14일이라는 규약) 순으로 정한다."""
+    explicit = getattr(c, "trigger_date", None)
+    if explicit is not None:
+        return explicit
+    if inp.last_working_day is not None:
+        return inp.last_working_day + timedelta(days=1)
+    return c.due_date - timedelta(days=13)
+
+
 def _lsa20_start(c: Claim, inp: InterestInput, o: dict, regime: str, trace: list, warnings: list) -> tuple[date | None, str]:
     """20% 기산일과 근거 문구. 적용 없으면 (None, 사유)."""
     if inp.lsa_not_applicable:
         return None, "근로기준법 적용 제외 사업(제11조 제1항 단서) — 제37조 없음"
     if c.settlement:
-        trigger = c.due_date - timedelta(days=13)      # 지급사유 발생일(= 마지막 근무일 다음 날)
+        trigger = _settle_trigger(c, inp)
         if trigger < LSA20_EFFECTIVE:
             return None, "지급사유 발생일이 2005. 7. 1. 전(DI-01)"
-        return c.due_date + timedelta(days=1), "퇴직 청산 금품 14일 경과(DI-02)"
+        deadline = trigger + timedelta(days=13)          # 지급사유 발생일부터 14일이 되는 날
+        start = max(c.due_date, deadline) + timedelta(days=1)
+        why = "퇴직 청산 금품 14일 경과(DI-02)"
+        if c.due_date < deadline:
+            why += f" — 지급기일 {_fmt(c.due_date)} 다음 날부터 {_fmt(deadline)}까지는 20% 아님"
+        return start, why
 
     cutoff = parse_date(o["di_new_law_cutoff"])
     if regime == "auto" and c.due_date >= cutoff:
@@ -464,12 +531,33 @@ def _order_text(c: Claim, segs: list[Segment]) -> str:
     return f"{int(c.amount):,}원에 대하여 " + ", ".join(parts)
 
 
+def _withholding_warning(c: Claim, p: Payment) -> str:
+    return (f"{c.label}: 원천세 {int(p.amount):,}원을 {_fmt(p.date)}에 원금에서 뺐습니다. "
+            "실제 납부한 경우에만 뺄 수 있고(대법원 2013다36347), 다툼으로 소송에 이른 경우 달리 볼 여지가 있습니다.")
+
+
 def _accrue(c: Claim, segs: list[Segment], until: date, pays: list[Payment], o: dict,
             rows: list[InterestRow], warnings: list) -> Decimal:
-    """기준일까지 금액. 변제·원천세가 있으면 그 날짜로 구간을 더 나눈다."""
+    """기준일까지 금액. 변제·원천세가 있으면 그 날짜로 구간을 더 나눈다.
+
+    변제(payment)는 변제일까지 변제 전 원금에 이자를 붙이고 이자 → 원본 순으로 충당해 다음 날부터 줄어든 원금을
+    쓴다(DI-14, 창원지법 2018가합52160). 원천세(withholding)는 납부일부터 줄어든 원금을 쓴다(DI-13).
+    이자 기산일 전(지급기일 당일 포함) 변제·원천세는 발생한 이자가 없으므로 원금에서 바로 뺀다.
+    """
     principal = c.amount
     unpaid_interest = Decimal(0)
-    events = sorted(pays, key=lambda p: p.date)
+    # 같은 날이면 원천세(그날부터 감액)를 변제(그날 이자까지 붙인 뒤 충당)보다 먼저 처리 — 입력 순서와 무관하게
+    events = sorted(pays, key=lambda p: (p.date, p.kind != "withholding"))
+    first = segs[0].start if segs else c.due_date + timedelta(days=1)
+    for p in events:
+        if p.date < first:
+            principal = max(principal - p.amount, Decimal(0))
+            warnings.append(_withholding_warning(c, p) if p.kind == "withholding" else
+                            f"{c.label}: {_fmt(p.date)} 변제 {int(p.amount):,}원은 이자 기산일({_fmt(first)}) 전이라 "
+                            "발생한 지연손해금이 없어 원금에서 바로 뺐습니다(DI-14).")
+        elif p.date > until:
+            warnings.append(f"{c.label}: {_fmt(p.date)} {'원천세' if p.kind == 'withholding' else '변제'} "
+                            f"{int(p.amount):,}원은 계산 기준일({_fmt(until)}) 뒤라 반영하지 않았습니다.")
     cuts = []
     for s in segs:
         if s.start > until:
@@ -479,7 +567,12 @@ def _accrue(c: Claim, segs: list[Segment], until: date, pays: list[Payment], o: 
     for s_start, s_end, seg in cuts:
         cur = s_start
         for p in [p for p in events if s_start <= p.date <= s_end] + [None]:
-            stop = s_end if p is None else p.date - timedelta(days=1)
+            if p is None:
+                stop = s_end
+            elif p.kind == "withholding":
+                stop = p.date - timedelta(days=1)    # 납부일부터 줄어든 원금(DI-13)
+            else:
+                stop = p.date                        # 변제일까지 변제 전 원금(DI-14)
             if stop >= cur and principal > 0:
                 frac, desc = year_fraction(cur, stop, o["di_day_count"])
                 raw = principal * seg.rate / 100 * frac
@@ -491,24 +584,35 @@ def _accrue(c: Claim, segs: list[Segment], until: date, pays: list[Payment], o: 
             if p is not None:
                 if p.kind == "withholding":
                     principal = max(principal - p.amount, Decimal(0))
+                    warnings.append(_withholding_warning(c, p))
                 else:
                     to_interest = min(p.amount, unpaid_interest)
                     unpaid_interest -= to_interest
                     principal = max(principal - (p.amount - to_interest), Decimal(0))
-                cur = p.date
+                cur = max(cur, stop + timedelta(days=1))
     if o["di_rounding"] == "floor_total":
         total = round_money(total)
     return total
 
 
-def _limitation(c: Claim, inp: InterestInput, o: dict) -> LimitationRow:
-    start = c.due_date - timedelta(days=13) if c.settlement else c.due_date
+def _limitation(c: Claim, inp: InterestInput, o: dict) -> tuple[LimitationRow, date | None]:
+    """(시효 표시 행, 초일 산입으로 본 더 이른 만료일 또는 None) — DI-15."""
+    start = _settle_trigger(c, inp) if c.settlement else c.due_date
     expiry = _add_years(start, 3)
     if o["di_limitation_weekend_shift"]:
         while expiry.weekday() >= 5:
             expiry += timedelta(days=1)
-    suspect = None if inp.suit_filed_date is None else inp.suit_filed_date > expiry
-    return LimitationRow(c.label, c.category, start, expiry, suspect)
+    early, note = None, ""
+    if c.settlement:
+        # 지급사유 발생일(퇴직 다음 날)은 0시에 시작 — 초일 산입(민법 제157조 단서)이면 '기산일 + 3년 − 1일'(연차 AL-15)
+        alt = _period_end(start, 36)
+        if alt < expiry:
+            early = alt
+            note = (f"초일 산입(민법 제157조 단서 — 연차 모듈 AL-15 방식)이면 {_fmt(alt)} 만료. "
+                    "두 규칙이 통일되지 않아 시효 완성 의심은 이 날짜로 판단")
+    check = early or expiry
+    suspect = None if inp.suit_filed_date is None else inp.suit_filed_date > check
+    return LimitationRow(c.label, c.category, start, expiry, suspect, note), early
 
 
 def _run(claims: list[Claim], inp: InterestInput, o: dict, regime: str, trace, warnings, rows) -> tuple[Decimal, list[ClaimSchedule]]:
@@ -539,9 +643,12 @@ def calculate_interest(inp: InterestInput, opts: dict, claims: list[Claim] | Non
     for p in inp.payments:
         if p.claim not in labels:
             warnings.append(f"변제 {_fmt(p.date)} {int(p.amount):,}원은 claim 이름이 원금 항목과 맞지 않아 반영하지 않았습니다.")
-        if p.kind == "withholding":
-            warnings.append(f"{p.claim}: 원천세 {int(p.amount):,}원을 {_fmt(p.date)}에 원금에서 뺐습니다. "
-                            "실제 납부한 경우에만 뺄 수 있고(대법원 2013다36347), 다툼으로 소송에 이른 경우 달리 볼 여지가 있습니다.")
+    if inp.last_working_day is None and any(c.settlement and getattr(c, "trigger_date", None) is None
+                                            for c in all_claims if c.amount > 0):
+        warnings.append("마지막 근무일(worker.last_working_day 또는 interest.last_working_day)이 없어 청산 금품의 "
+                        "지급사유 발생일을 지급기일 − 13일(지급기일 = 마지막 근무일 + 14일 규약)로 보았습니다. 지급기일이 그와 다르면"
+                        "(퇴직금 rs_due_date=day_after_retirement, 퇴직 직후 지급기일의 연차수당 등) 20% 기산일과 시효 기산일이 "
+                        "틀리므로 마지막 근무일을 적으십시오(DI-02·DI-15).")
     if inp.first_instance_close_date and inp.first_instance_close_date < date(2003, 6, 1):
         warnings.append("1심 변론종결일이 2003. 6. 1. 전입니다. 2003년 소송촉진법 이율 개정 부칙은 확인되지 않아 경과조치를 적용하지 않았습니다.")
     for c in all_claims:
@@ -574,10 +681,25 @@ def calculate_interest(inp: InterestInput, opts: dict, claims: list[Claim] | Non
         cm_total, cm_sched = _run(all_claims, inp, max_o, regime, [], [], [])
         alternatives["청구 최대(배제 없음)"] = (cm_total, cm_sched)
 
-    limitation = [_limitation(c, inp, o) for c in all_claims if c.amount > 0]
-    for lr in limitation:
-        if lr.suspect:
+    limitation = []
+    any_early = False
+    for c in all_claims:
+        if c.amount <= 0:
+            continue
+        lr, early = _limitation(c, inp, o)
+        limitation.append(lr)
+        any_early = any_early or early is not None
+        if not lr.suspect:
+            continue
+        if inp.suit_filed_date > lr.expiry:
             warnings.append(f"{lr.claim}: 시효 만료일 {_fmt(lr.expiry)}이 소 제기일보다 앞섭니다. 최고·승인 등 중단 사유를 확인하세요.")
+        else:
+            warnings.append(f"{lr.claim}: 초일 산입(민법 제157조 단서)으로 보면 시효 만료일 {_fmt(early)}이 소 제기일보다 앞섭니다"
+                            f"(초일 불산입이면 {_fmt(lr.expiry)}까지). 규칙이 통일되지 않았으므로 최고·승인 등 중단 사유를 확인하세요.")
+    if any_early:
+        warnings.append("청산 금품의 시효 만료일은 초일 불산입(DI-15)으로 적었습니다. 기산일(마지막 근무일 다음 날)이 0시에 "
+                        "시작하므로 초일 산입(민법 제157조 단서 — 연차휴가수당 시트의 시효 완성일, AL-15)이면 더 이른 날이 "
+                        "만료일입니다(소멸시효 시트 비고). 두 규칙은 통일되지 않았으니 청구 시기는 이른 날짜를 기준으로 판단하세요.")
     if inp.suit_filed_date is None:
         warnings.append("소 제기일이 없어 시효 완성 여부는 표시하지 않고 만료일만 적었습니다.")
 

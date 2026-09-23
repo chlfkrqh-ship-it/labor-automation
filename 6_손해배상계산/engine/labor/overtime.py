@@ -136,8 +136,10 @@ M11 시간·일수 끝수 — `ot_hours_rounding`. 일수 끝수(월 평균 주�
       part_time: false               # 단시간근로자(OT-08)
       base_paid: false               # 초과시간 기본분 100% 기지급 여부(기간·기록별로 덮어씀)
       inclusive_wage: none           # none | valid_hard_to_measure | invalid_measurable | not_formed
-      claim_from: 2018-02-01         # 청구 대상 기간(비우면 입력 전부). 밖의 기록은 주 40시간 판정에만 씀
-      claim_to: 2018-05-31
+      claim_from: 2018-02-01         # 청구 대상 기간(비우면 입력 전부). days·months·paid 모두 이 기간으로 거른다.
+      claim_to: 2018-05-31           #   밖의 일별 기록은 주 40시간 판정에만 쓰고, 밖의 집계 줄·기지급액은 뺀다(경고).
+                                     #   경계에 걸친 집계 줄은 오류 — from/to 로 나눈다. 경계가 임금산정기간 중간이면
+                                     #   그 기간 기지급액은 청구기간 부분만 적는다(경고)
       pay_day: 25                    # 비우면 worker.pay_day (필수)
       pay_month_offset: 0            # 비우면 worker.pay_month_offset, 그것도 없으면 0
       pay_period_start_day: 1        # 비우면 worker.pay_period_start_day, 그것도 없으면 1
@@ -152,8 +154,8 @@ M11 시간·일수 끝수 — `ot_hours_rounding`. 일수 끝수(월 평균 주�
         rates: {overtime: 0.5, in_law: 0, night: 0.5, holiday_le8: 0.5, holiday_gt8: 1.0, holiday_gt8_ot: 0, part_time: 0}
       compare_units: [[2018-01-01, 2018-12-31]]   # ot_compare_unit=pay_unit 일 때 약정 임금 산정 단위기간
       months:                        # (a) 임금산정기간별 집계
-        - period: "2020-03"          # 임금산정기간 시작 달(YYYY-MM)
-          from: null                 # 기간 안에서 가산율·시급·규모가 바뀌면 from/to 로 나눠 여러 줄
+        - period: "2020-03"          # 임금산정기간 시작 달. 따옴표로 감싼 YYYY-MM(따옴표 없는 2020.10 은 소수 2020.1 로 읽혀 오류)
+          from: null                 # 기간 안에서 가산율·시급·규모·청구기간 경계가 바뀌면 from/to 로 나눠 여러 줄
           to: null
           overtime_hours: 20         # 가산 대상 연장(1일·1주 중복 제거 후)
           in_law_hours: 0            # 법내 초과(단시간이면 소정 초과시간)
@@ -181,7 +183,7 @@ M11 시간·일수 끝수 — `ot_hours_rounding`. 일수 끝수(월 평균 주�
           base_paid: null
           proven: true
           night_proven: true
-      paid:                          # (b) 방식의 기간별 기지급 수당
+      paid:                          # (b) 방식의 기간별 기지급 수당(period 는 따옴표로 감싼 YYYY-MM)
         - {period: "2018-02", overtime: 210840, night: 0, holiday: 0, lump: 45180}
 """
 
@@ -710,7 +712,11 @@ def _load_paid(raw, label: str) -> PaidInput:
 def _parse_key(v, label: str) -> str:
     if isinstance(v, date):
         return f"{v.year:04d}-{v.month:02d}"
-    s = str(v or "").strip().replace(".", "-")
+    if not isinstance(v, str):
+        # YAML 은 따옴표 없는 2024.10 을 소수 2024.1 로 읽는다 — 읽힌 뒤에는 1월인지 10월인지 알 수 없어 받지 않는다
+        raise _err(f"{label} 은(는) 따옴표로 감싼 'YYYY-MM' 이어야 합니다"
+                   f"(따옴표 없는 2024.10 은 YAML 이 소수 2024.1 로 읽어 몇 월인지 알 수 없습니다): {v!r}")
+    s = v.strip().replace(".", "-")
     try:
         y, m = s.split("-")[:2]
         y, m = int(y), int(m)
@@ -785,6 +791,14 @@ def _load_month(raw, label: str) -> MonthEntry:
     return m
 
 
+def _from_worker(raw: dict, worker: dict, key: str):
+    """절에 적은 값. 키가 없거나 비어 있으면(null·'') worker 절 값 — 명시한 0 은 그대로 둔다."""
+    v = raw.get(key)
+    if v is None or v == "":
+        v = worker.get(key)
+    return v
+
+
 def load_overtime(raw: dict, worker: dict | None = None) -> OvertimeInput:
     """사건.yaml `overtime:` 절(dict)과 `worker:` 절을 읽는다."""
     raw = dict(raw or {})
@@ -793,11 +807,11 @@ def load_overtime(raw: dict, worker: dict | None = None) -> OvertimeInput:
     if unknown:
         raise _err(f"overtime 절에 알 수 없는 키: {', '.join(sorted(map(str, unknown)))}")
 
-    pay_day = _int(raw.get("pay_day", worker.get("pay_day")), "pay_day", 1, 31)
+    pay_day = _int(_from_worker(raw, worker, "pay_day"), "pay_day", 1, 31)
     if pay_day is None:
         raise _err("정기지급일(overtime.pay_day 또는 worker.pay_day)이 없습니다 — 차액의 지급기일을 정할 수 없습니다")
-    offset = _int(raw.get("pay_month_offset", worker.get("pay_month_offset")), "pay_month_offset", 0, 12, 0)
-    start_day = _int(raw.get("pay_period_start_day", worker.get("pay_period_start_day")), "pay_period_start_day", 1, 28, 1)
+    offset = _int(_from_worker(raw, worker, "pay_month_offset"), "pay_month_offset", 0, 12, 0)
+    start_day = _int(_from_worker(raw, worker, "pay_period_start_day"), "pay_period_start_day", 1, 28, 1)
 
     ws = raw.get("week_start")
     week_start = None
@@ -918,13 +932,16 @@ def load_overtime(raw: dict, worker: dict | None = None) -> OvertimeInput:
     month_paid_keys = [m.key for m in months if m.paid is not None]
     if len(month_paid_keys) != len(set(month_paid_keys)):
         raise _err("같은 period 의 months 여러 줄에 paid 를 나눠 적었습니다 — 한 줄에만 적으십시오")
+    claim_from, claim_to = _date(raw.get("claim_from"), "claim_from"), _date(raw.get("claim_to"), "claim_to")
+    if claim_from is not None and claim_to is not None and claim_to < claim_from:
+        raise _err(f"claim_to({claim_to})가 claim_from({claim_from})보다 앞섭니다")
 
     return OvertimeInput(
         pay_day=pay_day, pay_month_offset=offset, pay_period_start_day=start_day, week_start=week_start,
         size_band=bands, standard_hours=std, minor=bool(_bool(raw.get("minor"), "minor", False)),
         scheduled_daily_hours=sd, scheduled_weekly_hours=sw, part_time=part_time,
         base_paid=bool(_bool(raw.get("base_paid"), "base_paid", False)), inclusive_wage=inclusive,
-        claim_from=_date(raw.get("claim_from"), "claim_from"), claim_to=_date(raw.get("claim_to"), "claim_to"),
+        claim_from=claim_from, claim_to=claim_to,
         exempt_63=exempt, headcount=heads, flexible_periods=_range_list(raw.get("flexible_periods"), "flexible_periods"),
         agreed_hours=agreed_hours, agreed=agreed, compare_units=_range_list(raw.get("compare_units"), "compare_units"),
         months=months, days=days, paid=paid,
@@ -1400,22 +1417,48 @@ def _comps_for_day(x: _Day, ctx: _Ctx) -> list:
     return [_Comp(x.date, key, item, cat, h, base, L[cat], base, C[cat]) for item, cat, h, base in rows if h > 0]
 
 
-def _comps_for_month(m: MonthEntry, ctx: _Ctx) -> tuple[list, date, date]:
-    inp = ctx.inp
-    ps = pay_periods(date(int(m.key[:4]), int(m.key[5:]), inp.pay_period_start_day),
-                     date(int(m.key[:4]), int(m.key[5:]), inp.pay_period_start_day), inp.pay_period_start_day)[0]
+def _period_of(key: str, inp: OvertimeInput):
+    """'YYYY-MM' 키의 임금산정기간(PaySlice)."""
+    a = date(int(key[:4]), int(key[5:]), inp.pay_period_start_day)
+    return pay_periods(a, a, inp.pay_period_start_day)[0]
+
+
+def _month_span(m: MonthEntry, inp: OvertimeInput) -> tuple:
+    """집계 줄의 (임금산정기간, 시작, 끝). from/to 가 없으면 임금산정기간 전체."""
+    ps = _period_of(m.key, inp)
     s = m.start or ps.period_start
     e = m.end or ps.period_end
     if s < ps.period_start or e > ps.period_end or e < s:
         raise _err(f"months {m.key} 의 from/to({s}~{e})가 임금산정기간 {ps.period_start}~{ps.period_end} 밖입니다")
+    return ps, s, e
+
+
+def _in_claim(inp: OvertimeInput, d: date) -> bool:
+    return (inp.claim_from is None or d >= inp.claim_from) and (inp.claim_to is None or d <= inp.claim_to)
+
+
+def _claim_part(inp: OvertimeInput, s: date, e: date) -> str:
+    """[s, e] 가 청구기간 안(inside)·밖(outside)·경계에 걸침(partial) 중 어디인지."""
+    if _in_claim(inp, s) and _in_claim(inp, e):
+        return "inside"
+    if (inp.claim_to is not None and s > inp.claim_to) or (inp.claim_from is not None and e < inp.claim_from):
+        return "outside"
+    return "partial"
+
+
+def _comps_for_month(m: MonthEntry, ctx: _Ctx) -> tuple[list, date, date]:
+    inp = ctx.inp
+    _, s, e = _month_span(m, inp)
     base_paid = inp.base_paid if m.base_paid is None else m.base_paid
     checks = [
         ("통상시급", lambda d: ctx.hourly(d)),
         ("상시 4명 이하 여부", ctx.small),
         ("제63조 적용제외 여부", ctx.exempt),
-        ("가산율 체계(2018. 3. 20.)", lambda d: d < DATE_2018_AMEND),
-        ("단시간 가산 시행(2014. 9. 19.)", lambda d: d < DATE_PT_PREMIUM),
     ]
+    if m.holiday_gt8_hours > 0:      # 2018. 3. 20. 개정은 휴일 8시간 초과분 가산율(holiday_gt8·holiday_gt8_ot)만 바꾼다
+        checks.append(("가산율 체계(2018. 3. 20.)", lambda d: d < DATE_2018_AMEND))
+    if inp.part_time and ctx.o["ot_part_time_premium"] != "off" and m.in_law_hours > 0:   # 단시간 가산(OT-08)을 켠 경우만
+        checks.append(("단시간 가산 시행(2014. 9. 19.)", lambda d: d < DATE_PT_PREMIUM))
     if inp.agreed is not None:
         checks.append(("약정 통상시급", lambda d: ctx.contract_hourly(d)))
     for name, fn in checks:
@@ -1518,7 +1561,7 @@ def _core(ctx: _Ctx, hol_weekly: str, alloc: str) -> _Core:
     weeks = _classify(days, ctx, hol_weekly, alloc) if days else []
 
     def in_claim(d: date) -> bool:
-        return (inp.claim_from is None or d >= inp.claim_from) and (inp.claim_to is None or d <= inp.claim_to)
+        return _in_claim(inp, d)
 
     per: dict = {}     # key -> dict
     day_keys = set()
@@ -1552,11 +1595,21 @@ def _core(ctx: _Ctx, hol_weekly: str, alloc: str) -> _Core:
         sl = ctx.slice(d)
         st = slot(sl.key, sl.period_start, sl.period_end)
         st["hours"]["unproven"] += mins / SIXTY
+    claim_label = f"{_fmt(inp.claim_from) or '처음'}~{_fmt(inp.claim_to) or '끝'}"
+    out_months, out_paid = [], []
     for m in inp.months:
         if m.key in day_keys:
             raise _err(f"{m.key} 에 일별 기록(days)과 집계(months)가 함께 있습니다 — 한 방식만 쓰십시오")
-        ps = pay_periods(date(int(m.key[:4]), int(m.key[5:]), inp.pay_period_start_day),
-                         date(int(m.key[:4]), int(m.key[5:]), inp.pay_period_start_day), inp.pay_period_start_day)[0]
+        ps, s, e = _month_span(m, inp)
+        part = _claim_part(inp, s, e)
+        if part == "outside":            # 청구기간(claim_from·claim_to)은 집계 줄에도 적용한다
+            name = m.key if (s, e) == (ps.period_start, ps.period_end) else f"{m.key}({_fmt(s)}~{_fmt(e)})"
+            if name not in out_months:
+                out_months.append(name)
+            continue
+        if part == "partial":
+            raise _err(f"months {m.key}({_fmt(s)}~{_fmt(e)})가 청구기간({claim_label}) 경계에 걸칩니다 — "
+                       "집계 시간은 날짜별로 나눌 수 없으므로 from/to 로 나눠 청구기간 안의 시간만 적으십시오")
         st = slot(m.key, ps.period_start, ps.period_end)
         if m.note:
             st["notes"].append(m.note)
@@ -1581,10 +1634,28 @@ def _core(ctx: _Ctx, hol_weekly: str, alloc: str) -> _Core:
             st["base_paid"] = m.base_paid
     for key in inp.paid:
         if key not in per:
-            y, mth = int(key[:4]), int(key[5:])
-            a = date(y, mth, inp.pay_period_start_day)
-            ps = pay_periods(a, a, inp.pay_period_start_day)[0]
+            ps = _period_of(key, inp)
+            if _claim_part(inp, ps.period_start, ps.period_end) == "outside":
+                # 재산정하지 않은 기간의 기지급액을 초과지급으로 보고 청구기간 안 부족분에 충당하지 않는다(OT-18 '같은 청구기간')
+                out_paid.append(key)
+                continue
             slot(key, ps.period_start, ps.period_end)
+    if out_months:
+        ctx.trace.append(Trace("OT-22", "청구기간 밖 months", ", ".join(out_months), f"청구기간 {claim_label} — 계산에서 뺌"))
+        ctx.warn(f"청구기간({claim_label}) 밖이라 계산에서 뺀 집계(months): {', '.join(out_months)}")
+    if out_paid:
+        out_paid.sort()
+        ctx.trace.append(Trace("OT-18", "청구기간 밖 기지급액", ", ".join(out_paid), f"청구기간 {claim_label} — 비교·충당에서 뺌"))
+        ctx.warn(f"청구기간({claim_label}) 밖 기지급액(paid)은 비교·충당에서 뺐습니다: {', '.join(out_paid)}")
+    for key, st in per.items():
+        p = inp.paid.get(key)
+        if p is None or not p.total:
+            continue
+        if ((inp.claim_from is not None and st["start"] < inp.claim_from <= st["end"])
+                or (inp.claim_to is not None and st["start"] <= inp.claim_to < st["end"])):
+            ctx.warn(f"임금산정기간 {key}({_fmt(st['start'])}~{_fmt(st['end'])})이 청구기간({claim_label}) 경계에 걸칩니다 — "
+                     f"재산정은 청구기간 안 부분만인데 기지급액 {p.total}원은 그 기간 전체분일 수 있습니다. "
+                     "청구기간에 해당하는 기지급액만 적었는지 확인하거나 청구기간을 임금산정기간 경계에 맞추십시오")
 
     # OT-16 간주 시간 하한
     for key, st in per.items():
@@ -1719,11 +1790,12 @@ def _read_options(opts: dict | None) -> dict:
 
 
 def _all_dates(inp: OvertimeInput) -> list:
+    """경고 판단용 날짜 — 청구기간 안의 일별 기록과 집계 줄(시작일)."""
     ds = [r.date for r in inp.days]
     for m in inp.months:
         y, mth = int(m.key[:4]), int(m.key[5:])
         ds.append(m.start or date(y, mth, inp.pay_period_start_day))
-    return ds
+    return [d for d in ds if _in_claim(inp, d)]
 
 
 def calculate_overtime(inp: OvertimeInput, opts: dict, **deps) -> OvertimeResult:
@@ -1843,7 +1915,8 @@ def calculate_overtime(inp: OvertimeInput, opts: dict, **deps) -> OvertimeResult
     dates = _all_dates(inp)
     if dates:
         lo, hi = min(dates), max(dates)
-        if lo < DATE_OLD_STANDARD_WARN and not inp.standard_hours:
+        # 청구기간 밖 일별 기록도 주 40시간 판정에 쓰므로 법정 기준시간 이력(M10) 판단에는 넣는다
+        if min(dates + [r.date for r in inp.days]) < DATE_OLD_STANDARD_WARN and not inp.standard_hours:
             ctx.warn("2011. 7. 1. 전 날짜가 있습니다 — 그때 법정 1주 기준시간이 44시간이었을 수 있어 standard_hours 이력을 확인해야 합니다(M10)")
         if lo < DATE_ORDINARY_2024 <= hi:
             ctx.warn("청구기간이 2024. 12. 19.(2023다302838 통상임금 법리 변경)을 걸칩니다 — hourly_of 가 그날로 나뉘었는지 확인해야 합니다(M6)")

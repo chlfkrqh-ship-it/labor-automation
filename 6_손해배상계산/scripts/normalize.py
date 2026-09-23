@@ -137,6 +137,10 @@ def main(src_dir: str | None) -> None:
 
 
 if __name__ == "__main__":
+    # 출력이 파이프이면 Windows 파이썬은 cp949 로 쓴다. Claude Code 는 UTF-8 로 읽으므로 맞춘다.
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8")
     if len(sys.argv) > 1 and sys.argv[1] in ('-h', '--help'):
         print(__doc__); sys.exit(0)
     main(sys.argv[1] if len(sys.argv) > 1 else None)

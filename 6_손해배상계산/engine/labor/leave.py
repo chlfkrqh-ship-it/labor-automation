@@ -11,6 +11,8 @@ AL-01 [법령] 상시 4명 이하 사업장은 제60조·제61조 미적용(제1
       "제54조, 제55조제1항, 제63조"만 열거). 4주 평균 1주 소정근로시간 15시간 미만이면 미적용
       (제18조 제3항 "… 15시간 미만인 근로자에 대하여는 제55조와 제60조를 적용하지 아니한다").
       15.00시간은 적용(`< 15`). 규모 판단 시점과 4주 평균의 판단 구간은 확인 안 됨 → 사람이 기간별 입력.
+      산정기간 입력 `small_business` 가 있으면 그 값, 없으면 `leave.small_business`(전 기간)·worker.small_business_periods·
+      deps `small_business(d)` 중 하나라도 참이면 상시 4명 이하로 본다.
 AL-02 [법령·하급심] 법령 버전 분기
       - 2012. 8. 2.(법률 제11270호): 제2항에 '1년간 80퍼센트 미만 출근한 근로자' 추가. 부칙 제4조
         "이 법 시행 후의 근로기간이 최초로 1년이 되는 근로자로서 …부터 적용" → 산정기간 시작일이
@@ -115,12 +117,16 @@ M4   [판례확립·하급심] 약정 통상임금·약정 산식(예: 1.5배)�
       무효", "임금 항목별로 … 유리한 것만을 개별적으로 취사선택하여 법정수당을 산정하는 것은 허용되지
       않는다"; 대전고등법원 2019나41(확정) 단협 '연차일수 × 통상일급 × 1.5'와 법정 '연차일수 × 통상일급' 중
       유리한 쪽. 약정 산식의 '통상임금'이 약정인지 법정인지는 사람이 `agreed_formula.wage_basis` 로 정한다.
+      약정 휴가일수(`agreed_days`)가 있으면 약정 산식의 일수는 법정 미사용과 따로 '약정 일수 − 사용일수 − 촉진 소멸일수'로
+      센다(법정 일수를 다 써도 약정 초과분은 남는다).
 AL-13 [행정해석] 기준 시점: 휴가청구권이 남아 있는 마지막 날(사용기간 말일), 사용기간 중 퇴직이면 마지막
       근로일의 1일 통상임금(임금근로시간정책과-1018 "휴가청구권 … 이 남아 있는 마지막 달(사용기간 중 퇴직한
       경우에는 퇴직시)의 통상임금").
 AL-18 [법령·행정해석] 단시간근로자: 시간 = 통상근로자 연차일수 × (단시간 주 소정근로시간 ÷ 통상근로자 주
       소정근로시간) × 8, "1시간 미만은 1시간으로 본다"(시행령 [별표 2] 4. 나목), 임금은 시간급 기준(마목).
       비교 통상근로자 없으면 40시간(임금근로시간과-2754). `al_pt_hour_rounding`.
+      시간급은 deps `hourly_of(d)`(통상시급)가 있으면 그 값, 없으면 1일 통상임금 ÷ `daily_hours` 로 환산하고 warning
+      (두 모듈의 1일 소정근로시간이 다르면 금액이 틀린다). `daily_hours` 는 사용일수를 시간으로 바꾸는 데도 쓴다.
 AL-19 [불명확] 통상·단축근로 혼재 월 단위 비례(근로개선정책과-4216, 재대조 못함, 2024. 10. 22. 개정 후 불명확)
       → `al_mixed_reduced_hours`(none 기본 = 미적용 + warning).
 AL-22 [불명확] 끝수: 법령 규정 없음. `al_final_rounding` floor(원 미만 버림, 기본) | floor10 | half_up.
@@ -146,9 +152,9 @@ M3   [하급심·법령] 재직 중 미지급 수당의 지연이자(제37조 �
       적용 여부는 지연손해금 모듈이 정한다. 이 모듈은 지급기일만 넘긴다(Claim.note).
 AL-15 [판례확립] 소멸시효 3년, 기산점 = 휴가권 취득일부터 1년 경과로 불실시가 확정된 다음 날(대법원 2023. 11. 16.
       선고 2022다231403). 시효 완성일 = 기산일 + 3년 − 1일(기산일이 0시 시작 → 초일 산입; 이날까지 행사하면
-      시효 미완성). 퇴직 시 기산점 `al_retire_prescription_start = day_after_termination(기본, 수원지방법원
-      2017나8903 스니펫) | end_of_use_period`. **시효 완성 여부는 판정하지 않는다** — warnings 에
-      '소 제기일과 대조 필요'로 적고 지연손해금 모듈이 최종 표시한다.
+      시효 미완성. 대응일이 없으면 민법 제160조 제3항 — `al_missing_anniversary` 와 무관). 퇴직 시 기산점
+      `al_retire_prescription_start = day_after_termination(기본, 수원지방법원 2017나8903 스니펫) | end_of_use_period`.
+      **시효 완성 여부는 판정하지 않는다** — warnings 에 '소 제기일과 대조 필요'로 적고 지연손해금 모듈이 최종 표시한다.
 
 ---------------------------------------------------------------- 회계연도 기준
 AL-17 [행정해석·하급심] `period_basis=fiscal_year` 이면 산정기간은 회계연도, 발생일은 다음 회계연도 시작일,
@@ -673,15 +679,20 @@ def load_leave(raw: dict, worker: dict | None = None) -> LeaveInput:
     hire = _date(raw.get("hire_date"), "hire_date") or _date(worker.get("hire_date"), "worker.hire_date")
     if hire is None:
         raise LaborError("연차: 입사일(leave.hire_date 또는 worker.hire_date)이 없습니다")
-    lwd = raw.get("last_working_day", worker.get("last_working_day"))
-    last = _date(lwd, "last_working_day")
+    last = (_date(raw.get("last_working_day"), "last_working_day")
+            or _date(worker.get("last_working_day"), "worker.last_working_day"))
     if last is not None and last < hire:
         raise LaborError(f"연차: 마지막 근로일 {last} 이 입사일 {hire} 보다 앞섭니다")
 
     basis = raw.get("period_basis") or "hire_date"
     if basis not in ("hire_date", "fiscal_year"):
         raise LaborError(f"연차: period_basis 는 hire_date 또는 fiscal_year 여야 합니다: {basis!r}")
-    fys = str(raw.get("fiscal_year_start") or "01-01").replace(".", "-").strip("-").split("-")
+    fy_raw = raw.get("fiscal_year_start") or "01-01"
+    if not isinstance(fy_raw, str):
+        # YAML 은 따옴표 없는 01.10 을 숫자 1.1 로 읽는다 — 10월 1일과 1월 1일을 가를 수 없으니 받지 않는다.
+        raise LaborError(f"연차: fiscal_year_start 가 숫자 {fy_raw!r} 로 읽혔습니다 — YAML 에서 따옴표 없는 01.10 은 "
+                         "숫자 1.1 이 됩니다. \"10-01\" 처럼 따옴표로 감싸 적으십시오")
+    fys = fy_raw.replace(".", "-").strip("-").split("-")
     try:
         fy_start = (int(fys[0]), int(fys[1]))
         date(2001, *fy_start)
@@ -733,7 +744,9 @@ def load_leave(raw: dict, worker: dict | None = None) -> LeaveInput:
     for s, e in worker.get("small_business_periods") or []:
         sbp.append((_date(s, "worker.small_business_periods"), _date(e, "worker.small_business_periods")))
 
-    pay_day = raw.get("pay_day", worker.get("pay_day"))
+    pay_day = raw.get("pay_day")
+    if pay_day in (None, ""):
+        pay_day = worker.get("pay_day")
     if pay_day not in (None, ""):
         try:
             pay_day = int(pay_day)
@@ -939,14 +952,19 @@ def _fy_spans(inp: LeaveInput):
 
 
 def _is_small(p: LeavePeriodInput | None, inp: LeaveInput, deps: dict, d: date) -> bool:
+    """산정기간 입력 small_business 가 있으면 그 값. 없으면 leave.small_business·worker 기간·deps 중 하나라도 참이면 소규모.
+
+    조립 모듈은 worker.small_business_periods 로 만든 deps 를 늘 넘기므로(기간이 없으면 항상 거짓),
+    deps 가 절 플래그를 덮으면 leave.small_business: true 가 계산에서 사라진다(dismissal 과 같은 방식으로 합친다).
+    """
     if p is not None and p.small_business is not None:
         return p.small_business
+    if inp.small_business:
+        return True
+    if inp.small_business_periods and is_within(d, inp.small_business_periods):
+        return True
     fn = deps.get("small_business")
-    if fn is not None:
-        return bool(fn(d))
-    if inp.small_business_periods:
-        return is_within(d, inp.small_business_periods)
-    return inp.small_business
+    return bool(fn is not None and fn(d))
 
 
 def _exclusion_reason(p, inp, deps, d, wh) -> str | None:
@@ -1201,8 +1219,7 @@ def _hire_basis_grants(inp: LeaveInput, entries: list, ctx: _Ctx, deps: dict, *,
         # ---- 발생일 휴가(제1항·제4항·제2항 b)
         g = _Grant(no, ps, pe, "main", A, ctx.reached(A), daily_hours=dh)
         if not g.accrued:
-            g.source = "발생일 전 근로관계 종료 — 미발생"
-            g.notes.append(f"발생일 {_fmt(A)} 에 근로관계 없음(2016다48297, 2021다227100)")
+            _mark_not_reached(g, A, ctx, cite=True)
             grants.append(g)
             continue
         if A != A0:
@@ -1258,6 +1275,17 @@ def _hire_basis_grants(inp: LeaveInput, entries: list, ctx: _Ctx, deps: dict, *,
     return grants
 
 
+def _mark_not_reached(g: _Grant, A: date, ctx: _Ctx, *, cite: bool) -> None:
+    """발생일에 이르지 못한 행의 발생 사유. 퇴직(T)이면 근로관계 종료, 재직 중이면 기준일(calc_until) 뒤."""
+    if ctx.T is not None:
+        g.source = "발생일 전 근로관계 종료 — 미발생"
+        if cite:
+            g.notes.append(f"발생일 {_fmt(A)} 에 근로관계 없음(2016다48297, 2021다227100)")
+        return
+    g.source = "기준일(calc_until) 뒤 발생 예정 — 계산 대상 아님"
+    g.notes.append(f"발생일 {_fmt(A)} 이 기준일 {_fmt(ctx.limit)} 뒤(재직 중)")
+
+
 def _check_deemed_dates(p: LeavePeriodInput, ps: date, pe: date, label: str, ctx: _Ctx) -> None:
     if p.deemed.get("parental_leave") and pe < DATE_ART60_3_REPEAL:
         ctx.warn(f"{label}: 법정 육아휴직 출근 간주는 2018. 5. 29. 이후 최초 신청분부터입니다 — 그 전 신청분은 excluded.old_parental_leave 로")
@@ -1289,7 +1317,7 @@ def _fiscal_grants(inp: LeaveInput, ctx: _Ctx, deps: dict) -> list[_Grant]:
         wh = p.weekly_hours if p is not None and p.weekly_hours is not None else inp.weekly_hours
         g.daily_hours = dh
         if not g.accrued:
-            g.source = "발생일 전 근로관계 종료 — 미발생"
+            _mark_not_reached(g, A, ctx, cite=False)
             grants.append(g)
             continue
         reason = _exclusion_reason(p, inp, deps, A, wh)
@@ -1421,9 +1449,18 @@ def _finish(g: _Grant, inp: LeaveInput, ctx: _Ctx, deps: dict) -> LeaveRow:
     if not g.accrued or not total_units:
         return LeaveRow(**base, **empty, note="; ".join(notes))
 
+    # 약정 휴가일수(agreed_days)가 있는 발생일 행은 약정 산식의 미사용일수를 법정 미사용과 따로 센다(M4).
+    # 법정 일수를 다 써도 약정 초과분은 남으므로, 사용일수는 법정 일수로 자르기 전 값을 쓴다.
+    agreed_days = (g.agreed_days if g.agreed_days is not None and g.kind == "main" and not hours_mode
+                   and (inp.agreed_formula is not None or inp.agreed_ordinary_wage) else None)
     used = g.used_hours if hours_mode else g.used_days
+    used_input = used
     if used > total_units:
-        ctx.warn(f"{label}: 사용 {used}{base['unit']}이 발생 {total_units}{base['unit']}보다 많습니다 — 미사용 0으로 처리")
+        if agreed_days is not None and used <= agreed_days:
+            notes.append(f"사용 {used}일이 법정 발생 {total_units}일보다 많아 법정 미사용 0 — 약정 {agreed_days}일 기준 미사용은 따로 계산")
+        else:
+            agreed_txt = f"(약정 {agreed_days}일)" if agreed_days is not None else ""
+            ctx.warn(f"{label}: 사용 {used}{base['unit']}이 발생 {total_units}{base['unit']}{agreed_txt}보다 많습니다 — 미사용 0으로 처리")
         used = total_units
     unused = total_units - used
 
@@ -1453,6 +1490,11 @@ def _finish(g: _Grant, inp: LeaveInput, ctx: _Ctx, deps: dict) -> LeaveRow:
             else:
                 notes.append("사용촉진 요건 불충족 — 보상의무 존속(2019다279283)")
     unused -= extinguished
+    agreed_left = ZERO
+    if agreed_days is not None:
+        agreed_left = max(ZERO, agreed_days - used_input - extinguished)
+        notes.append(f"약정 {agreed_days}일 기준 미사용 {agreed_left}일(법정 미사용 {unused}일)")
+    payable = unused > 0 or agreed_left > 0
 
     # ---- 청구권 발생일·지급기일·시효 기산점
     if terminated:
@@ -1470,7 +1512,7 @@ def _finish(g: _Grant, inp: LeaveInput, ctx: _Ctx, deps: dict) -> LeaveRow:
         claim_arises = g.use_end + timedelta(days=1)
         ref = g.use_end
         settlement = False
-        if o["al_in_service_due"] == "first_regular_payday" and (inp.pay_day is not None or unused > 0):
+        if o["al_in_service_due"] == "first_regular_payday" and (inp.pay_day is not None or payable):
             if inp.pay_day is None:
                 raise LaborError("연차: 재직 중 청구권 발생분의 첫 정기지급일을 정하려면 worker.pay_day(또는 leave.pay_day)가 필요합니다")
             due = _first_payday_on_or_after(claim_arises, inp.pay_day)
@@ -1491,37 +1533,67 @@ def _finish(g: _Grant, inp: LeaveInput, ctx: _Ctx, deps: dict) -> LeaveRow:
                 due, settlement = min(due, limit), True
                 due_note += f" → 지급기일 전 퇴직, 기한 {_fmt(due)}"
         presc_start = claim_arises
-    prescription = period_span(presc_start, 36, o["al_missing_anniversary"])[0]
+    # AL-15 시효 완성일은 민법 제160조(기산일 + 3년 − 1일, 대응일 없으면 그 월 말일). 발생일 옵션
+    # al_missing_anniversary(AL-03)는 시효 계산에 쓰지 않는다.
+    prescription = period_span(presc_start, 36)[0]
     pending = (not terminated and T is None and ctx.limit is not None and claim_arises > ctx.limit)
 
     statutory = ZERO
     agreed_amt = None
     daily = None
-    if unused > 0:
+    if payable:
         fn = deps.get("daily_ordinary_of")
         if fn is None:
             raise LaborError("연차: 수당 계산에 1일 통상임금(deps daily_ordinary_of)이 필요합니다")
         daily = dec(fn(ref))
-        if hours_mode:
-            statutory = _money(daily, unused, g.daily_hours, o)
-        else:
-            statutory = _money(daily, unused, ONE, o)
+        hourly = _hourly_rate(g, daily, ref, deps, ctx) if hours_mode else None
+        if unused > 0:
+            if hourly is not None:
+                statutory = _money(hourly, unused, ONE, o)
+            elif hours_mode:
+                statutory = _money(daily, unused, g.daily_hours, o)
+            else:
+                statutory = _money(daily, unused, ONE, o)
         if inp.agreed_formula is not None or inp.agreed_ordinary_wage:
-            agreed_amt = _agreed_amount(g, inp, daily, unused, used, extinguished, hours_mode, ref, o, ctx, label)
+            agreed_amt = _agreed_amount(g, inp, daily, unused, used_input, extinguished, hours_mode, ref, o, ctx, label,
+                                        hourly)
 
     notes.append(due_note)
     if pending:
         notes.append(f"청구권 발생일 {_fmt(claim_arises)} 이 기준일 {_fmt(ctx.limit)} 뒤 — 청구 합계에서 제외")
     return LeaveRow(**base, used=used, extinguished=extinguished, unused=unused, use_end=g.use_end,
-                    wage_ref_date=ref if unused > 0 else None, daily_wage=daily, statutory_amount=statutory,
+                    wage_ref_date=ref if payable else None, daily_wage=daily, statutory_amount=statutory,
                     agreed_amount=agreed_amt, amount=statutory, paid_amount=g.paid, claim_amount=ZERO,
                     claim_arises=claim_arises, pay_due_date=due, settlement=settlement,
                     prescription_date=prescription, promotion_lawful=promotion_lawful, claim_pending=pending,
                     note="; ".join(notes))
 
 
+def _hourly_rate(g: _Grant, daily: Decimal, ref: date, deps: dict, ctx: _Ctx) -> Decimal | None:
+    """시간 단위 행의 통상시급(AL-18 '임금은 시간급 기준'). deps `hourly_of(d)` 가 있으면 그 값을 쓴다.
+
+    없으면 None — 호출자가 1일 통상임금 ÷ leave.daily_hours 로 환산하고, 두 1일 소정근로시간이 같은지
+    이 모듈이 확인할 수 없으므로 경고한다. 있으면 1일 통상임금 ÷ 통상시급과 leave.daily_hours 가 다를 때 경고한다
+    (사용시간 used_days × daily_hours 환산은 leave.daily_hours 로 하므로).
+    """
+    fn = deps.get("hourly_of")
+    dh = _settle(g.daily_hours).normalize()
+    if fn is None:
+        ctx.warn(f"시간 단위(단시간) 연차수당의 시급을 1일 통상임금 ÷ leave.daily_hours {dh}시간으로 환산했습니다 — "
+                 "통상임금 절의 1일 소정근로시간과 다르면 금액이 틀리니 두 값이 같은지 확인하십시오(AL-18)")
+        return None
+    hourly = dec(fn(ref))
+    if hourly > 0 and abs(daily / hourly - g.daily_hours) > Decimal("0.01"):
+        ctx.warn(f"leave.daily_hours {dh}시간이 통상임금 절의 1일 소정근로시간({_settle(daily / hourly).normalize()}시간 = "
+                 "1일 통상임금 ÷ 통상시급)과 다릅니다 — 시간 단위 연차수당은 통상시급으로 계산했으나, 사용시간"
+                 "(used_days × daily_hours)·지정일 근로시간 환산은 leave.daily_hours 로 했으니 확인하십시오(AL-18)")
+    return hourly
+
+
 def _agreed_amount(g: _Grant, inp: LeaveInput, daily: Decimal, unused: Decimal, used: Decimal,
-                   extinguished: Decimal, hours_mode: bool, ref: date, o: dict, ctx: _Ctx, label: str) -> Decimal:
+                   extinguished: Decimal, hours_mode: bool, ref: date, o: dict, ctx: _Ctx, label: str,
+                   hourly: Decimal | None = None) -> Decimal:
+    """약정 산식 금액. used 는 법정 일수로 자르기 전 사용일수(agreed_days 기준 미사용 = agreed_days − used − 촉진 소멸)."""
     af = inp.agreed_formula or AgreedFormula()
     qty, qty_den = unused, (g.daily_hours if hours_mode else ONE)
     if g.agreed_days is not None and g.kind == "main":
@@ -1531,6 +1603,8 @@ def _agreed_amount(g: _Grant, inp: LeaveInput, daily: Decimal, unused: Decimal, 
             qty = max(ZERO, g.agreed_days - used - extinguished)
     mult = af.multiplier
     if af.wage_basis == "statutory":
+        if hourly is not None:
+            return _money(hourly * mult, qty, ONE, o)
         return _money(daily * mult, qty, qty_den, o)
     w = _agreed_wage_at(inp, ref)
     if w.daily is not None:

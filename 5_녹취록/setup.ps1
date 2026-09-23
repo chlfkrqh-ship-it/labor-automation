@@ -9,7 +9,8 @@
 # 화자 분리 모델 35MB 는 이 폴더의 models\ 에 들어 있어 따로 받지 않아도 된다.
 # 없으면 download_diarization_models.py 가 GitHub 릴리스에서 받아 온다.
 #
-# 사용법:  cd "$env:OneDrive\노동사건자동화\5_녹취록" ;  .\setup.ps1
+# 사용법:  '녹취록 환경설치.bat' 을 더블클릭한다(실행 정책을 우회해 이 파일을 부른다).
+#          명령줄에서는  powershell -NoProfile -ExecutionPolicy Bypass -File 5_녹취록/setup.ps1
 
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
@@ -136,8 +137,8 @@ if (-not $line) {
 
 Remove-Item $checkPy -Force -ErrorAction SilentlyContinue
 
-Write-Host "`n실행은 가상환경을 활성화하지 않고 래퍼를 부릅니다:" -ForegroundColor Green
-Write-Host "  .\녹취.ps1 {사건폴더명} -Speakers 2"
+Write-Host "`n실행은 가상환경을 활성화하지 않고 래퍼를 부릅니다(저장소 루트에서):" -ForegroundColor Green
+Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -File 5_녹취록/녹취.ps1 {사건폴더명} -Speakers 2"
 Write-Host "`n화자 수를 알면 -Speakers 로 지정하십시오. 지정하지 않으면 과분할합니다." -ForegroundColor Green
 
 if ($verifyOk) {

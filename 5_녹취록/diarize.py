@@ -6,6 +6,7 @@ HuggingFace 토큰이 필요 없고 전부 로컬에서 실행됩니다.
 모델이 없으면 download_diarization_models.py 를 먼저 실행하세요.
 """
 import os
+import sys
 
 import numpy as np
 
@@ -42,8 +43,10 @@ def _build_diarizer(num_speakers, cluster_threshold):
     try:
         import sherpa_onnx
     except ImportError:
+        # 녹취.ps1 은 %LOCALAPPDATA% 의 가상환경 파이썬으로 돈다. PATH 의 pip 로 깔면 그 환경에 들어가지 않는다.
         raise DiarizationUnavailable(
-            "sherpa-onnx 가 설치되어 있지 않습니다. 'pip install sherpa-onnx' 를 실행하세요."
+            "sherpa-onnx 가 설치되어 있지 않습니다. 5_녹취록 폴더의 '녹취록 환경설치.bat' 을 다시 "
+            f"실행하거나 \"{sys.executable}\" -m pip install sherpa-onnx 를 실행하세요."
         )
     if not os.path.exists(SEG_MODEL) or not os.path.exists(EMB_MODEL):
         # 모델이 없으면 최초 1회 자동으로 내려받습니다(HuggingFace 토큰 불필요).
@@ -53,9 +56,9 @@ def _build_diarizer(num_speakers, cluster_threshold):
             dl.ensure_models()
         except Exception as exc:
             raise DiarizationUnavailable(
-                "화자분리 모델 다운로드에 실패했습니다. "
-                "'python scripts/download_diarization_models.py' 를 수동 실행해 보세요. "
-                f"(원인: {exc})"
+                "화자분리 모델 다운로드에 실패했습니다. 인터넷 연결을 확인한 뒤 "
+                f"\"{sys.executable}\" \"{os.path.join(HERE, 'download_diarization_models.py')}\" "
+                f"를 실행해 보세요. (원인: {exc})"
             )
 
     config = sherpa_onnx.OfflineSpeakerDiarizationConfig(

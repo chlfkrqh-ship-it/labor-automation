@@ -32,7 +32,7 @@ HOFFMAN = "H"
 LEIBNIZ = "L"
 
 MONTHLY_CAP = Decimal("240")   # 설명서 17쪽: 월단위 단리연금현가율 누적 240 초과 방지
-COST_CAP = Decimal("20")       # 설명서 25~26쪽: 치료비·보조구 수치합계 20 초과 방지
+# 치료비·보조구 수치합계 상한은 설명서 25~26쪽의 '20' 이 아니라 240 / 수명(월)이다(cost.py).
 LEGAL_RATE = 0.05              # 법정이율. 기초사항에서 사용자가 입력한다(_statutoryRateRatio).
 
 

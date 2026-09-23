@@ -9,6 +9,9 @@
 
 표에 나오는 수치는 판단이 아니라 관측이다. '다음 할 일'은 폴더 상태에서 짐작한
 것이므로 그대로 따르지 말고 사건을 열어 보고 정한다.
+
+초안·병합본·상대 자료와 문체·인용 열은 최신 라운드 것만 본다. 앞 라운드에 초안이
+있다고 해서 새 라운드의 상대 자료에 답한 것은 아니다.
 """
 from __future__ import annotations
 
@@ -26,7 +29,13 @@ ROOT = Path(__file__).resolve().parents[2]
 CASE_ROOTS = ['1_검토의견/사건', '3_서면보강/사건', '4_서면작성/사건',
               '5_녹취록/사건', '6_손해배상계산/사건']
 SKIP_CASE = {'_템플릿', '.claude'}
-MARKERS = re.compile(r'\[내용 확인 필요\]|\[확인 필요\]|【확인 필요】|\[반박 보완 필요\]|\[내용 보완 필요\]')
+# 지침이 정해 둔 미해결 표시 문구. 하단 목록에 모아 두어도 센다. style_check.MEMO 는
+# 대괄호 전반을 잡아 하단 목록 제목([확인 필요 사항] 등)까지 세므로 여기서 쓰지 않는다.
+MARKERS = re.compile(r'\[내용 확인 필요\]|\[확인 필요\]|【확인 필요】|【판례 확인 필요】'
+                     r'|\[반박 보완 필요\]|\[내용 보완 필요\]|\[서증 보완 필요\]'
+                     r'|\[금액: 계산 확인 전\]')
+# 사람이 넣은 자료가 아닌 파일. 상대 자료가 왔는지 볼 때 세지 않는다.
+NOT_MATERIAL = {'desktop.ini', 'thumbs.db', '.ds_store'}
 OUT = ROOT / '공통/캐시/현황.html'
 
 
@@ -51,6 +60,39 @@ def newest(folder: Path):
             except OSError:
                 pass
     return latest
+
+
+def mtime(path: Path):
+    try:
+        return path.stat().st_mtime
+    except OSError:                                          # 훑는 사이 옮겨졌거나 지워짐
+        return 0
+
+
+def materials(folder: Path):
+    """폴더 아래 사람이 넣은 파일. 없거나 비었으면 빈 목록."""
+    if not folder.is_dir():
+        return []
+    return [p for p in folder.rglob('*')
+            if p.is_file() and p.name.lower() not in NOT_MATERIAL
+            and not p.name.startswith('~$')]
+
+
+def merged_docx(out: Path):
+    """출력/ 에서 병합해 만든 서면 docx.
+
+    이름은 4_서면작성/CLAUDE.md 3-1절을 따른다. 종전 `최종서면.docx` 가
+    `({의뢰인명}) {서면명}_초안.docx` 로 바뀌었고 담당자 수정을 거치면
+    `_1차 수정안` 처럼 이어지므로 이름에 기대지 않는다. 출력/ 의 docx 를 모두
+    인정하되 프레임(서면_프레임*), 병합 전 보관본(*.bak_merge_*), Word 잠금
+    파일(~$*)은 뺀다.
+    """
+    if not out.is_dir():
+        return []
+    return sorted(p for p in out.iterdir()
+                  if p.is_file() and p.suffix.lower() == '.docx'
+                  and not p.name.startswith(('서면_프레임', '~$'))
+                  and '.bak_merge_' not in p.name)
 
 
 def open_items(case: Path, rounds):
@@ -79,19 +121,22 @@ def survey():
             rounds = sorted((p.name for p in case.iterdir()
                              if p.is_dir() and p.name.startswith('라운드')),
                             key=lambda n: int(re.sub(r'\D', '', n) or 0))
+            # 초안은 최신 라운드에서만 찾는다. 앞 라운드 초안을 가져다 쓰면 새 라운드에
+            # 상대 자료가 왔는데 초안이 없는 사건이 'DOCX 미생성' 으로 가려진다.
             draft = None
-            for r in reversed(rounds):
-                candidate = case / r / '출력' / '서면초안.md'
+            if rounds:
+                candidate = case / rounds[-1] / '출력' / '서면초안.md'
                 if candidate.is_file():
                     draft = candidate
-                    break
+            stamp = newest(case)
             row = {
                 'folder': base.split('/')[0],
                 'case': case.name,
                 'rounds': len(rounds),
                 'latest_round': rounds[-1] if rounds else '',
                 'draft': draft.relative_to(ROOT).as_posix() if draft else '',
-                'updated': time.strftime('%Y-%m-%d', time.localtime(newest(case))),
+                # 빈 폴더는 파일 시각이 없다. 0 을 날짜로 바꾸면 1970-01-01 이 된다.
+                'updated': time.strftime('%Y-%m-%d', time.localtime(stamp)) if stamp else '—',
                 'open_items': open_items(case, rounds),
                 'style': None, 'citation': None, 'note': '',
             }
@@ -111,22 +156,29 @@ def survey():
                                        % type(exc).__name__).strip(' /')
             row['next'] = suggest(case, rounds, draft, row)
             rows.append(row)
-    return sorted(rows, key=lambda r: r['updated'], reverse=True)
+    # 최근 활동 순. 날짜가 없는 빈 폴더는 맨 뒤로 보낸다.
+    return sorted(rows, key=lambda r: (r['updated'] != '—', r['updated']), reverse=True)
 
 
 def suggest(case: Path, rounds, draft, row):
-    """폴더 상태에서 짐작한 다음 할 일. 근거로 삼지 않는다."""
+    """폴더 상태에서 짐작한 다음 할 일. 근거로 삼지 않는다.
+
+    draft 는 최신 라운드의 서면초안.md 이다(없으면 None).
+    """
     if not rounds:
         # 검토의견·녹취·손배는 라운드 공방 구조가 아니다.
         return '—' if row['folder'] != '4_서면작성' else '라운드 폴더 없음'
     last = case / rounds[-1]
-    theirs = last / '상대증거'
-    if theirs.is_dir() and any(theirs.iterdir()) and not draft:
-        return '상대 자료가 있는데 초안이 없음'
+    theirs = materials(last / '상대증거')
+    if theirs and not draft:
+        return '상대 자료가 있는데 초안이 없음(%d건)' % len(theirs)
     if not draft:
         return '초안 없음'
-    final = last / '출력' / '최종서면.docx'
-    if not final.is_file():
+    # 라운드를 늘릴 때 직전 라운드 폴더를 복사하므로(4_서면작성/CLAUDE.md 1절) 옛 초안이
+    # 딸려 올 수 있다. 상대 자료가 초안보다 나중에 들어왔으면 그 초안은 답이 아니다.
+    if theirs and max(mtime(p) for p in theirs) > mtime(draft):
+        return '초안 이후 상대 자료 도착'
+    if not merged_docx(last / '출력'):
         return 'DOCX 미생성'
     if row['citation']:
         return '목록에 없는 호증 인용 %d건' % row['citation']

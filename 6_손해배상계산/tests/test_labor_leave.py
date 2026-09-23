@@ -28,10 +28,10 @@ from engine.labor.leave import (  # noqa: E402
 D = Decimal
 
 
-def run(raw, worker=None, daily=None, **opt):
+def run(raw, worker=None, daily=None, deps=None, **opt):
     inp = load_leave(raw, worker)
     opts, _ = resolve_options(opt, OPTIONS)
-    deps = {}
+    deps = dict(deps or {})
     if daily is not None:
         deps["daily_ordinary_of"] = daily if callable(daily) else (lambda d, v=D(daily): v)
     return calculate_leave(inp, opts, **deps)
@@ -385,6 +385,24 @@ def test_2월29일_입사_대응일_옵션():
     assert period_span(date(2019, 1, 31), 2) == (date(2019, 3, 30), date(2019, 3, 31))
 
 
+def test_시효_완성일은_대응일_옵션과_무관하게_민법_제160조():
+    # 마지막 근로일 2024. 2. 28. → 시효 기산일 2024. 2. 29. → 3년 뒤 2월에 29일이 없어 그 월 말일 2027. 2. 28. 만료
+    for mode in ("civil_code", "clamp"):
+        res = run({"hire_date": "2021-06-01", "last_working_day": "2024-02-28", "assume_full_attendance": True,
+                   "periods": []}, worker={"pay_day": 25}, daily=100000, al_missing_anniversary=mode)
+        rows = [r for r in res.rows if r.claim_arises == date(2024, 2, 29)]
+        assert rows and {r.prescription_date for r in rows} == {date(2027, 2, 28)}, mode
+
+
+def test_재직_중_기준일_뒤_산정기간은_근로관계_종료로_적지_않음():
+    res = run({"hire_date": "2023-03-02", "calc_until": "2026-09-15", "assume_full_attendance": True, "periods": []},
+              worker={"pay_day": 25}, daily=100000)
+    row = [r for r in mains(res) if r.accrual_date == date(2027, 3, 2)][0]
+    assert row.accrued_days == 0
+    assert "근로관계 종료" not in row.source and "기준일" in row.source
+    assert "2016다48297" not in row.note and "재직 중" in row.note
+
+
 def test_기준일_뒤_청구권은_합계_제외():
     res = run({"hire_date": "2020-02-29", "calc_until": "2021-03-01", "assume_full_attendance": True,
                "periods": [{"used_monthly_days": 11}]}, worker={"pay_day": 25}, daily=100000)
@@ -413,6 +431,21 @@ def test_5인_미만_사업장_미적용():
     assert res.total == 0
     assert all(r.accrued_days == 0 for r in res.rows)
     assert any("4명 이하" in r.source for r in res.rows)
+
+
+def test_5인_미만_플래그는_조립_모듈_deps_가_있어도_산다():
+    # 조립 모듈(calculate.py)은 worker.small_business_periods 로 만든 deps(기간이 없으면 늘 거짓)를 넘긴다.
+    # 그 deps 가 leave.small_business: true 를 덮으면 제60조 미적용 사업장에 수당이 생긴다.
+    raw = {"hire_date": "2019-01-01", "last_working_day": "2021-06-30", "assume_full_attendance": True,
+           "small_business": True, "periods": []}
+    res = run(raw, worker={"pay_day": 25}, daily=100000, deps={"small_business": lambda d: False})
+    assert res.total == 0
+    assert all(r.accrued_days == 0 for r in res.rows)
+    assert any("4명 이하" in r.source for r in res.rows)
+    # 산정기간에 적은 small_business 는 그대로 우선한다
+    per = run(dict(raw, periods=[{}, {"small_business": False}]), worker={"pay_day": 25}, daily=100000,
+              deps={"small_business": lambda d: False})
+    assert {r.period_no: r.accrued_days for r in mains(per)} == {1: 0, 2: 15, 3: 0}   # 3기간은 발생일 전 퇴직
 
 
 def test_5인_미만_기간만_worker_에서():
@@ -578,6 +611,25 @@ def test_단시간근로자_시간_비례와_시간급_수당():
     assert res.total == D(40000) / 4 * 60
 
 
+def test_단시간_수당은_통상시급_deps_로_계산하고_1일_시간_불일치를_경고():
+    # 통상임금 절은 1일 4시간(시급 10,000원 → 1일 40,000원)인데 leave.daily_hours 를 비워 기본 8시간이 된 경우
+    raw = {"hire_date": "2019-01-01", "weekly_hours": 20, "assume_full_attendance": True,
+           "periods": [{"start": "2020-01-01"}]}
+    hourly = {"hourly_of": lambda d: D(10000)}
+    fallback = run(raw, worker={"pay_day": 25}, daily=40000)
+    assert fallback.total == D(40000) / 8 * 60                 # deps 없으면 1일 통상임금 ÷ leave.daily_hours — 경고로 알림
+    assert any("AL-18" in w and "leave.daily_hours 8" in w for w in fallback.warnings)
+    res = run(raw, worker={"pay_day": 25}, daily=40000, deps=hourly)
+    assert mains(res)[0].accrued_hours == 60 and res.total == D(10000) * 60
+    assert any("AL-18" in w and "(4시간" in w for w in res.warnings)
+    same = run(dict(raw, daily_hours=4), worker={"pay_day": 25}, daily=40000, deps=hourly)
+    assert same.total == D(10000) * 60 and not any("AL-18" in w for w in same.warnings)
+    # 약정 산식(법정 통상임금 × 1.5)도 같은 통상시급을 쓴다
+    agreed = run(dict(raw, agreed_formula={"multiplier": "1.5", "wage_basis": "statutory"}), worker={"pay_day": 25},
+                 daily=40000, deps=hourly)
+    assert agreed.basis == "agreed" and agreed.total == D(10000) * D("1.5") * 60
+
+
 def test_단시간_1시간_미만_올림():
     raw = {"hire_date": "2019-01-01", "weekly_hours": 21, "assume_full_attendance": True,
            "periods": [{"start": "2021-01-01"}]}
@@ -617,6 +669,42 @@ def test_약정_통상임금이_낮으면_법정():
            "agreed_ordinary_wage": [{"from": "2010-01-01", "monthly": 1000000}]}
     res = run(raw, worker={"pay_day": 25}, daily=100000)
     assert res.basis == "statutory" and res.total == D(100000) * 10
+
+
+def _agreed_days_raw(used, **period):
+    # 법정 15일(2년차), 단체협약 휴가 20일, 약정 산식 = 법정 1일 통상임금 × 1. 퇴직 2022. 6. 30.(사용기간 중)
+    return {"hire_date": "2020-01-01", "last_working_day": "2022-06-30",
+            "agreed_formula": {"multiplier": 1, "wage_basis": "statutory"},
+            "periods": [dict({"start": "2021-01-01", "scheduled_days": 248, "attended_days": 248, "agreed_days": 20,
+                              "used_days": used}, **period)]}
+
+
+@pytest.mark.parametrize("used,agreed_left", [(14, 6), (15, 5), (17, 3), (21, 0)])
+def test_약정_휴가일수는_법정_일수를_다_써도_남는다(used, agreed_left):
+    # 사용 14일이면 약정 6일분인데 사용 15일에서 0이 되던 불연속 — 약정 미사용 = 20 − 사용일수
+    res = run(_agreed_days_raw(used), worker={"pay_day": 25}, daily=100000)
+    row = mains(res)[0]
+    assert row.unused == max(0, 15 - used)
+    assert (row.agreed_amount or 0) == D(100000) * agreed_left
+    assert res.total == D(100000) * agreed_left
+    assert res.basis == ("agreed" if agreed_left else "statutory")
+    over = [w for w in res.warnings if "많습니다" in w]
+    assert bool(over) == (used > 20)          # 약정 일수 이내 사용은 경고 대신 비고
+    if over:
+        assert "약정 20일" in over[0]
+
+
+def test_사용촉진으로_법정_미사용이_소멸해도_약정_초과분은_남는다():
+    # 재직 중, 법정 미사용 5일은 적법한 촉진으로 소멸 — 약정 미사용 = 20 − 사용 10 − 소멸 5 = 5일
+    raw = _agreed_days_raw(10, promotion={"lawful": True})
+    del raw["last_working_day"]
+    res = run(raw, worker={"pay_day": 25}, daily=100000)
+    row = mains(res)[0]
+    assert row.extinguished == 5 and row.unused == 0
+    assert row.agreed_amount == D(100000) * 5 and res.basis == "agreed" and res.total == D(100000) * 5
+    assert row.claim_arises == date(2023, 1, 1) and row.pay_due_date == date(2023, 1, 25)
+    with pytest.raises(LaborError, match="pay_day"):          # 약정분만 남아도 재직 중 지급기일에는 정기지급일이 필요
+        run(raw, daily=100000)
 
 
 # ================================================================ AL-14·22 지급기일·끝수
@@ -689,6 +777,29 @@ def test_worker_입사일_사용():
     assert inp.hire_date == date(2020, 1, 1) and inp.last_working_day == date(2021, 1, 31) and inp.pay_day == 25
 
 
+def test_빈칸_마지막_근로일과_지급일은_worker_값():
+    worker = {"hire_date": "2018-01-01", "last_working_day": "2019-12-31", "pay_day": 25}
+    for blank in (None, ""):
+        inp = load_leave({"last_working_day": blank, "pay_day": blank, "periods": []}, worker)
+        assert inp.last_working_day == date(2019, 12, 31) and inp.pay_day == 25
+
+
+def test_템플릿대로_last_working_day_를_비우면_키를_뺀_것과_같다():
+    # docstring 템플릿을 복사해 `last_working_day:` 를 비운 YAML. 재직자로 계산하면 2020. 1. 1. 발생분이 생긴다(2016다48297 위반).
+    import yaml
+
+    worker = {"hire_date": "2018-01-01", "last_working_day": "2019-12-31", "pay_day": 25}
+    blank = yaml.safe_load("last_working_day:\npay_day:\nassume_full_attendance: true\nperiods: [{}, {}]\n")
+    assert blank["last_working_day"] is None and blank["pay_day"] is None
+    res = run(blank, worker=worker, daily=100000)
+    omitted = run({"assume_full_attendance": True, "periods": [{}, {}]}, worker=worker, daily=100000)
+    second = [r for r in mains(res) if r.period_no == 2][0]
+    assert second.accrual_date == date(2020, 1, 1) and second.accrued_days == 0 and "근로관계 종료" in second.source
+    assert res.total == omitted.total == D(100000) * (11 + 15)
+    assert ([(c.amount, c.due_date, c.settlement) for c in res.claims]
+            == [(c.amount, c.due_date, c.settlement) for c in omitted.claims])
+
+
 def test_출근자료_누락():
     with pytest.raises(LaborError, match="scheduled_days"):
         run({"hire_date": "2019-01-01", "periods": [{"start": "2020-01-01"}]}, daily=1)
@@ -754,3 +865,10 @@ def test_잘못된_옵션():
 def test_약정_월액에_제수_누락():
     with pytest.raises(LaborError, match="monthly_divisor"):
         load_leave({"hire_date": "2019-01-01", "agreed_ordinary_wage": [{"from": "2019-01-01", "monthly": 3000000}]})
+
+
+def test_따옴표_없는_회계연도_시작일은_오류():
+    raw = {"hire_date": "2019-01-01", "period_basis": "fiscal_year", "fiscal_year_start": 1.1,   # YAML 01.10
+           "periods": [{"start": "2020-01-01"}]}
+    with pytest.raises(LaborError, match="따옴표"):
+        run(raw, worker={"pay_day": 25}, daily=1)

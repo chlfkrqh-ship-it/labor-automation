@@ -13,6 +13,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -393,10 +394,37 @@ def test_집계_기간_중_시급_바뀌면_나눠_입력():
     assert ok.rows[0].legal_amount == D(10000) * ((8 + 2) * D("1.5") + 2 * D("0.5")) + D(10000) * (8 * D("1.5") + 2 * D(2))
 
 
+def test_집계_가산율_시행일은_영향받는_시간이_있을_때만_나눔():
+    # 2018. 3. 20. 개정은 휴일 8시간 초과분만, 2014. 9. 19. 단시간 가산은 옵션을 켠 단시간근로자의 소정 초과분만 바꾼다
+    for per in ("2018-03", "2014-09"):
+        res = run({"months": [{"period": per, "overtime_hours": 10}]}, hourly=10000)
+        assert res.total == D(10000) * 10 * D("1.5")
+    with pytest.raises(LaborError, match="가산율 체계"):
+        run({"months": [{"period": "2018-03", "holiday_le8_hours": 8, "holiday_gt8_hours": 2}]}, hourly=10000)
+    pt = {"part_time": True, "scheduled_daily_hours": 4, "scheduled_weekly_hours": 20,
+          "months": [{"period": "2014-09", "in_law_hours": 2}]}
+    assert run(pt, hourly=10000).total == D(10000) * 2                     # 옵션 off: 기본분만, 나눌 필요 없음
+    with pytest.raises(LaborError, match="단시간 가산 시행"):
+        run(pt, hourly=10000, ot_part_time_premium="daily")
+
+
 def test_지급월_오프셋():
     res = run({"months": [{"period": "2019-03", "overtime_hours": 1}]}, worker={"pay_day": 10, "pay_month_offset": 1},
               hourly=10000)
     assert res.claims[0].due_date == date(2019, 4, 10)
+
+
+def test_지급일_설정을_빈칸으로_두면_worker_값():
+    # docstring '비우면 worker 값' — YAML 에서 키만 적고 값을 비우면 None 으로 읽힌다
+    raw = yaml.safe_load("pay_day:\npay_month_offset:\npay_period_start_day:\n"
+                         "months:\n  - {period: \"2024-03\", overtime_hours: 10}\n")
+    worker = {"pay_day": 10, "pay_month_offset": 1, "pay_period_start_day": 21}
+    inp = load_overtime(raw, worker)
+    assert (inp.pay_day, inp.pay_month_offset, inp.pay_period_start_day) == (10, 1, 21)
+    [row] = run(raw, worker=worker, hourly=10000).rows
+    assert (row.period_start, row.period_end, row.due_date) == (date(2024, 3, 21), date(2024, 4, 20), date(2024, 5, 10))
+    explicit = load_overtime({"pay_month_offset": 0, "pay_period_start_day": 1}, worker)   # 명시한 값은 그대로
+    assert (explicit.pay_day, explicit.pay_month_offset, explicit.pay_period_start_day) == (10, 0, 1)
 
 
 # ================================================================ OT-16·17
@@ -529,6 +557,73 @@ def test_청구기간_밖_기록은_주_판정에만():
     assert row.overtime_hours == 8                  # 토요일 8시간이 주 40시간 초과분
 
 
+def test_집계_입력도_청구기간으로_거른다():
+    raw = {"claim_from": "2019-03-01", "claim_to": "2019-03-31",
+           "months": [{"period": p, "overtime_hours": 10} for p in ("2019-01", "2019-03", "2019-06")]}
+    res = run(raw, hourly=10000)
+    assert [r.key for r in res.rows] == ["2019-03"]
+    assert res.total == D(10000) * 10 * D("1.5")                 # 일별 기록으로 넣은 것과 같이 3월분만
+    assert any("청구기간" in w and "2019-01, 2019-06" in w for w in res.warnings)
+
+
+def test_청구기간_경계에_걸친_집계_줄은_나눠_적어야():
+    raw = {"claim_from": "2019-03-15", "months": [{"period": "2019-03", "overtime_hours": 10}]}
+    with pytest.raises(LaborError, match="청구기간"):
+        run(raw, hourly=10000)
+    split = {"claim_from": "2019-03-15",
+             "months": [{"period": "2019-03", "to": "2019-03-14", "overtime_hours": 4},
+                        {"period": "2019-03", "from": "2019-03-15", "overtime_hours": 6}]}
+    res = run(split, hourly=10000)
+    assert res.total == D(10000) * 6 * D("1.5")
+    assert any("2019-03(2019. 3. 1.~2019. 3. 14.)" in w for w in res.warnings)
+
+
+def _paid_outside_claim():
+    # 2월·3월 모두 월~금 10시간(1일 초과 2시간 × 5일), 청구는 3월부터. 2월 기지급액은 2월 재산정분과 같다
+    days = [{"date": f"2019-02-{d:02d}", "hours": 10} for d in range(4, 9)]
+    days += [{"date": f"2019-03-{d:02d}", "hours": 10} for d in range(4, 9)]
+    return {"week_start": "monday", "claim_from": "2019-03-01", "days": days,
+            "paid": [{"period": "2019-02", "overtime": 150000}, {"period": "2019-03", "overtime": 50000}]}
+
+
+def test_청구기간_밖_기지급액은_비교_충당에서_뺀다():
+    res = run(_paid_outside_claim(), hourly=10000, ot_overpayment_character="erroneous")
+    assert [r.key for r in res.rows] == ["2019-03"]
+    assert res.total == D(10000) * 10 * D("1.5") - D(50000)     # 3월 부족분 100,000원(2월분으로 상계하지 않음)
+    assert any("밖 기지급액" in w and "2019-02" in w for w in res.warnings)
+    assert run(_paid_outside_claim(), hourly=10000).total == res.total   # 초과지급 행이 없어 OT-18 선택 불필요
+
+
+def test_청구기간_밖_기지급액_기간에는_간주합의_하한도_붙지_않는다():
+    raw = {"claim_from": "2019-03-01", "agreed_hours": [{"from": "2019-01-01", "to": "2019-12-31", "overtime": 20}],
+           "months": [{"period": "2019-03", "overtime_hours": 12}], "paid": [{"period": "2019-01", "overtime": 1000}]}
+    res = run(raw, hourly=10000)
+    assert [r.key for r in res.rows] == ["2019-03"]
+    assert res.total == D(10000) * 20 * D("1.5")
+
+
+def test_청구기간_경계가_임금산정기간_중간이면_기지급액_경고():
+    days = [{"date": f"2019-03-{d:02d}", "hours": 8} for d in range(25, 31)]
+    raw = {"week_start": "monday", "claim_from": "2019-03-30", "days": days, "paid": [{"period": "2019-03", "overtime": 1000}]}
+    res = run(raw, hourly=10000, ot_weekly_allocation="last_days_first")
+    assert any("경계에 걸칩니다" in w and "2019-03" in w for w in res.warnings)
+    quiet = run(dict(raw, paid=[]), hourly=10000, ot_weekly_allocation="last_days_first")
+    assert not any("경계에 걸칩니다" in w for w in quiet.warnings)
+
+
+def test_청구기간_순서_오류():
+    with pytest.raises(LaborError, match="claim_to"):
+        load_overtime({"claim_from": "2019-03-01", "claim_to": "2019-02-28"}, WORKER)
+
+
+def test_청구기간_밖_날짜로는_M6_경고를_내지_않음():
+    raw = {"claim_from": "2025-01-01", "months": [{"period": "2024-12", "to": "2024-12-18", "overtime_hours": 1},
+                                                  {"period": "2025-01", "overtime_hours": 1}]}
+    res = run(raw, hourly=10000)
+    assert not any("M6" in w for w in res.warnings)
+    assert [r.key for r in res.rows] == ["2025-01"]
+
+
 def test_2024_12_19_걸치면_경고():
     res = run({"months": [{"period": "2024-12", "to": "2024-12-18", "overtime_hours": 1},
                           {"period": "2025-01", "overtime_hours": 1}]}, hourly=10000)
@@ -617,3 +712,16 @@ def test_yaml_60진수_시각():
     # PyYAML 은 따옴표 없는 20:00 을 1200 으로 읽는다 → 분으로 해석
     inp = load_overtime({"week_start": 0, "days": [{"date": "2018-02-19", "start": 1200, "end": 480, "scheduled_hours": 0}]}, WORKER)
     assert inp.days[0].start == 20 * 60 and inp.days[0].end == 8 * 60
+
+
+def test_따옴표_없는_점_표기_월은_오류():
+    # PyYAML 은 따옴표 없는 2024.10 을 소수 2024.1 로 읽는다 → 1월과 구별할 수 없으므로 받지 않는다
+    period = yaml.safe_load("period: 2024.10")["period"]
+    assert period == 2024.1
+    with pytest.raises(LaborError, match="따옴표"):
+        load_overtime({"months": [{"period": period, "overtime_hours": 1}]}, WORKER)
+    with pytest.raises(LaborError, match="따옴표"):
+        load_overtime({"paid": [{"period": period, "overtime": 1}]}, WORKER)
+    inp = load_overtime({"months": [{"period": "2024.10", "overtime_hours": 1}],
+                         "paid": [{"period": "2024. 11.", "overtime": 1}]}, WORKER)
+    assert [m.key for m in inp.months] == ["2024-10"] and list(inp.paid) == ["2024-11"]

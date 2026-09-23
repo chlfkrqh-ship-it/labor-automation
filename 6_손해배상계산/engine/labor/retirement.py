@@ -34,8 +34,9 @@ RS-02 [법령·실무관행] 제8조 제1항 "계속근로기간 1년에 대하�
                           2.950(= 2년 + 347일/365일, 소수점 셋째자리 미만 버림)". 2월 29일이 '연수' 구간에 들어갈 때만
                           total_days 보다 작다. 이 판결의 21,286,270원과 total_days 방식 21,291,214원의 차이는 윤년이
                           아니라 지급률 셋째자리 버림(`rs_round_ratio`)과 10원 미만 버림에서 생긴다(검증 판정).
-        monthly_avg       월 기준액(deps `monthly_wage_base`) × (만 근속연수 + 잔여일수 ÷ 365) — 대구지방법원
-                          2024나318050 의 '당사자의 주장 가. 원고' 각주 계산이다. 법원 산식이 아니며 비교용(warning).
+        monthly_avg       월 기준액(`retirement.monthly_wage_base` 또는 deps `monthly_wage_base`) × (만 근속연수 +
+                          잔여일수 ÷ 365) — 대구지방법원 2024나318050 의 '당사자의 주장 가. 원고' 각주 계산이다.
+                          법원 산식이 아니며 비교용(warning).
 RS-03 [법령·실무관행] 계속근로일수 = 입사일부터 마지막 근무일까지 양끝 포함((L − H).days + 1; 부산지방법원 2020나52559
       "2016. 2. 15.부터 2019. 1. 13.까지 총 1,064일"). 중간정산 뒤에는 정산시점부터 새로 계산(제8조 제2항 후문
       "미리 정산하여 지급한 후의 퇴직금 산정을 위한 계속근로기간은 정산시점부터 새로 계산한다"), 판결은 정산기준일
@@ -61,7 +62,9 @@ RS-06 [법령·하급심] 제9조 제1항 "그 지급사유가 발생한 날부�
       마지막 근무일 L 다음 날, 그날부터 14일이 되는 날 L + 14일을 Claim.due_date 로 둔다(지연손해금 L + 15일부터 —
       전주지방법원 군산지원 2023가단56185 "퇴직일로부터 14일이 경과한 다음 날(… 2023. 3. 15. …)", 부산지방법원 서부지원
       2023가단118024 2022. 11. 4.). `rs_due_date=day_after_retirement` 이면 due_date = L(지연손해금 L + 1일부터 —
-      부산지방법원 2020나52559 "원고의 퇴직일 다음 날인 2019. 9. 11.부터"). 이율 구간은 지연손해금 모듈.
+      부산지방법원 2020나52559 "원고의 퇴직일 다음 날인 2019. 9. 11.부터"). 이율 구간은 지연손해금 모듈: 원금 항목에
+      지급사유 발생일(`trigger_date` = L + 1일)을 붙여 넘기므로, day_after_retirement 여도 연 20%는 L + 15일부터이고
+      L + 1일부터 L + 14일까지는 6%/5%다(DI-02). 시효 기산일도 L + 1일(DI-15).
 RS-07 [판례확립(청구 형태)·행정해석(산식)] DC형은 부담금 차액을 계정에 납입하라는 이행청구(대법원 2023. 4. 13. 선고
       2018다283926 "정당한 부담금과 이미 납입된 부담금의 차액을 퇴직연금제도 계정에 납입할 것을 청구하는 이행의 소"),
       소급분 산식은 행정해석(퇴직연금복지과-526·926). 이 모듈은 법정 퇴직금만 계산하고 `dc_plan: true` 면 warning 만.
@@ -78,6 +81,7 @@ RS-07 [판례확립(청구 형태)·행정해석(산식)] DC형은 부담금 차
         - {reason: short_hours, start: 2019-01-14, end: 2019-09-10}
       small_business_periods: []     # 상시 4명 이하 기간 [[시작, 끝], ...]. 비우면 worker.small_business_periods
       dc_plan: false                 # 확정기여형 퇴직연금 가입(참고 경고만)
+      monthly_wage_base: null        # rs_service_ratio_mode=monthly_avg(비교용)일 때만 — 월 기준액(최종 구간)
 """
 
 from __future__ import annotations
@@ -128,7 +132,8 @@ OPTIONS: dict[str, OptionSpec] = {s.key: s for s in [
     OptionSpec("rs_service_ratio_mode", "total_days", "계속근로기간 환산", "RS-02", {
         "total_days": "30 × 계속근로일수 ÷ 365(퇴직연금복지과-526, 하급심 다수)",
         "years_plus_days": "30 × (만 근속연수 + 잔여일수 ÷ 365)(수원지방법원 2018가소24967)",
-        "monthly_avg": "월 기준액 × (만 근속연수 + 잔여일수 ÷ 365) — 대구지방법원 2024나318050 원고 주장 계산(비교용)",
+        "monthly_avg": "월 기준액(retirement.monthly_wage_base) × (만 근속연수 + 잔여일수 ÷ 365) — 대구지방법원 2024나318050 "
+                       "원고 주장 계산(비교용)",
     }),
     OptionSpec("rs_round_ratio", "none", "지급률(근속연수 환산값) 끝수", "RS-04", {
         "none": "끝수처리 안 함",
@@ -208,6 +213,7 @@ class RetirementInput:
     excluded_periods: list = field(default_factory=list)
     small_business_periods: list = field(default_factory=list)
     dc_plan: bool = False
+    monthly_wage_base: Decimal | None = None   # monthly_avg 비교 계산용 월 기준액(deps monthly_wage_base 가 우선)
 
 
 # ================================================================ 결과
@@ -249,7 +255,7 @@ class RetirementResult:
 
 # ================================================================ 읽기
 _KEYS = {"hire_date", "last_working_day", "paid_severance", "interim_settlements", "weekly_hours",
-         "excluded_periods", "small_business_periods", "dc_plan"}
+         "excluded_periods", "small_business_periods", "dc_plan", "monthly_wage_base"}
 
 
 def _num(v, label: str, default=None) -> Decimal | None:
@@ -355,11 +361,12 @@ def load_retirement(raw: dict, worker: dict | None = None) -> RetirementInput:
     sbp = _periods(sbp_raw if sbp_raw else worker.get("small_business_periods"), "small_business_periods")
     paid = _num(raw.get("paid_severance"), "paid_severance", ZERO)
     wh = _num(raw.get("weekly_hours"), "weekly_hours")
-    for v, lab in ((paid, "paid_severance"), (wh, "weekly_hours")):
+    monthly = _num(raw.get("monthly_wage_base"), "monthly_wage_base")
+    for v, lab in ((paid, "paid_severance"), (wh, "weekly_hours"), (monthly, "monthly_wage_base")):
         if v is not None and v < 0:
             raise LaborError(f"퇴직금: {lab} 는 음수일 수 없습니다")
     return RetirementInput(hire, last, paid, interims, wh, excluded, sbp,
-                           bool(_bool(raw.get("dc_plan"), "dc_plan", False)))
+                           bool(_bool(raw.get("dc_plan"), "dc_plan", False)), monthly)
 
 
 # ================================================================ 날짜 헬퍼
@@ -534,9 +541,12 @@ def calculate_retirement(inp: RetirementInput, opts: dict, **deps) -> Retirement
     mode = o["rs_service_ratio_mode"]
     avg_dep = deps.get("average_daily_wage")
     monthly_dep = deps.get("monthly_wage_base")
+    if monthly_dep is None:
+        monthly_dep = inp.monthly_wage_base
     if mode == "monthly_avg":
         if monthly_dep is None:
-            raise LaborError("퇴직금: rs_service_ratio_mode=monthly_avg 이면 월 기준액(deps monthly_wage_base)이 필요합니다")
+            raise LaborError("퇴직금: rs_service_ratio_mode=monthly_avg 이면 월 기준액(retirement.monthly_wage_base)을 "
+                             "적어야 합니다")
         ctx.warn("monthly_avg 는 대구지방법원 2024나318050 의 원고 주장 계산으로 법정 산식이 아닙니다 — 비교용으로만 쓰십시오(RS-02)")
     elif avg_dep is None:
         raise LaborError("퇴직금: 1일 평균임금(deps average_daily_wage)이 필요합니다 — 평균임금 모듈 결과를 넘기십시오")
@@ -635,10 +645,14 @@ def calculate_retirement(inp: RetirementInput, opts: dict, **deps) -> Retirement
         due_note = f"지급사유 발생일 {_fmt(L + timedelta(days=1))}부터 14일이 되는 {_fmt(due)}(제9조 제1항); 지연손해금 {_fmt(due + timedelta(days=1))}부터"
     else:
         due = L
-        due_note = f"퇴직일 다음 날 {_fmt(L + timedelta(days=1))}부터 지연손해금(부산지방법원 2020나52559)"
+        due_note = (f"퇴직일 다음 날 {_fmt(L + timedelta(days=1))}부터 지연손해금(부산지방법원 2020나52559), "
+                    f"연 20%는 {_fmt(L + timedelta(days=15))}부터(지급사유 발생일부터 14일 경과 — 지연손해금 DI-02)")
     trace.append(Trace("RS-06", "지급기일", _fmt(due), due_note + " — 이율 구간은 지연손해금 모듈"))
     if diff > 0:
-        claims.append(Claim("퇴직금 차액", f"퇴직금 차액({_fmt(start)}~{_fmt(L)})", diff, due, True, note=due_note))
+        claim = Claim("퇴직금 차액", f"퇴직금 차액({_fmt(start)}~{_fmt(L)})", diff, due, True, note=due_note)
+        # 지급사유 발생일 — 지연손해금 모듈이 due_date 에서 역산하지 않게 한다(DI-02·DI-15, rs_due_date 와 무관)
+        claim.trigger_date = L + timedelta(days=1)
+        claims.append(claim)
         total += diff
     return RetirementResult(rows, total, claims, trace, warnings, eligible=True, final_severance=sev,
                             final_paid=final_paid, final_diff=diff)

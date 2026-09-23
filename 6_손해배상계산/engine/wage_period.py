@@ -36,6 +36,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
+from .constants import NORMAL_DAY_COUNT, RURAL_DAY_COUNT
+
 
 def occupation_key(d: date) -> tuple[int, int]:
     """직종별 노임의 (기준연도, 반기). TB_SUT004 조회 키."""
@@ -74,7 +76,7 @@ class WagePeriod:
     @property
     def days(self) -> int:
         """월 가동일수. IncomeCostPopup: normalDayCnt = 20, nongchonDayCnt = 25."""
-        return 25 if self.rural else 20
+        return RURAL_DAY_COUNT if self.rural else NORMAL_DAY_COUNT
 
 
 def _next_boundary(d: date, rural: bool) -> date:
