@@ -256,6 +256,31 @@ def test_병행사건_수당_청구묶음별():
     assert alt.hourly_of(date(2025, 1, 1), allowance="overtime", bundle="최초") == full
 
 
+def test_계산기간이_2024_12_19_이후에_시작해도_OW_M5_경고():
+    # old_unless_parallel 이면 이후 날짜도 구 법리 → 연차수당 등이 옵션에 따라 갈린다. 조립 모듈은 calculate 직후
+    # warnings 만 옮기므로 콜러블을 부르기 전에 이미 경고가 있어야 한다
+    items = [item("기본급", 2090000, "month", "2025-01-01", "2025-06-30", new=True),
+             item("재직조건부 상여금", 600000, "quarter", "2025-01-01", "2025-06-30", old=False, new=True)]
+    res = run(raw_of(items))
+    assert any(w.startswith("OW-M5") for w in res.warnings)
+    alt = run(raw_of(items), ow_nonwork_regime="old_unless_parallel")
+    d = date(2025, 3, 1)
+    assert res.daily_ordinary_of(d, allowance="annual_leave") != alt.daily_ordinary_of(d, allowance="annual_leave")
+    before = run(raw_of([item("기본급", 2090000), item("재직조건부 상여금", 600000, "quarter", old=False, new=True)]))
+    assert not any("OW-M5" in w for w in before.warnings)            # 2024. 12. 18. 이전만이면 옵션과 무관
+
+
+def test_old_unless_parallel_은_경계_뒤_항목에도_old_필요():
+    items = [item("기본급", 2090000, "month", "2024-10-01", "2025-06-30", new=True),
+             item("신설수당", 209000, "month", "2025-01-01", "2025-06-30", old=None, new=True)]
+    d = date(2025, 3, 1)
+    assert run(raw_of(items)).daily_ordinary_of(d, allowance="annual_leave") == (D(2090000) + D(209000)) / 209 * 8
+    alt = run(raw_of(items), ow_nonwork_regime="old_unless_parallel")
+    assert alt.hourly_of(d, allowance="overtime") == (D(2090000) + D(209000)) / 209    # 연장근로수당은 날짜 기준
+    with pytest.raises(LaborError, match="old_unless_parallel"):
+        alt.daily_ordinary_of(d, allowance="annual_leave")
+
+
 # ================================================================ OW-15 주기 환산
 @pytest.mark.parametrize("cycle,amount", [("quarter", 600000), ("half", 1200000), ("year", 2400000), ("bimonth", 400000),
                                           ("분기", 600000), ("연", 2400000)])
@@ -350,12 +375,54 @@ def test_신의칙_제외_기간_항목():
     assert "신의칙 제외" in res.rows[0].note
 
 
+def test_신의칙_제외_items_를_비우면_전_항목_제외_경고():
+    items = [item("기본급", 2090000), item("상여금", 600000, "quarter")]
+    res = run(raw_of(items, good_faith_excluded=[{"from": "2018-01-01", "to": "2018-06-30"}]))
+    assert res.hourly_of("2018-03-01") == 0                              # 문서대로 전 항목 제외
+    assert any("모든 임금 항목" in w for w in res.warnings)
+    named = run(raw_of(items, good_faith_excluded=[{"from": "2018-01-01", "to": "2018-06-30", "items": ["상여금"]}]))
+    assert not any("모든 임금 항목" in w for w in named.warnings)
+
+
+@pytest.mark.parametrize("section,value", [
+    ("good_faith_excluded", [{"from": "2018-01-01", "to": "2018-06-30", "item": ["상여금"]}]),   # items 오타 → 전 항목 0
+    ("parallel_claims", [{"allowance": "overtime", "bundel": "최초", "parallel": True}]),
+    ("agreed", {"monthly_hours": 183, "daily_hour": 8, "items": [{"name": "기본급", "amount": 1, "cycle": "month",
+                                                                  "from": "2018-01-01"}]}),
+    ("agreed", {"monthly_hours": 183, "items": [{"name": "기본급", "amount": 1, "cycle": "month", "from": "2018-01-01",
+                                                 "too": "2018-06-30"}]}),
+])
+def test_하위_목록의_모르는_키는_오류(section, value):
+    raw = raw_of([item("기본급", 2090000), item("상여금", 600000, "quarter")], **{section: value})
+    with pytest.raises(LaborError, match="알 수 없는 키"):
+        load_ordinary(raw)
+
+
 def test_공휴일_유급시간_옵션():
     raw = raw_of([item("기본급", 1)], hours=hours(public_holiday_hours_per_year=88))
     assert run(raw).rows[0].monthly_hours == 209
     assert run(raw, ow_public_holidays_in_hours=True).rows[0].monthly_hours == 216      # 208.571 + 88 ÷ 12 = 215.905
     with pytest.raises(LaborError, match="public_holiday_hours_per_year"):
         run(raw_of([item("기본급", 1)]), ow_public_holidays_in_hours=True)
+
+
+def test_월_기준시간_직접_입력이면_공휴일_가산을_했다고_적지_않음():
+    # monthly_hours 는 '있으면 산식 대신' — 공휴일 시간을 더하지 않으므로 비고·경고도 더했다고 남기지 않는다
+    raw = raw_of([item("기본급", 2090000)], hours=hours(monthly_hours=209, public_holiday_hours_per_year=120))
+    res = run(raw, ow_public_holidays_in_hours=True)
+    row = res.rows[0]
+    assert row.monthly_hours == 209 and row.hourly == 10000
+    assert "공휴일 유급" not in row.note
+    assert not any("더했습니다" in w for w in res.warnings)
+    assert any("직접 입력해 공휴일" in w for w in res.warnings)
+    run(raw_of([item("기본급", 1)], hours=hours(monthly_hours=209)), ow_public_holidays_in_hours=True)   # 공휴일 시간 없어도 됨
+    mixed = raw_of([item("기본급", 1)], hours=[
+        {"from": "2000-01-01", "weekly_hours": 40, "daily_hours": 8, "monthly_hours": 243},
+        {"from": "2018-07-01", "weekly_hours": 40, "daily_hours": 8, "public_holiday_hours_per_year": 88}])
+    res = run(mixed, ow_public_holidays_in_hours=True)
+    assert [r.monthly_hours for r in res.rows] == [243, 216]
+    assert "공휴일 유급" not in res.rows[0].note and "공휴일 유급" in res.rows[1].note
+    assert any("더했습니다" in w for w in res.warnings)
 
 
 def test_약정_통상시급은_약정_기준시간과만_묶음():

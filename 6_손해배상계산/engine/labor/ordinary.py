@@ -37,7 +37,8 @@ OW-03 [판례확립] 2020다247190 "이 판결 선고일인 2024. 12. 19. 이후
 OW-M5 [불명확] (검증 '수정필요' 반영) 판시는 "제공한 연장근로 등"에 한정. 주휴·공휴일 유급수당, 연차휴가수당,
       퇴직금·해고예고수당의 기준일은 판결이 정하지 않음. 호출 모듈이 `allowance=` 를 넘기면
       `ow_nonwork_regime` 로 처리: by_date(기본 — 호출 모듈이 고른 날짜로 가름, 경고) |
-      old_unless_parallel(서울중앙 2025가합10063 관찰 — 비병행이면 날짜와 무관하게 구 법리).
+      old_unless_parallel(서울중앙 2025가합10063 관찰 — 비병행이면 날짜와 무관하게 구 법리). old_unless_parallel 로
+      계산하려면 2024. 12. 19. 이후에 시작하는 항목에도 `old` 를 적는다(없으면 그 수당을 계산할 때 오류).
 OW-03a [판례확립(소송물)·하급심(병행 범위)] (검증 '수정필요' 반영) 법정수당 청구별로 별개 소송물
       (대법원 2025. 8. 28. 선고 2021다239134). 병행 여부는 (수당, 청구묶음) 단위 `parallel_claims` 로 적는다.
       청구기간 확장분에 신 법리 적용: 대구고등법원 2025. 9. 10. 선고 2024나17329(확정), 서울중앙 2022가합537373.
@@ -137,6 +138,7 @@ OW-07 비교 자체, OW-M3(수당별·지급기일별 산정 단위), OW-19 배�
           from: 2021-01-01           # 귀속기간
           to: null
           old: true                  # 구 법리: true(전액) | false(0) | 금액 | {included: true, amount: 500000}
+                                     #   2024. 12. 18. 이전 기간이 있으면 필수(old_unless_parallel 이면 이후 항목에도)
           new: true                  # 신 법리
           parallel: false            # 병행사건에서 통상임금 해당 여부가 다투어진 항목
           includes_statutory_ot: false   # 제56조 연장수당이 포함된 월 기본급(OW-12 예외)
@@ -146,7 +148,7 @@ OW-07 비교 자체, OW-M3(수당별·지급기일별 산정 단위), OW-19 배�
           source: "취업규칙 12쪽, 급여명세서 2024-03"
         - {name: 정기상여금, base_item: 기본급, rate: 1.0, cycle: quarter, from: 2021-01-01, old: false, new: true,
            parallel: true, source: "단협 30조"}
-      good_faith_excluded:           # 신의칙 인정 기간·항목(items 비우면 모든 항목)
+      good_faith_excluded:           # 신의칙 인정 기간·항목(items 비우면 모든 항목 — 경고)
         - {from: 2021-01-01, to: 2022-12-31, items: [정기상여금], note: "판결 3쪽"}
       parallel_claims:               # (수당, 청구묶음)별 병행사건 여부
         - {allowance: overtime, bundle: 최초, served: 2022-05-02, parallel: true}
@@ -237,7 +239,7 @@ OPTIONS: dict[str, OptionSpec] = {s.key: s for s in [
     }),
     OptionSpec("ow_nonwork_regime", "by_date", "연장·야간·휴일근로 외 수당의 신·구 법리 기준", "OW-M5", {
         "by_date": "호출 모듈이 넘긴 날짜로 가름(판시 없음 — 경고)",
-        "old_unless_parallel": "병행사건이 아니면 날짜와 무관하게 구 법리(서울중앙 2025가합10063 관찰)",
+        "old_unless_parallel": "병행사건이 아니면 날짜와 무관하게 구 법리(서울중앙 2025가합10063 관찰) — 2024. 12. 19. 이후 항목에도 old 필요",
     }),
 ]}
 
@@ -412,6 +414,7 @@ class _Hours:
     daily_denom: Decimal
     daily_denom_premium: Decimal
     notes: list
+    public_holiday_added: bool = False   # OW-18 공휴일 유급시간을 월 기준시간에 실제로 더했는지
 
 
 @dataclass
@@ -500,8 +503,19 @@ _HOURS_KEYS = {"from", "weekly_hours", "daily_hours", "weekly_holiday_hours", "w
                "weekly_overtime_hours", "weekly_night_overtime_hours", "daily_overtime_hours",
                "daily_night_overtime_hours", "monthly_hours", "public_holiday_hours_per_year", "four_week_hours",
                "full_time_four_week_days", "source"}
+_GF_KEYS = {"from", "to", "items", "note"}
+_PC_KEYS = {"allowance", "bundle", "parallel", "served", "note"}
+_AGREED_KEYS = {"monthly_hours", "daily_hours", "items"}
+_AGREED_ITEM_KEYS = {"name", "amount", "cycle", "from", "to", "times_per_year"}
 _WAGE_FORMS = {"monthly": "월급제", "daily": "일급제", "hourly": "시급제"}
 _WAGE_FORM_ALIASES = {"월급": "monthly", "월급제": "monthly", "일급": "daily", "일급제": "daily", "시급": "hourly", "시급제": "hourly"}
+
+
+def _check_keys(raw: dict, allowed: set, label: str) -> None:
+    """모르는 키(오타)는 조용히 무시하지 않고 막는다 — 빠진 키가 '비면 전부' 같은 기본 의미로 읽히지 않게."""
+    unknown = set(raw) - allowed
+    if unknown:
+        raise LaborError(f"통상임금: {label} 에 알 수 없는 키: {', '.join(sorted(map(str, unknown)))}")
 
 
 def _num(v, label: str, default=None) -> Decimal | None:
@@ -687,6 +701,7 @@ def load_ordinary(raw: dict, worker: dict | None = None) -> OrdinaryInput:
     for i, x in enumerate(raw.get("good_faith_excluded") or [], 1):
         if not isinstance(x, dict):
             raise LaborError(f"통상임금: good_faith_excluded[{i}] 는 사전이어야 합니다")
+        _check_keys(x, _GF_KEYS, f"good_faith_excluded[{i}]")
         s, e = _date(x.get("from"), f"good_faith_excluded[{i}].from"), _date(x.get("to"), f"good_faith_excluded[{i}].to")
         if s is None or e is None:
             raise LaborError(f"통상임금: good_faith_excluded[{i}] 에는 from 과 to 가 모두 필요합니다")
@@ -702,6 +717,7 @@ def load_ordinary(raw: dict, worker: dict | None = None) -> OrdinaryInput:
     for i, x in enumerate(raw.get("parallel_claims") or [], 1):
         if not isinstance(x, dict):
             raise LaborError(f"통상임금: parallel_claims[{i}] 는 사전이어야 합니다")
+        _check_keys(x, _PC_KEYS, f"parallel_claims[{i}]")
         al = x.get("allowance")
         if al not in ALLOWANCES:
             raise LaborError(f"통상임금: parallel_claims[{i}].allowance 값 {al!r} 을 알 수 없습니다. 가능: {', '.join(ALLOWANCES)}")
@@ -718,12 +734,15 @@ def load_ordinary(raw: dict, worker: dict | None = None) -> OrdinaryInput:
     if ag:
         if not isinstance(ag, dict):
             raise LaborError("통상임금: agreed 는 사전이어야 합니다")
+        _check_keys(ag, _AGREED_KEYS, "agreed")
         mh = _nonneg(ag.get("monthly_hours"), "agreed.monthly_hours")
         if not mh:
             raise LaborError("통상임금: agreed.monthly_hours(약정 월 기준시간)가 없습니다")
         a_items = []
         for i, x in enumerate(ag.get("items") or [], 1):
             lb = f"agreed.items[{i}]"
+            if isinstance(x, dict):
+                _check_keys(x, _AGREED_ITEM_KEYS, lb)
             if not isinstance(x, dict) or not x.get("name") or x.get("amount") in (None, ""):
                 raise LaborError(f"통상임금: {lb} 에는 name 과 amount 가 필요합니다")
             s = _date(x.get("from"), f"{lb}.from")
@@ -875,8 +894,12 @@ class _Engine:
             inc = it.new if use_new else it.old
             lab = "신" if use_new else "구"
             if inc is None:
+                hint = ""
+                if not use_new and seg.start >= BOUNDARY:
+                    hint = (" — 2024. 12. 19. 이후 기간을 구 법리로 계산하는 경우(ow_nonwork_regime=old_unless_parallel 로 "
+                            "연장·야간·휴일근로 외 수당을 계산하거나 regime='old' 를 지정)에는 이 항목에도 old 를 적어야 합니다(OW-M5)")
                 raise LaborError(f"통상임금: 항목 {it.name} 의 {lab} 법리 산입 여부({'new' if use_new else 'old'})가 없어 "
-                                 f"{_fmt(seg.start)}~{_fmt(seg.end)} 을(를) 계산할 수 없습니다")
+                                 f"{_fmt(seg.start)}~{_fmt(seg.end)} 을(를) 계산할 수 없습니다{hint}")
             contract = self._contract_amount(it, seg.start)
             included = inc.amount if inc.amount is not None else (contract if inc.included else ZERO)
             gf = self._excluded(it, seg)
@@ -972,7 +995,12 @@ def _resolve_hours(spec: HoursSpec, inp: OrdinaryInput, o: dict, needs_premium: 
         notes.append(f"약정 연장 {extra}시간을 가산율 없이 분모에 합산(OW-12)")
 
     phh = None
-    if o["ow_public_holidays_in_hours"]:
+    if spec.monthly_hours is not None:
+        # 직접 입력한 월 기준시간은 산식을 거치지 않으므로 공휴일 시간을 더하지 않는다(더했다고 적지도 않는다)
+        if o["ow_public_holidays_in_hours"] or spec.public_holiday_hours_per_year:
+            warnings.append(f"{label}: 월 기준시간 {spec.monthly_hours}을 직접 입력해 공휴일 유급시간 가산(OW-18)을 하지 않았습니다"
+                            " — 직접 입력값에 공휴일 유급시간이 들어 있는지 확인하십시오")
+    elif o["ow_public_holidays_in_hours"]:
         if spec.public_holiday_hours_per_year is None:
             raise LaborError(f"통상임금: {label} ow_public_holidays_in_hours=true 이면 public_holiday_hours_per_year 가 필요합니다")
         phh = spec.public_holiday_hours_per_year
@@ -993,7 +1021,7 @@ def _resolve_hours(spec: HoursSpec, inp: OrdinaryInput, o: dict, needs_premium: 
     return _Hours(dh, wh, holiday, H, Hp, monthly, monthly_p,
                   dh + spec.daily_overtime_hours + spec.daily_night_overtime_hours,
                   dh + spec.daily_overtime_hours * PREMIUM_OT + spec.daily_night_overtime_hours * PREMIUM_OT_NIGHT,
-                  notes)
+                  notes, bool(phh))
 
 
 def calculate_ordinary(inp: OrdinaryInput, opts: dict, **deps) -> OrdinaryResult:
@@ -1050,6 +1078,9 @@ def calculate_ordinary(inp: OrdinaryInput, opts: dict, **deps) -> OrdinaryResult
     for g in inp.good_faith_excluded:
         if g.start < start or g.end > end:
             warnings.append(f"신의칙 제외 기간 {_fmt(g.start)}~{_fmt(g.end)} 이 계산 기간을 벗어난 부분은 쓰지 않았습니다")
+        if not g.items:
+            warnings.append(f"신의칙 제외 기간 {_fmt(g.start)}~{_fmt(g.end)}: items 가 비어 있어 모든 임금 항목(기본급 포함)을 "
+                            "통상임금에서 뺐습니다 — 판결이 전 항목을 제외했는지 확인하십시오(OW-08)")
 
     engine = _Engine(inp, o, segs)
 
@@ -1110,10 +1141,12 @@ def calculate_ordinary(inp: OrdinaryInput, opts: dict, **deps) -> OrdinaryResult
         warnings.append("OW-03a: 병행사건 청구묶음이 있으나 parallel 로 표시한 항목이 없어 구 법리와 같게 계산됩니다")
     regime_matters = any(it.old is not None and it.new is not None and (it.old.included, it.old.amount) != (it.new.included, it.new.amount)
                          for it in inp.items)
-    if regime_matters and start < BOUNDARY <= end:
+    # ow_nonwork_regime 은 2024. 12. 19. 이후 날짜에서만 결과를 바꾼다 — 계산 기간이 그날 이후에 시작해도 경고한다.
+    # (콜러블이 부를 때 남기는 수당별 OW-M5 경고는 계산이 끝난 뒤 warnings 에 붙으므로 여기서 미리 알린다)
+    if regime_matters and BOUNDARY <= end:
         warnings.append("OW-M5: 연장·야간·휴일근로 외 수당(주휴·공휴일·연차·퇴직금·해고예고)의 신·구 법리 기준일은 판시가 없습니다"
                         f" — ow_nonwork_regime={o['ow_nonwork_regime']}")
-    if o["ow_public_holidays_in_hours"]:
+    if o["ow_public_holidays_in_hours"] and any(s.hours.public_holiday_added for s in segs):
         warnings.append("OW-18: 관공서 공휴일 유급시간을 월 기준시간에 더했습니다(근거 확인 안 됨)")
     if inp.part_time:
         warnings.append("OW-17: 단시간근로자 1일 소정근로시간·주휴시간 산식(시행령 별표 2)은 원문을 확인하지 못했습니다")
