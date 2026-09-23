@@ -11,6 +11,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+# 출력이 파이프이면 Windows 파이썬은 cp949 로 쓴다. Claude Code 는 UTF-8 로 읽으므로 맞춘다.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8")
+
 OK, WARN, BAD = "  [정상]", "  [확인필요]", "  [문제]"
 problems = 0
 warnings = 0

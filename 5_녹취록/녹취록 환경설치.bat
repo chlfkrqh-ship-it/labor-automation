@@ -1,4 +1,5 @@
 @echo off
+rem Encoding: CP949 (ANSI) + CRLF. cmd reads this file in code page 949; do not re-save as UTF-8.
 title 녹취록 환경 설치
 cd /d "%~dp0"
 

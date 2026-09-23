@@ -9,7 +9,7 @@
   2. 프로그램 폴더를 스냅샷으로 박제한다 (Updater가 덮어쓰기 전에)
   3. accdb 를 CSV 로 덤프한다  ← 32비트 프로세스가 필요하므로 자동으로 다시 띄운다
   4. data\ 의 CSV 4종으로 정규화한다
-  5. 확인한다
+  5. scripts\점검.py 로 확인하고 테스트를 돌린다
 
 설치 경로를 직접 지정하려면:
   .\노임표추출.ps1 -SutPath "D:\sut"
@@ -172,18 +172,26 @@ if (-not $hitDir) {
 
 # ── 5. 정규화 ────────────────────────────────────────────────────────
 Head "정규화"
-python scripts\normalize.py $hitDir
+python -B scripts\normalize.py $hitDir
 if ($LASTEXITCODE -ne 0) { Say "normalize.py 실패" "Red"; exit 1 }
 
 # ── 6. 확인 ──────────────────────────────────────────────────────────
+# python 이 실패해도 PowerShell 은 멈추지 않으므로 종료코드를 직접 본다.
 Head "확인"
 Get-ChildItem "data" -Filter *.csv | ForEach-Object {
     "{0,-26} {1,8:N0} KB" -f $_.Name, ($_.Length / 1KB)
 }
-python scripts\확인.py
+python -B scripts\점검.py
+$checkFailed = ($LASTEXITCODE -ne 0)
 
 Head "테스트"
-python -m pytest tests -q
+python -B -m pytest tests -q -p no:cacheprovider
+$testFailed = ($LASTEXITCODE -ne 0)
 
-Say "`n끝났습니다. data\ 의 CSV 4종은 OneDrive 로 다른 PC에도 넘어갑니다." "Green"
+if ($checkFailed -or $testFailed) {
+    Say "`n추출은 끝났지만 점검이나 테스트에서 실패가 있습니다. 위 [문제]·failed 줄을 그대로 붙여 문의하십시오." "Red"
+    exit 1
+}
+Say "`n끝났습니다. 점검과 테스트가 실패(failed) 없이 모두 통과했습니다." "Green"
+Say "data\ 의 CSV 4종은 OneDrive 로 다른 PC에도 넘어갑니다." "Green"
 Say "C:\sut_extract 와 C:\sut_snapshot 은 저장소로 옮기지 마십시오." "DarkGray"
