@@ -2,10 +2,12 @@
 
 YAML 대신 엑셀로 사건을 입력한다. 라벨은 B열, 값은 D열에 둔다.
 표 블록(장해, 치료비, 보조구, 노임단가)은 머리글 아래로 행을 이어 쓴다.
+표는 머리글 아래부터 다음 표 제목('[...]') 바로 앞까지 읽는다. 사이의 빈 행은 건너뛴다.
 """
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -82,6 +84,32 @@ TABLES = {
     "노임단가 직접입력": ["연도-반기", "단가"],
 }
 TABLE_ROWS = 8
+WAGE_TABLE = "노임단가 직접입력"
+WAGE_KEY_HINT = "예: 2024-1 (연도-반기. 농촌노임이면 연도-분기 1~4)"
+# 표 끝을 정하는 제목 행. 표 사이 빈 행이 하나뿐이라 빈 행으로는 끝을 알 수 없다.
+SECTION_TITLES = {f"[{t}]" for t in TABLES} | {label for label, f, _ in FIELDS if f is None}
+
+_WAGE_KEY = re.compile(r"(\d{4})\s*-\s*(\d{1,2})")
+
+
+def parse_wage_key(value, rural: bool = False) -> tuple[int, int]:
+    """노임단가 직접입력의 '연도-반기' 값을 (연도, 반기) 로 읽는다. 농촌노임이면 (연도, 분기).
+
+    엑셀은 일반 서식 칸에 적은 '2024-1' 을 날짜 2024-01-01 로 바꿔 저장한다. 그래서 1일인
+    날짜로 읽히면 월을 반기(분기) 번호로 본다. 입력서와 사건 파일(wages)이 같이 쓴다.
+    """
+    top, unit = (4, "분기") if rural else (2, "반기")
+    if isinstance(value, date):
+        year, index, ok = value.year, value.month, value.day == 1
+    else:
+        m = _WAGE_KEY.fullmatch(str(value).strip())
+        ok = m is not None
+        year, index = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+    if not ok or not 1 <= index <= top:
+        raise ValueError(
+            f"'{value}' 은(는) 연도-{unit} 값이 아닙니다. 2024-1 처럼 연도-{unit}({unit} 1~{top})으로 적으십시오"
+        )
+    return year, index
 
 
 def make_template(path: str | Path) -> Path:
@@ -120,12 +148,16 @@ def make_template(path: str | Path) -> Path:
             c.fill = HEAD_FILL
             c.border = BOX
             c.alignment = Alignment(horizontal="center")
+        if title == WAGE_TABLE:
+            ws.cell(row, 6, WAGE_KEY_HINT).font = HINT
         row += 1
         for _ in range(TABLE_ROWS):
             for i in range(len(headers)):
                 c = ws.cell(row, 2 + i)
                 c.fill = INPUT_FILL
                 c.border = BOX
+                if title == WAGE_TABLE and i == 0:
+                    c.number_format = "@"     # 텍스트 칸. 일반 서식이면 엑셀이 '2024-1' 을 날짜로 바꾼다
             row += 1
 
     for col, w in {2: 24, 3: 14, 4: 20, 5: 14, 6: 40, 7: 14}.items():
@@ -190,76 +222,96 @@ def read_form(path: str | Path, strict: bool = False) -> Case:
         raw = _clean(ws.cell(labels[label], 4).value)
         if raw is None:
             continue
-        if fieldname == "caregiving_month_mode":
-            kw[fieldname] = "월" in str(raw)
-        elif fieldname == "sex":
-            kw[fieldname] = "F" if str(raw).startswith("여") else "M"
-        elif fieldname == "rural":
-            kw[fieldname] = str(raw).startswith("예")
-        elif fieldname in DATE_FIELDS:
-            kw[fieldname] = raw.date() if isinstance(raw, datetime) else _d(raw)
-        elif fieldname in INT_FIELDS:
-            kw[fieldname] = int(Decimal(str(raw)))
-        elif fieldname in DEC_FIELDS:
-            kw[fieldname] = Decimal(str(raw))
-        else:
-            kw[fieldname] = str(raw)
+        try:
+            if fieldname == "caregiving_month_mode":
+                kw[fieldname] = "월" in str(raw)
+            elif fieldname == "sex":
+                kw[fieldname] = "F" if str(raw).startswith("여") else "M"
+            elif fieldname == "rural":
+                kw[fieldname] = str(raw).startswith("예")
+            elif fieldname in DATE_FIELDS:
+                kw[fieldname] = raw.date() if isinstance(raw, datetime) else _d(raw)
+            elif fieldname in INT_FIELDS:
+                kw[fieldname] = int(Decimal(str(raw)))
+            elif fieldname in DEC_FIELDS:
+                kw[fieldname] = Decimal(str(raw))
+            else:
+                kw[fieldname] = str(raw)
+        except (ValueError, TypeError, ArithmeticError) as exc:
+            raise ValueError(
+                f"입력서 '{label}' 칸의 값 '{raw}' 을(를) 읽지 못했습니다({exc}). "
+                "날짜는 20240101 또는 2024-01-01, 금액·비율은 숫자로 적으십시오."
+            ) from exc
+
+    section_rows = sorted(row for key, row in labels.items() if key in SECTION_TITLES)
 
     def table_rows(title, width):
+        """(엑셀 행 번호, 값들). 머리글 아래부터 다음 표 제목 바로 앞까지, 빈 행은 건너뛴다."""
         head = labels.get(f"[{title}]")
         if head is None:
             return []
+        end = next((row for row in section_rows if row > head), ws.max_row + 1)
         out = []
-        r = head + 2
-        while r <= ws.max_row:
+        for r in range(head + 2, end):
             vals = [_clean(ws.cell(r, 2 + i).value) for i in range(width)]
-            if all(v is None for v in vals):
-                if all(_clean(ws.cell(r + 1, 2 + i).value) is None for i in range(width)):
-                    break
-                r += 1
-                continue
-            out.append(vals)
-            r += 1
+            if any(v is not None for v in vals):
+                out.append((r, vals))
         return out
 
-    kw["impairments"] = [
-        ImpairmentInput(
+    def parse_rows(title, width, parse):
+        """표 행을 읽는다. 실패하면 표 이름과 엑셀 행 번호를 붙여 알린다."""
+        out = []
+        for r, v in table_rows(title, width):
+            try:
+                item = parse(v)
+            except (ValueError, TypeError, ArithmeticError) as exc:
+                raise ValueError(
+                    f"입력서 [{title}] 표 {r}행을 읽지 못했습니다({exc}). "
+                    "날짜는 20240101 또는 2024-01-01, 금액·비율은 숫자로 적으십시오."
+                ) from exc
+            if item is not None:
+                out.append(item)
+        return out
+
+    def impairment(v):
+        if not v[0] or v[1] is None:
+            return None
+        return ImpairmentInput(
             dept=str(v[0]),
             rate=Decimal(str(v[1])),
             prior=Decimal(str(v[2] or 0)),
             years=Decimal(str(v[3])) if v[3] else None,
         )
-        for v in table_rows("노동능력 상실률", 4)
-        if v[0] and v[1] is not None
-    ]
 
-    def costs(title, cls):
-        out = []
-        for v in table_rows(title, 6):
+    def cost_row(cls):
+        def parse(v):
             if not v[0] or v[1] is None:
-                continue
+                return None
             first = v[2].date() if isinstance(v[2], datetime) else _d(v[2])
             last = v[3].date() if isinstance(v[3], datetime) else (_d(v[3]) if v[3] else first)
-            out.append(
-                cls(
-                    name=str(v[0]),
-                    cost=Decimal(str(v[1])),
-                    first=first,
-                    last=last,
-                    duration_month=int(Decimal(str(v[4] or 1))),
-                    prior=Decimal(str(v[5] or 0)),
-                    repeating=last != first,
-                )
+            return cls(
+                name=str(v[0]),
+                cost=Decimal(str(v[1])),
+                first=first,
+                last=last,
+                duration_month=int(Decimal(str(v[4] or 1))),
+                prior=Decimal(str(v[5] or 0)),
+                repeating=last != first,
             )
-        return out
+        return parse
 
-    kw["treatments"] = costs("향후 치료비", TreatmentInput)
-    kw["orthoses"] = costs("향후 보조구", OrthosisInput)
-    kw["wages"] = {
-        str(v[0]).strip(): int(Decimal(str(v[1])))
-        for v in table_rows("노임단가 직접입력", 2)
-        if v[0] and v[1] is not None
-    }
+    rural = kw.get("rural", False)
+
+    def wage(v):
+        if not v[0] or v[1] is None:
+            return None
+        year, index = parse_wage_key(v[0], rural)
+        return f"{year}-{index}", int(Decimal(str(v[1])))
+
+    kw["impairments"] = parse_rows("노동능력 상실률", 4, impairment)
+    kw["treatments"] = parse_rows("향후 치료비", 6, cost_row(TreatmentInput))
+    kw["orthoses"] = parse_rows("향후 보조구", 6, cost_row(OrthosisInput))
+    kw["wages"] = dict(parse_rows(WAGE_TABLE, 2, wage))
     case = Case(**kw)
     if strict:
         _check_required(kw, case)

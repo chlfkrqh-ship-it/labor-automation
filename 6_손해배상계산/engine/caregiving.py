@@ -142,6 +142,10 @@ def split_caregiving_periods(
         직종별 그 덮어쓰기가 없다                                  -> 자르기 전 연도
 
     개호 종료일이 구간 경계보다 앞이면 이 차이가 드러난다.
+
+    현재 구간의 단가도 없으면(원본의 `wage == -1m`) 그 키를 그대로 담아 종료일까지 한 순번으로
+    묶는다. 키가 노임표의 마지막 공표 키보다 뒤이면 조회기(cli._wage_lookup)가 마지막 단가
+    (원본의 GetWageFromSalaryDayTableNext)를 돌려주고, 앞인데 빠진 키면 알아볼 수 있는 오류로 멈춘다.
     """
     out: list[WagePeriod] = []
     cur = start
