@@ -1,5 +1,6 @@
 """receive.py — 클라우드에서 머지한 시스템 파일을 PC 작업본으로 받는지 임시 저장소로 확인한다."""
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -97,6 +98,29 @@ class ReceiveTests(unittest.TestCase):
         self.assertIn('합침  판례기록.md', r.stdout)
         text = (self.pc / '판례기록.md').read_bytes().decode('utf-8')
         self.assertEqual(text, '첫 줄(클라우드)\r\n둘째\r\n셋째\r\n넷째\r\n끝 줄\r\n더한 줄(PC)\r\n')   # 줄끝은 이 PC 것 그대로
+
+    def run_auto(self, appdata):
+        return subprocess.run([sys.executable, '-B', str(SCRIPT), '--root', str(self.pc), '--auto'],
+                              env=dict(ENV, LOCALAPPDATA=str(appdata)), capture_output=True, text=True, encoding='utf-8')
+
+    def test_auto_does_nothing_outside_pc_layout(self):
+        # 클라우드 세션처럼 작업본 안에 .git 이 있고 %LOCALAPPDATA% 저장소가 없으면 손대지 않는다
+        head = git(self.pc, 'rev-parse', 'HEAD')
+        r = self.run_auto(Path(self.tmp.name) / 'no-appdata')
+        self.assertEqual((r.returncode, r.stdout), (0, ''))
+        self.assertEqual(self.read('지침/a.md'), '1\n')
+        self.assertEqual(git(self.pc, 'rev-parse', 'HEAD'), head)
+
+    def test_auto_receives_in_pc_layout_and_is_quiet_when_nothing_changed(self):
+        appdata = Path(self.tmp.name) / 'appdata'
+        (appdata / 'labor-automation').mkdir(parents=True)
+        shutil.move(str(self.pc / '.git'), str(appdata / 'labor-automation' / 'repo.git'))   # g.bat 과 같은 구성
+        r = self.run_auto(appdata)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn('[시스템 파일 받기]', r.stdout)
+        self.assertEqual(self.read('지침/a.md'), '2\n')
+        again = self.run_auto(appdata)
+        self.assertEqual((again.returncode, again.stdout), (0, ''))
 
     def test_missing_repository_is_skipped(self):
         empty = Path(self.tmp.name) / 'empty'

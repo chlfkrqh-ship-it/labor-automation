@@ -10,5 +10,20 @@
       "Bash(git diff:*)",
       "Bash(git log:*)"
     ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -B 공통/scripts/receive.py --auto",
+            "timeout": 180,
+            "statusMessage": "시스템 파일 받는 중"
+          }
+        ]
+      }
+    ]
   }
 }
