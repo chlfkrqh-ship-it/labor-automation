@@ -199,6 +199,24 @@ def test_연차_절의_5인_미만_표시가_조립_경로에서도_산다():
     assert "연차휴가수당" not in {c.category for c in res.claims}
 
 
+
+def test_단시간_연차수당은_통상임금_절의_통상시급을_쓴다():
+    # 통상임금 절은 1일 4시간인데 leave.daily_hours 는 8 — 조립 경로가 통상시급을 넘겨야 시급 × 시간으로 계산한다
+    raw = _raw()
+    raw["ordinary"]["hours"] = [{"from": "2022-07-01", "weekly_hours": 20, "daily_hours": 4,
+                                 "weekly_holiday_hours": 4, "source": "시험"}]
+    raw["leave"].update(weekly_hours=20, daily_hours=8)
+    raw["leave"]["periods"][-1]["used_days"] = 2
+    for k in ("overtime", "average_wage", "retirement", "interest"):
+        raw.pop(k)
+    res = calculate_labor(load_labor_case(raw))
+    rows = [r for r in res.parts["leave"].rows if r.amount]
+    assert len(rows) == 1 and rows[0].accrued_hours == 64
+    hourly = res.parts["ordinary"].hourly_of(rows[0].wage_ref_date, allowance="annual_leave")
+    assert abs(rows[0].amount - hourly * 48) < 1                    # 64시간 − 사용 2일 × 8시간
+    assert any("AL-18" in w and "(4시간" in w for w in res.warnings)
+    assert not any("leave.daily_hours 8시간으로 환산" in w for w in res.warnings)
+
 # ---------------------------------------------------------------- 요약·계산표
 def test_미복직_장래분이_요약과_해고기간_임금_시트에_나온다(tmp_path):
     raw = _raw(DISMISSAL)

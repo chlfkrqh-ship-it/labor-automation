@@ -213,8 +213,9 @@ def calculate_labor(case: LaborCase) -> LaborResult:
             hourly_of=lambda d: ow.hourly_of(d, allowance="overtime"), small_business=small)
         _check_overtime_allowances(ow, res.parts["overtime"], o)
     if case.has("leave"):
-        _need(res, "ordinary", "연차휴가수당")
-        run("leave", "연차휴가수당", leave, daily_ordinary_of=daily_ordinary_of("annual_leave"), small_business=small)
+        ol = _need(res, "ordinary", "연차휴가수당")
+        run("leave", "연차휴가수당", leave, daily_ordinary_of=daily_ordinary_of("annual_leave"),
+            hourly_of=lambda d: ol.hourly_of(d, allowance="annual_leave"), small_business=small)
     if case.has("average_wage"):
         extra = getattr(res.parts.get("overtime"), "extra_wages", None) or {}
         run("average_wage", "평균임금", average, daily_ordinary_of=daily_ordinary_of("severance"), extra_wages=extra)
