@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import calendar
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
@@ -85,8 +86,13 @@ class Case:
     caregiving_end: date | None = None
     caregiving_headcount: Decimal = Decimal(1)
     caregiving_month_mode: bool = True   # 화면의 chkMonth. 월 단위 / 분기·반기 단위
+    # 향후 개호비 단가 표. {"2024-1": 165545, ...} 피해자 노임(wages·직종)과 따로 적는다.
+    # 원본은 개호비 화면에서 직종을 따로 고르므로 피해자 노임으로 대신하지 않는다(calculate.py).
+    caregiving_wages: dict = field(default_factory=dict)
+    caregiving_rural: bool = False       # 개호 단가가 농촌 노임(분기 단위)이면 True. 표 키 번호가 분기가 된다
     severance: Decimal = Decimal(0)
-    funeral_cost: Decimal = Decimal(0)   # 사망이면 기본 500만
+    # 사망 사건 장례비. 비우면 0 이다(기본값을 채우지 않는다). 재산적 손해·합계에는 넣지 않는다(calculate.py).
+    funeral_cost: Decimal = Decimal(0)
 
     # 과실상계·공제
     fault_rate: Decimal = Decimal(0)
@@ -103,12 +109,22 @@ class Case:
         """가동종료일. 생년월일 + 가동연한 - 1일.
 
         골든 케이스 3: 1990.01.01. 생 + 65년 -> 2054.12.31.
+
+        2월 29일생은 가동연한이 끝나는 해가 평년이면 대응일(2. 29.)이 없다. 민법 제160조 제3항
+        (그 월 말일로 만료 -> 2. 28.)과 2. 28. 을 대응일로 보고 전날 만료(-> 2. 27.) 가운데 대법원
+        프로그램이 어느 쪽인지 확인되지 않았으므로 정하지 않고 멈춘다. work_end 를 적으면 그 값을 쓴다.
         """
         if self.work_end:
             return self.work_end
-        anniversary = date(
-            self.birth.year + self.work_limit_years, self.birth.month, self.birth.day
-        )
+        year = self.birth.year + self.work_limit_years
+        if (self.birth.month, self.birth.day) == (2, 29) and not calendar.isleap(year):
+            raise ValueError(
+                f"생년월일이 2월 29일이라 가동연한 {self.work_limit_years}년이 끝나는 {year}년에 "
+                f"대응일(2월 29일)이 없습니다. 가동종료일을 {year}. 2. 28.(민법 제160조 제3항 — 그 월 "
+                f"말일로 만료)로 볼지 {year}. 2. 27.(2. 28.을 대응일로 보고 전날 만료)로 볼지 엔진이 정하지 "
+                "않습니다. 사건 파일에 work_end(가동 종료일)를 적으십시오."
+            )
+        anniversary = date(year, self.birth.month, self.birth.day)
         return date.fromordinal(anniversary.toordinal() - 1)
 
 
@@ -122,8 +138,9 @@ def load(path: str | Path) -> Case:
               "caregiving_start", "caregiving_end"):
         if kw.get(k):
             kw[k] = _d(kw[k])
-    if "caregiving_month_mode" in kw:
-        kw["caregiving_month_mode"] = bool(kw["caregiving_month_mode"])
+    for k in ("caregiving_month_mode", "caregiving_rural"):
+        if k in kw:
+            kw[k] = bool(kw[k])
     for k in ("legal_rate", "fault_rate", "pre_offset_deduction", "paid_cure", "advance",
               "ratio_deduction", "full_deduction", "solatium", "past_treatment",
               "past_caregiving_days", "past_caregiving_price", "past_caregiving_actual",
@@ -132,6 +149,9 @@ def load(path: str | Path) -> Case:
         if kw.get(k) is not None:
             kw[k] = Decimal(str(kw[k]))
     kw["wages"] = {str(k): int(v) for k, v in (raw.get("wages") or {}).items()}
+    kw["caregiving_wages"] = {
+        str(k): int(v) for k, v in (raw.get("caregiving_wages") or {}).items()
+    }
     kw["impairments"] = [
         ImpairmentInput(
             dept=i["dept"],
@@ -142,16 +162,21 @@ def load(path: str | Path) -> Case:
         for i in raw.get("impairments", [])
     ]
     for key, cls in (("treatments", TreatmentInput), ("orthoses", OrthosisInput)):
-        kw[key] = [
-            cls(
-                name=t["name"],
-                cost=Decimal(str(t["cost"])),
-                first=_d(t["first"]),
-                last=_d(t.get("last", t["first"])),
-                duration_month=int(t.get("duration_month", 1)),
-                prior=Decimal(str(t.get("prior", 0))),
-                repeating=bool(t.get("repeating", False)),
+        items = []
+        for t in raw.get(key, []):
+            first = _d(t["first"])
+            last = _d(t.get("last", t["first"]))
+            items.append(
+                cls(
+                    name=t["name"],
+                    cost=Decimal(str(t["cost"])),
+                    first=first,
+                    last=last,
+                    duration_month=int(t.get("duration_month", 1)),
+                    prior=Decimal(str(t.get("prior", 0))),
+                    # 표시용 구분(반복/1회). 적지 않으면 입력서처럼 최종 필요일이 최초 필요일과 다른지로 정한다.
+                    repeating=bool(t["repeating"]) if "repeating" in t else last != first,
+                )
             )
-            for t in raw.get(key, [])
-        ]
+        kw[key] = items
     return Case(**kw)

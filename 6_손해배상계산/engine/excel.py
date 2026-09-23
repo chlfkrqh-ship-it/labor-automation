@@ -6,6 +6,10 @@
 
 블록 순서와 라벨 문구는 신 프로그램(SBGCalc) 출력에서 그대로 옮겼다.
 설명서 39쪽대로 대법원 엑셀에는 값만 있고 함수가 없으므로, 여기서도 값만 쓴다.
+
+프로그램에 없는 것은 셋이다. 사람이 확인할 점이 있으면 맨 뒤에 '경고' 시트를 두고 종합 시트
+3행에 알린다. [일실수입]·[향후 개호비] 제목 옆에 노임·개호 단가 기준을 적는다. 사망 사건
+장례비는 합계에 넣지 않으므로 [적극손해] 밖의 [장례비] 블록에 따로 적는다.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from .calculate import Result
+from .constants import LIVING_COST_DEATH
 
 TITLE_FONT = Font(name="맑은 고딕", size=14, bold=True)
 HEAD_FONT = Font(name="맑은 고딕", size=9, bold=True)
@@ -28,6 +33,8 @@ HEAD_FILL = PatternFill("solid", fgColor="EDEDED")
 CAP_FILL = PatternFill("solid", fgColor="FFE0E0")   # 상한에 걸린 칸
 THIN = Side(style="thin", color="BFBFBF")
 BOX = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+WARN_FONT = Font(name="맑은 고딕", size=9, bold=True, color="C00000")
+WARN_FILL = PatternFill("solid", fgColor="FFF2CC")
 
 MONEY = '#,##0" 원"'
 NUM = "#,##0"
@@ -99,6 +106,9 @@ def _summary_sheet(wb: Workbook, r: Result) -> None:
     c = r.case
     ws = wb.create_sheet("종합")
     _put(ws, 2, 2, "손해배상액 계산표", font=TITLE_FONT)
+    if r.warnings:
+        _put(ws, 3, 2, f"확인할 점 {len(r.warnings)}건 — '경고' 시트를 먼저 보십시오", font=WARN_FONT)
+    death = c.injury_type == "사망"
     row = _basic_block(ws, r, 5)
 
     # ---------------------------------------------------------- 노동능력 상실률
@@ -108,11 +118,14 @@ def _summary_sheet(wb: Workbook, r: Result) -> None:
     row += 1
     row = _headers(ws, row, ["진료과", None, "개별수치(%)", None, "기왕증(%)",
                              "중복장해(%)", None, "단순중복장해(%)", None, "기왕증 기여도(%)"])
-    for imp in [i for i in c.impairments if not i.years]:
+    permanent = [i for i in c.impairments if not i.years]
+    for imp in permanent:
         _put(ws, row, 2, imp.dept, box=True)
         _put(ws, row, 4, float(imp.rate), box=True, fmt=RATE)
         _put(ws, row, 6, float(imp.prior) or None, box=True, fmt=RATE)
         row += 1
+    if not permanent:
+        row += 1      # 영구장해 행이 없으면 빈 행에 적는다. 머리글을 덮어쓰지 않는다.
     _put(ws, row - 1, 7, float(r.combined_rate), box=True, fmt=RATE)
     _put(ws, row - 1, 11, float(r.prior_contribution), box=True, fmt=RATE)
     row += 1
@@ -131,6 +144,8 @@ def _summary_sheet(wb: Workbook, r: Result) -> None:
         row += 1
 
     # ---------------------------------------------------------- 일실수입
+    if r.wage_basis:
+        _put(ws, row, 4, f"노임 기준 : {r.wage_basis}")
     row = _block(ws, row, "[일실수입]")
     head = ["순번", "기간초일", "기간말일", "노임단가", "일수", "월소득",
             "상실률(%)" if c.injury_type != "사망" else "생계비",
@@ -143,7 +158,7 @@ def _summary_sheet(wb: Workbook, r: Result) -> None:
     for r_ in r.income_rows:
         vals = [
             r_.step, _d(r_.start), _d(r_.end), int(r_.wage), r_.days, int(r_.salary),
-            float(r_.loss_rate) if c.injury_type != "사망" else str(r_.living_cost),
+            float(r_.loss_rate) if not death else LIVING_COST_DEATH,
             r_.m1, float(r_.raw_factor + 0), r_.m2, None,
             r_.m1 - r_.m2, float(r_.factor), int(r_.amount),
         ]
@@ -187,12 +202,19 @@ def _summary_sheet(wb: Workbook, r: Result) -> None:
     money_line("향후 개호비", r.future_caregiving_total)
     money_line("기왕 보조구", 0)
     money_line("향후 보조구", r.orthosis_total)
-    if c.injury_type == "사망":
-        money_line("장례비", c.funeral_cost)
     row += 1
     _put(ws, row, 2, "적극손해 합계 : ", font=HEAD_FONT)
     _put(ws, row, 14, int(r.active_total), font=HEAD_FONT, fmt=MONEY)
     row += 2
+
+    if death:
+        # 장례비는 재산적 손해·합계에 넣지 않는다(calculate.py). [적극손해] 안에 두면 항목의 합과
+        # '적극손해 합계'가 어긋나므로 블록을 따로 둔다.
+        _put(ws, row, 2, "[장례비]", font=BLOCK_FONT)
+        _put(ws, row, 4, "재산적 손해·과실상계·합계에 넣지 않음")
+        row += 1
+        money_line("장례비", c.funeral_cost)
+        row += 1
 
     _put(ws, row, 2, "재산적 손해(소극손해 + 적극손해) : ", font=HEAD_FONT)
     _put(ws, row, 14, int(r.property_damage), font=HEAD_FONT, fmt=MONEY)
@@ -245,10 +267,11 @@ def _summary_sheet(wb: Workbook, r: Result) -> None:
                              None, "재산상 손해", None, "재산손해 + 위자료"])
     _put(ws, row, 2, 1, box=True)
     _put(ws, row, 3, c.name, box=True)
-    _put(ws, row, 4, int(r.solatium_auto), box=True, fmt=NUM)
+    # 사망 사건은 자동계산 기준(노동능력상실률)이 없어 비워 둔다. 재산상 손해는 과실상계·공제 뒤 값이다.
+    _put(ws, row, 4, None if death else int(r.solatium_auto), box=True, fmt=NUM)
     _put(ws, row, 6, int(c.solatium), box=True, fmt=NUM)
-    _put(ws, row, 8, int(r.property_damage), box=True, fmt=NUM)
-    _put(ws, row, 10, int(r.property_damage + c.solatium), box=True, fmt=NUM)
+    _put(ws, row, 8, int(st["재산상손해_합계"]), box=True, fmt=NUM)
+    _put(ws, row, 10, int(st["합계"]), box=True, fmt=NUM)
     row += 3
 
     for label, value in [
@@ -330,6 +353,8 @@ def _caregiving_sheet(wb, r):
         _put(ws, row + 1, 11, int(r.past_caregiving_total), font=HEAD_FONT, fmt=MONEY)
         row += 3
         _put(ws, row, 2, "[향후 개호비]", font=BLOCK_FONT)
+        if r.caregiving_basis:
+            _put(ws, row, 4, f"개호비 단가 기준 : {r.caregiving_basis}")
         row += 1
         row = _headers(ws, row, ["순번", "기간초일", "기간말일", "개호비 단가", "인원",
                                  "기왕증(%)", "월비용", "M1", "호프만1", "M2", "호프만2",
@@ -408,6 +433,17 @@ def _severance_sheet(wb, r):
     _detail_sheet(wb, r, "퇴직금(일반)", build)
 
 
+def _warning_sheet(wb: Workbook, r: Result) -> None:
+    """사람이 확인할 점. 노동 금액 계산표의 '경고' 시트와 같은 모양이다."""
+    ws = wb.create_sheet("경고")
+    _put(ws, 1, 1, "사람이 확인할 점", font=TITLE_FONT)
+    for i, text in enumerate(r.warnings, 3):
+        c = _put(ws, i, 1, text, fill=WARN_FILL)
+        c.alignment = Alignment(wrap_text=True, vertical="top")
+    ws.column_dimensions["A"].width = 140
+    ws.sheet_view.showGridLines = False
+
+
 def _widths(ws):
     widths = {1: 2, 2: 16, 3: 12, 4: 13, 5: 13, 6: 13, 7: 12, 8: 12, 9: 11,
               10: 12, 11: 11, 12: 12, 13: 11, 14: 13, 15: 16, 16: 3, 17: 20,
@@ -426,6 +462,8 @@ def write_workbook(result: Result, path: str | Path) -> Path:
     _caregiving_sheet(wb, result)
     _orthosis_sheet(wb, result)
     _severance_sheet(wb, result)
+    if result.warnings:
+        _warning_sheet(wb, result)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(path)
