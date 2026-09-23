@@ -1,3 +1,4 @@
+import http.client
 import importlib.util
 import io
 import json
@@ -144,6 +145,49 @@ class LawGoTests(unittest.TestCase):
         self.assertEqual(lawgo.cited_cases(text), [('대법원', '2011두2132'), ('대법원', '2011두2149'), ('서울고등법원', '2019누1234'),
                                                    ('서울고등법원', '2019누1235'), ('헌법재판소', '2014헌바202'), ('대법원', '90다카25420')])
         self.assertEqual(lawgo.cited_cases('2019년 3월 12일 근로계약 제3조 제2항'), [])
+
+    def test_case_number_comes_from_system(self):
+        """사건번호 정규식은 공통/scripts/system.py 한 곳에 둔다(citation_check 와 같은 정의)."""
+        spec = importlib.util.spec_from_file_location('workflow_system', Path(__file__).parents[1] / 'scripts' / 'system.py')
+        system = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(system)
+        self.assertEqual((lawgo.CASE_NUMBER.pattern, lawgo.CASE_TYPES), (system.CASE_NUMBER, system.CASE_TYPES))
+        # 부호 앞뒤 공백은 지워서 돌려준다
+        self.assertEqual(lawgo.cited_cases('수원지방법원 2019. 1. 1. 선고 2018노 3955 판결, 대법원 1990. 1. 1. 선고 87다카2132 판결'),
+                         [('수원지방법원', '2018노3955'), ('대법원', '87다카2132')])
+
+    def test_call_retries_dropped_connection(self):
+        """응답 도중 끊긴 연결(RemoteDisconnected·IncompleteRead)도 다시 시도한다."""
+        class Broken(Response):
+            def read(self, *args):
+                raise http.client.IncompleteRead(b'{"Prec')
+
+        payload = json.dumps({'PrecSearch': {'totalCnt': '1', 'prec': [prec(1)]}}).encode('utf-8')
+        for failure in (http.client.RemoteDisconnected('Remote end closed connection without response'),
+                        ConnectionResetError(104, 'Connection reset by peer'), Broken(b'')):
+            attempts = []
+
+            def flaky(request, timeout=None):
+                attempts.append(request.full_url)
+                if len(attempts) == 1:
+                    if isinstance(failure, Exception):
+                        raise failure
+                    return failure
+                return Response(payload)
+
+            with self.subTest(failure=type(failure).__name__), mock.patch.object(lawgo, 'OPENER', flaky), \
+                    mock.patch.object(lawgo.time, 'sleep'):
+                result = lawgo.search('판례', '통상임금')
+                self.assertEqual((len(attempts), result['받은건수']), (2, 1))
+
+    def test_call_gives_up_as_connection_failure(self):
+        def dropped(request, timeout=None):
+            raise http.client.RemoteDisconnected('Remote end closed connection without response')
+
+        with mock.patch.object(lawgo, 'OPENER', dropped), mock.patch.object(lawgo.time, 'sleep'):
+            with self.assertRaises(lawgo.LawGoError) as caught:
+                lawgo.search('판례', '통상임금')
+        self.assertTrue(str(caught.exception).startswith('연결 실패'))
 
     def test_cited_cases_ignores_lbox_header_and_uncited_numbers(self):
         # 2026. 9. 17. LBOX 보관 본문의 머리 모양: 화면 글자가 법원명에 붙고, 상·하위 판결 목록에는 '선고'가 없다

@@ -15,17 +15,34 @@
 
 `name` 을 적으면 그 이름을 그대로 쓴다. 법원에서 내려받은 파일명은 제목이 두 번
 들어가고 대리인 이름이 붙어 있으므로, 그때 짧은 이름을 함께 지정한다.
+
+이미 호증번호로 시작하는 파일은 번호를 새로 붙이지 않는다. `name` 이 있으면 그 이름으로
+줄인다. 계획의 호증(또는 `name` 앞머리의 번호)이 파일명의 번호와 다르면 적용하지 않고
+`번호불일치` 로 막는다. 어느 쪽이 맞는지는 파일 내용을 열어 사람이 정한다.
 """
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import re
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-ALREADY = re.compile(r'^(갑|을|을가|을나|노|사)\s*제?\s*\d+\s*호증')
+_spec = importlib.util.spec_from_file_location('workflow_system', ROOT / '공통/scripts/system.py')
+_system = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_system)
+# 파일명 앞머리의 호증번호. 접두어는 공통/scripts/system.py 의 정의를 쓴다.
+ALREADY = re.compile(r'^(' + _system.EVIDENCE_PREFIX + r')\s*(?:제\s*)?(\d+)\s*호증(?:\s*의\s*(\d+))?')
+
+
+def label_of(text):
+    """'을 제3호증 인사규정.pdf' → '을제3호증'. 호증번호로 시작하지 않으면 None."""
+    m = ALREADY.match(text.strip())
+    if not m:
+        return None
+    return '%s제%d호증' % (m[1], int(m[2])) + ('의%d' % int(m[3]) if m[3] else '')
 
 
 def plan_one(item):
@@ -36,10 +53,21 @@ def plan_one(item):
         return dict(result, status='루트밖')
     if not source.is_file():
         return dict(result, status='없음')
-    if ALREADY.match(source.name):
-        return dict(result, status='이미부여', name=source.name)
+    wanted = label_of(label)
+    if wanted is None:
+        return dict(result, status='호증오류')
+    given = item.get('name')
+    if given and label_of(given) not in (None, wanted):
+        return dict(result, status='번호불일치', name=given)
+    current = label_of(source.name)
+    if current is not None:
+        # 파일명에 이미 번호가 있다. 계획과 다르면 어느 쪽이 맞는지 사람이 정한다.
+        if current != wanted:
+            return dict(result, status='번호불일치', name=source.name)
+        if not given or given == source.name:
+            return dict(result, status='이미부여', name=source.name)
 
-    name = item.get('name') or label + '_' + source.name
+    name = given or label + '_' + source.name
     if Path(name).name != name:
         return dict(result, status='이름오류', name=name)
     target = source.with_name(name)
