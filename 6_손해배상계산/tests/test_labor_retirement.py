@@ -130,6 +130,53 @@ def test_G5_monthly_avg_원고_계산_비교용():
     assert res3.final_severance == floor(ord_base * (365 + 59) / 365)    # 전체 정밀도면 2,853,308
 
 
+def test_G5_monthly_avg_월기준액은_사건yaml에서도_적는다():
+    # 사건.yaml·cli 경로에는 deps 가 없으므로 retirement.monthly_wage_base 로 받는다(원고 계산 월 기준액 2,456,267원)
+    raw = {"hire_date": "2023-01-01", "last_working_day": "2024-02-28", "monthly_wage_base": 2456267}
+    assert run(raw, rs_service_ratio_mode="monthly_avg").final_severance == 2853307
+    assert run(raw, monthly=D(3000000), rs_service_ratio_mode="monthly_avg").final_severance == \
+        floor(D(3000000) * (365 + 59) / 365)               # deps 가 있으면 deps 우선
+    with pytest.raises(LaborError, match="retirement.monthly_wage_base"):
+        run({"hire_date": "2023-01-01", "last_working_day": "2024-02-28"}, avg=1, rs_service_ratio_mode="monthly_avg")
+    with pytest.raises(LaborError, match="음수"):
+        load_retirement({**raw, "monthly_wage_base": -1})
+
+
+def test_monthly_avg_는_사건yaml_경로로_계산된다():
+    import yaml
+    from engine.labor.calculate import calculate_labor, load_labor_case
+
+    sample = Path(__file__).resolve().parent.parent / "cases" / "labor_sample.yaml"
+    case = yaml.safe_load(sample.read_text(encoding="utf-8"))
+    case["options"]["rs_service_ratio_mode"] = "monthly_avg"
+    case["retirement"] = dict(case.get("retirement") or {}, monthly_wage_base=3000000)
+    res = calculate_labor(load_labor_case(case))
+    ret = res.parts["retirement"]
+    hire, last = date(2021, 3, 2), date(2025, 6, 30)            # labor_sample worker
+    years, rem = years_and_days(hire, last)
+    assert ret.final_severance == floor(D(3000000) * (years * 365 + rem) / 365)
+    assert any("원고 주장" in w for w in res.warnings)
+
+
+# ================================================================ RS-06 지급기일과 지연손해금
+@pytest.mark.parametrize("due_opt,due", [("statutory_14", date(2023, 7, 14)), ("day_after_retirement", date(2023, 6, 30))])
+def test_퇴직금_차액은_지급사유_발생일을_지연손해금에_넘긴다(due_opt, due):
+    from engine.labor.interest import OPTIONS as DI_OPTIONS, calculate_interest, load_interest
+
+    res = run({"hire_date": "2019-03-04", "last_working_day": "2023-06-30"}, avg=100000, rs_due_date=due_opt)
+    [claim] = res.claims
+    assert claim.due_date == due and claim.trigger_date == date(2023, 7, 1)
+    # worker.last_working_day 가 없어도 due_date 에서 역산하지 않는다: 20%는 마지막 근무일 + 15일부터, 시효 기산은 7. 1.
+    di_opts = {k: s.default for k, s in DI_OPTIONS.items()} | {"di_exclusion_end": "none"}
+    r = calculate_interest(load_interest({"employer_merchant": True, "suit_filed_date": "2026-06-25"}), di_opts, [claim])
+    segs = r.schedules[0].segments
+    assert (segs[-1].start, segs[-1].rate) == (date(2023, 7, 15), Decimal(20))
+    assert segs[0].start == due + timedelta(days=1)
+    lr = r.limitation[0]
+    assert lr.start == date(2023, 7, 1) and lr.suspect is False
+    assert not any("지급기일 − 13일" in w for w in r.warnings)
+
+
 # ================================================================ 골든 G6 전주지방법원 군산지원 2023가단56185
 @pytest.mark.parametrize("avg,days,last,expected,interest_from", [
     (76666, 8541, date(2023, 2, 28), 53819532, date(2023, 3, 15)),

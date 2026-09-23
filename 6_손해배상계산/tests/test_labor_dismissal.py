@@ -226,6 +226,25 @@ def test_G06_매월_평균임금_재산정_부당이득_청구액_제한():
     assert res.refund_awardable == 20847000 and res.total == 20847000 and res.claims == []
 
 
+def annual_case(incomes, **opt):
+    return run(base(dismissal_date="2023-01-01", reinstatement_date="2024-07-01",
+                    wage_items=[{"name": "기본급", "category": "base", "monthly": 3000000}], interim_income=incomes),
+               ii_cap_base="C_contract_wage_ratio", ii_income_allocation="annual_equal_monthly", **opt)
+
+
+def test_연간총액_12등분은_여러_기간에_걸친_총액에만():
+    annual = {"start": "2023-01-01", "end": "2023-12-31", "amount": 12000000, "type": "employment"}
+    res = annual_case([annual, {"start": "2024-03-01", "end": "2024-03-31", "amount": 600000, "type": "employment"}])
+    assert row(res, "2023-05").income == 1000000 and row(res, "2023-05").deduction == 900000   # 한도 3,000,000 × 30%
+    assert row(res, "2024-03").income == 600000 and row(res, "2024-03").deduction == 600000   # 한 달 수입은 ÷ 12 하지 않음
+    assert not any("1년이 아닌데" in w for w in res.warnings)
+    # 1년이 아닌 기간의 총액에 ÷ 12 를 쓰면 경고(연간 총액이 아니면 monthly_amount 로)
+    res = annual_case([annual, {"start": "2024-03-01", "end": "2024-05-31", "amount": 1500000, "type": "employment"}])
+    assert row(res, "2024-04").income == 125000
+    assert any("중간수입[2]" in w and "1년이 아닌데" in w for w in res.warnings)
+    assert not any("중간수입[1]" in w and "1년이 아닌데" in w for w in res.warnings)
+
+
 # ================================================================ G-07 수원고법 2025나11545(반올림)
 def test_G07_반올림_한도와_수입안분():
     # 11. 21.~12. 31. 수입은 판결 표가 이미지라 한도를 넘는 월 3,000,000원으로 정함.
@@ -401,6 +420,37 @@ def test_G5_해고기간_원단위_올림():
     assert row(res, "2019-07").pay == 1129040
 
 
+# ================================================================ 끝수·한도 기준 옵션 고정(판결 숫자가 없는 분기 — 산식으로)
+def test_원단위_반올림_일할과_일액_소수_둘째자리():
+    res = g5(dw_proration_rounding="round10_half_up")
+    assert row(res, "2019-07").pay == 1129030            # 5,000,000 × 7/31 = 1,129,032.2… → 원 단위에서 반올림
+    assert res.dismissal_total == 1129030 + 5000000 * 15 + 4000000
+    res = run(base(dismissal_date="2021-01-01", termination={"date": "2021-04-29", "cause": "waiver"},
+                   base_wage={"three_month_total": 10500000, "three_month_days": 92}),
+              dw_base_wage_method="avg_daily_3m", dw_daily_rate_rounding="keep_2dp")
+    assert res.rows[0].items == {"평균임금 일액": D("114130.43")}   # 10,500,000 ÷ 92 소수점 둘째 자리
+    assert res.total == sum(fl(D("114130.43") * n) for n in (31, 28, 31, 29))
+
+
+def test_월한도_먼저_끊고_일할_월중_일부():
+    res = run(base(start_date="2024-07-01", past_until="2024-07-31",
+                   wage_items=[{"name": "월급", "category": "base", "monthly": 2719539}],
+                   interim_income=[{"start": "2024-07-13", "end": "2024-07-31", "amount": 2000000, "type": "employment"}]),
+              ii_cap_base="C_contract_wage_ratio", ii_rounding_order="rate_first")
+    jul = row(res, "2024-07")
+    assert jul.limit == fl(fl(D(2719539) * D("0.3")) * 19 / 31)   # 월 한도 → 버림 → 19/31 일할 → 버림
+    assert jul.deduction == jul.limit
+
+
+def test_한도_W를_원천징수후_금액으로():
+    res = run(base(start_date="2024-01-01", past_until="2024-01-31", withholding_rate="0.033",
+                   wage_items=[{"name": "월급", "category": "base", "monthly": 3000000}],
+                   interim_income=[{"start": "2024-01-01", "end": "2024-01-31", "amount": 2000000, "type": "employment"}]),
+              ii_cap_base="C_contract_wage_ratio", ii_wage_basis_for_cap="net_of_withholding")
+    limit = fl(fl(D(3000000) * (1 - D("0.033"))) * D("0.3"))      # floor(2,901,000 × 30%) = 870,300
+    assert row(res, "2024-01").limit == limit and res.total == 3000000 - limit
+
+
 # ================================================================ G6 수원지법 여주지원 2023가합11391
 def test_G6_3개월평균_통상임금_하한과_중간수입_2개월14일():
     res = run(base(
@@ -440,6 +490,16 @@ def test_G8_노동위원회_금전보상():
     with pytest.raises(LaborError, match="구제신청"):
         run({"mode": "labor_commission_award", "start_date": "2020-11-01", "small_business": True,
              "labor_commission": {"monthly_wage": 3000000, "decision_date": "2020-12-17"}})
+
+
+def test_송달일수_빈칸은_30일_형식이_틀리면_입력_오류():
+    lc = {"monthly_wage": 3000000, "decision_date": "2020-12-17"}
+    res = run({"mode": "labor_commission_award", "start_date": "2020-11-01", "labor_commission": {**lc, "service_days": None}})
+    assert res.total == 7594510                            # 비우면 30일(G8 과 같음)
+    for bad in ("30일", -1, 1.5, True):
+        with pytest.raises(LaborError, match="service_days"):
+            load_dismissal({"mode": "labor_commission_award", "start_date": "2020-11-01",
+                            "labor_commission": {**lc, "service_days": bad}}, W25)
 
 
 # ================================================================ G9 대법원 93다21736 원심(파기)
@@ -625,6 +685,61 @@ def test_복직명령_불응_종기와_갱신기대권():
     assert res2.end_date == date(2024, 5, 31) and res2.total == 15000000
 
 
+def renewal_case(**dismissal):
+    raw = base(start_date="2023-01-01", termination={"date": "2022-12-31", "cause": "contract_end"},
+               renewal_expectation=True, closing_date="2025-05-01",
+               wage_items=[{"name": "기본급", "category": "base", "monthly": 3000000}])
+    raw.update(dismissal)
+    return raw
+
+
+def test_갱신기대권이면_갱신간주_만료일이_근로관계_종료일():
+    # 원래 계약만료일(2022. 12. 31.)이 아니라 갱신 간주된 계약기간 만료일에 근로관계가 끝난다(DW-10·DW-18, 2007두1729)
+    res = run(renewal_case(renewed_term_end="2024-12-31"))
+    info = res.claim_info
+    assert res.end_date == date(2024, 12, 31) and len(res.claims) == 24
+    assert (info.employment_status, info.termination_date, info.settlement_deadline, info.interest_end_cause) == \
+        ("terminated", date(2024, 12, 31), date(2025, 1, 14), "contract_end")
+    assert all(i.before_termination for i in info.installments)           # 정기지급일 2024. 12. 25.까지 모두 종료 전
+    assert "원래 계약만료일 2022. 12. 31." in res.claims[0].note and "2025. 1. 14." in res.claims[0].note
+    assert any("2007두1729" in n for n in info.notes)
+    # 갱신 간주 만료일이 없으면 근로관계 계속 — 지연손해금 모듈에 종료일을 넘기지 않는다
+    res = run(renewal_case())
+    info = res.claim_info
+    assert res.end_date is None and res.future_monthly_amount == 3000000
+    assert (info.employment_status, info.termination_date, info.settlement_deadline, info.interest_end_cause) == \
+        ("continuing", None, None, None)
+    assert all(i.before_termination is None for i in info.installments)
+
+
+def test_갱신기대권_해고기간_임금의_지연손해금_20_기산일():
+    from engine.labor.calculate import calculate_labor, load_labor_case
+
+    def interest_of(dismissal):
+        case = {"kind": "labor", "worker": {"hire_date": "2021-01-01", "employer_merchant": True, "pay_day": 25},
+                "dismissal": dismissal, "interest": {"calc_until": "2025-06-30"},
+                "options": {"di_exclusion_end": "none"}}
+        return calculate_labor(load_labor_case(case)).parts["interest"]
+
+    it = interest_of(renewal_case(renewed_term_end="2024-12-31"))
+    # 구법 도래분: 정기지급일 다음 날부터 6%, 근로관계 종료(2024. 12. 31.) + 15일부터 20%(DI-03)
+    assert [(s.start, s.rate) for s in it.schedules[0].segments] == [(date(2023, 1, 26), D(6)), (date(2025, 1, 15), D(20))]
+    assert [(s.start, s.rate) for s in it.schedules[-1].segments] == [(date(2024, 12, 26), D(6)), (date(2025, 1, 15), D(20))]
+    assert it.total == 10967792                            # 원래 계약만료일을 종료일로 보면 21,185,748원(20% 과다)
+    it = interest_of(renewal_case())
+    assert {s.rate for sch in it.schedules for s in sch.segments} == {D(6)}   # 재직 중 구법분 — 20% 없음(2014다28305)
+
+
+def test_worker_마지막근무일이_근로관계_종료일보다_앞서면_경고():
+    res = run(renewal_case(renewed_term_end="2024-12-31"), worker={"pay_day": 25, "last_working_day": "2022-12-31"})
+    assert any("worker.last_working_day 2022. 12. 31." in w and "2024. 12. 31. 보다 앞섭니다" in w and "DI-03" in w
+               for w in res.warnings)
+    res = run(renewal_case(), worker={"pay_day": 25, "last_working_day": "2022-12-31"})
+    assert any("worker.last_working_day 2022. 12. 31." in w and "계속되는 것으로" in w for w in res.warnings)
+    res = run(renewal_case(renewed_term_end="2024-12-31"), worker={"pay_day": 25, "last_working_day": "2024-12-31"})
+    assert not any("worker.last_working_day" in w for w in res.warnings)
+
+
 def test_실비변상_성과급_시간외수당_포함_판단():
     raw = base(start_date="2024-01-01", past_until="2024-01-31", small_business=False, wage_items=[
         {"name": "월급", "category": "base", "monthly": 3000000},
@@ -730,3 +845,7 @@ def test_입력_누락_오류():
             dw_amount_basis="net_of_withholding")
     with pytest.raises(LaborError, match="하나만"):
         load_dismissal(base(dismissal_date="2024-01-01", wage_items=[{"name": "월급", "monthly": 1, "annual": 12}]), W25)
+    with pytest.raises(LaborError, match="시작과 끝"):
+        load_dismissal(base(dismissal_date="2024-01-01", employer_claim_periods=[["2024-09-01", None]]), W25)
+    with pytest.raises(LaborError, match="앞섭니다"):
+        load_dismissal(base(dismissal_date="2024-01-01", employer_claim_periods=[["2024-09-01", "2024-08-01"]]), W25)

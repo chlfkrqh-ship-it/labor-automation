@@ -91,6 +91,9 @@ DW-18 [판례확립·법령·불명확] 지연손해금은 이 모듈이 계산�
       interest 모듈). Claim.settlement 는 근로관계가 끝났어도 False 로 둔다 — interest 모듈은 settlement=True 를
       'due_date = 마지막 근무일 + 14일인 청산 금품'으로 읽기 때문이다(DI-02). 종료일·사유는 interest 절의
       last_working_day·end_cause 로 옮기고, 제36조 기한은 claim_info.settlement_deadline(종료일 + 14일)에 둔다.
+      종료일은 근로관계가 실제로 끝난 날이다 — 갱신기대권이 인정되면 원래 계약만료일(termination.date)이 아니라 갱신
+      간주된 계약기간 만료일(renewed_term_end)이고, 그 날이 없으면 근로관계 계속(continuing)으로 넘긴다(DW-10, 2007두1729).
+      worker.last_working_day 가 이 종료일보다 앞서면(해고일·원래 계약만료일을 적은 경우 등) warning.
 DW-19 [판례확립] 과거분 확정액과 "YYYY. M. D.부터 복직시까지 월 X원"(97다58194, 2009다102452, 2024다294156 기판력)
       → `result.future_monthly_amount`, `future_start_date`. 장래분에는 끝나지 않은 중간수입(end 없음)을 계속 반영
       (`dw_future_interim`, 속초 "월 2,993,230원"). 항목 누락은 기판력으로 추가 청구가 막히므로 warning.
@@ -141,7 +144,10 @@ II-06 [판례확립(대응 원칙)·하급심(단위·일할·안분)] 중간수
         `ii_income_allocation`(기본값은 사용자가 정함 — 필요할 때 없으면 오류): calendar_days(수입 총액 × 겹친 일수 ÷
         수입 기간 일수, 2023가합203713) | assigned_wage_period(항목 assigned_period 로 귀속 임금산정기간 지정, 부산고법
         2020나54503 7. 8.~8. 5. 급여를 7월분에) | annual_equal_monthly(연간 총액 ÷ 12, 서울고법 2012나55770 각주,
-        광주지법 2017나58303). 항목에 assigned_period 나 monthly_amount 가 있으면 그것을 따른다.
+        광주지법 2017나58303). 항목에 assigned_period 나 monthly_amount 가 있으면 그것을 따른다. 이 옵션은 여러 비교
+        기간에 걸친 총액(amount) 항목에만 적용하고, 비교 기간 하나 안의 수입은 안분하지 않고 그대로 공제한다.
+        annual_equal_monthly 는 연간 총액용이다 — 수입 기간이 1년이 아닌 총액에 쓰면 ÷ 12를 하되 warning(연간 총액이
+        아니면 monthly_amount 로 적는다).
         `ii_cap_window`: income_overlap_days(기본 — 한도를 수입과 겹친 날의 임금으로만 계산, 2023가합203713·2025나11545) |
         whole_wage_period(임금산정기간 전체 한도, 조사자 원안 — 2023가합203713 11월분이 1,903,678원이 되어 판결과 불일치).
         assigned_period 항목은 그 기간 전체와 비교한다(부산고법).
@@ -452,7 +458,8 @@ OPTIONS: dict[str, OptionSpec] = {s.key: s for s in [
         None: "미선택 — 안분이 필요하면 오류",
         "calendar_days": "수입 기간 역일수 비례(대전지법 2023가합203713)",
         "assigned_wage_period": "항목 assigned_period 로 귀속(부산고법 2020나54503)",
-        "annual_equal_monthly": "연간 총액 ÷ 12(서울고법 2012나55770, 광주지법 2017나58303)",
+        "annual_equal_monthly": "연간 총액 ÷ 12(서울고법 2012나55770, 광주지법 2017나58303) — 여러 기간에 걸친 총액 항목에만, "
+                                "수입 기간이 1년이 아니면 경고",
     }),
     OptionSpec("ii_cap_window", "income_overlap_days", "한도 산정 창", "II-06", {
         "income_overlap_days": "수입과 겹친 날의 임금으로 한도(2023가합203713, 2025나11545)",
@@ -661,6 +668,7 @@ class DismissalInput:
     pay_day: int | None = None
     pay_month_offset: int = 0
     employer_merchant: bool | None = None
+    worker_last_working_day: date | None = None   # worker.last_working_day(지연손해금 모듈이 마지막 근무일로 씀)
 
 
 # ================================================================ 결과
@@ -712,7 +720,7 @@ class DismissalClaimInfo:
 
     employment_status: str                  # continuing | reinstated | terminated
     reinstatement_date: date | None
-    termination_date: date | None
+    termination_date: date | None           # 근로관계가 실제로 끝난 날(갱신기대권이면 갱신 간주 만료일, DW-18)
     termination_cause: str | None
     settlement_deadline: date | None        # 종료일 + 14일(제36조)
     dismissal_invalid_final: bool | None
@@ -946,8 +954,30 @@ def _periods(raw, label: str) -> list:
     for i, pr in enumerate(raw or [], 1):
         if not isinstance(pr, (list, tuple)) or len(pr) != 2:
             raise LaborError(f"해고기간 임금: {label}[{i}] 는 [시작, 끝] 이어야 합니다")
-        out.append((_date(pr[0], f"{label}[{i}]"), _date(pr[1], f"{label}[{i}]")))
+        s, e = _date(pr[0], f"{label}[{i}]"), _date(pr[1], f"{label}[{i}]")
+        if s is None or e is None:
+            raise LaborError(f"해고기간 임금: {label}[{i}] 는 시작과 끝 날짜를 모두 적어야 합니다 — 끝이 열려 있으면"
+                             "(예: '2019. 1. 14.부터 계속') 청구 기간 마지막 날(과거분 마감일·변론종결일)을 적으십시오")
+        if e < s:
+            raise LaborError(f"해고기간 임금: {label}[{i}] 의 끝 {_fmt(e)} 이 시작 {_fmt(s)} 보다 앞섭니다")
+        out.append((s, e))
     return out
+
+
+def _service_days(v) -> int:
+    """노동위원회 금전보상 송달기간 일수(DW-21). 비우면 30일."""
+    if v is None or v == "":
+        return 30
+    bad = LaborError(f"해고기간 임금: labor_commission.service_days 는 정수(일수)여야 합니다: {v!r}")
+    if isinstance(v, bool) or (isinstance(v, float) and not v.is_integer()):
+        raise bad
+    try:
+        n = int(v.strip()) if isinstance(v, str) else int(v)
+    except (TypeError, ValueError):
+        raise bad from None
+    if n < 0:
+        raise LaborError(f"해고기간 임금: labor_commission.service_days 는 0 이상이어야 합니다: {v!r}")
+    return n
 
 
 def load_dismissal(raw: dict, worker: dict | None = None) -> DismissalInput:
@@ -1056,7 +1086,7 @@ def load_dismissal(raw: dict, worker: dict | None = None) -> DismissalInput:
         lc = _dict(lc, "labor_commission", {"monthly_wage", "decision_date", "service_days"})
         lc = {"monthly_wage": _num(lc.get("monthly_wage"), "labor_commission.monthly_wage"),
               "decision_date": _date(lc.get("decision_date"), "labor_commission.decision_date"),
-              "service_days": int(lc.get("service_days", 30))}
+              "service_days": _service_days(lc.get("service_days"))}
     if mode == "labor_commission_award" and (lc is None or lc["monthly_wage"] is None or lc["decision_date"] is None):
         raise LaborError("해고기간 임금: 노동위원회 금전보상 모드에는 labor_commission.monthly_wage 와 decision_date 가 필요합니다")
 
@@ -1102,6 +1132,7 @@ def load_dismissal(raw: dict, worker: dict | None = None) -> DismissalInput:
         refund_claimed_amount=_num(raw.get("refund_claimed_amount"), "refund_claimed_amount"),
         labor_commission=lc, pay_period_start_day=start_day, pay_day=pay_day, pay_month_offset=offset,
         employer_merchant=_bool(worker.get("employer_merchant"), "worker.employer_merchant"),
+        worker_last_working_day=_date(worker.get("last_working_day"), "worker.last_working_day"),
     )
     if inp.dismissal_date is None and inp.start_date is None:
         raise LaborError("해고기간 임금: 해고 효력발생일(dismissal_date) 또는 기산일(start_date)이 없습니다")
@@ -1448,7 +1479,8 @@ def _end_candidates(inp: DismissalInput, ctx: _Ctx) -> list:
             if inp.renewed_term_end is not None:
                 c.append((inp.renewed_term_end, f"갱신기대권 — 갱신 간주된 계약기간 만료일(2007두1729)", "DW-10"))
             else:
-                ctx.warn("갱신기대권이 인정되는데 갱신 간주 계약기간 만료일(renewed_term_end)이 없어 계약만료일을 종기로 쓰지 않았습니다")
+                ctx.warn("갱신기대권이 인정되는데 갱신 간주 계약기간 만료일(renewed_term_end)이 없어 계약만료일을 종기로 쓰지 않았고, "
+                         "근로관계가 계속된 것으로 보아 지연손해금 모듈에 종료일을 넘기지 않았습니다")
         else:
             c.append((inp.termination_date, f"근로관계 종료일({TERMINATION_CAUSES[inp.termination_cause]})", "DW-10"))
     ro = inp.return_order
@@ -1552,14 +1584,27 @@ def _deductible_incomes(inp: DismissalInput, ctx: _Ctx, claim_days: set, future:
     return out
 
 
+def _one_year_end(start: date) -> date:
+    """start(초일 산입)부터 1년의 만료일 — 민법 제160조(대응일 전날, 대응일이 없으면 그 월 말일)."""
+    t = add_months(start, 12)
+    return t if t.day != start.day else t - timedelta(days=1)
+
+
 def _alloc_amount(inc_amount: Decimal | None, monthly: Decimal | None, overlap: int, win_period_days: int,
-                  income_days: int, idx: int, spans_many: bool, ctx: _Ctx) -> Decimal:
+                  income_days: int, idx: int, spans_many: bool, ctx: _Ctx, inc: InterimIncome | None = None) -> Decimal:
     o = ctx.o
     rnd = o["ii_rounding"]
     if overlap <= 0:
         return ZERO
+    if monthly is None and not spans_many:
+        # 비교 기간 하나 안의 수입 총액은 안분할 것이 없다 — ii_income_allocation 을 적용하지 않는다(II-06)
+        return inc_amount if overlap >= income_days else _r(inc_amount * overlap / income_days, rnd)
     if monthly is None and inc_amount is not None and o["ii_income_allocation"] == "annual_equal_monthly":
         monthly = inc_amount / 12
+        if inc is not None and inc.end is not None and inc.end != _one_year_end(inc.start):
+            ctx.warn(f"중간수입[{idx + 1}] 수입 기간 {_fmt(inc.start)}~{_fmt(inc.end)}({income_days}일)이 1년이 아닌데 "
+                     "ii_income_allocation=annual_equal_monthly 로 총액 ÷ 12를 월액으로 썼습니다 — 연간 총액이 아니면 "
+                     "monthly_amount·assigned_period 로 적거나 calendar_days 를 쓰십시오(II-06)")
     if monthly is not None:
         if overlap >= win_period_days:
             return _r(monthly, rnd)
@@ -1633,7 +1678,7 @@ def _build_windows(rows: list, row_days: list, incomes: list, ctx: _Ctx) -> list
             if not ov:
                 continue
             spans_many = len(usable - w.days) > 0 or len(days) > len(usable)
-            w.incomes[idx] = _alloc_amount(amount, monthly, ov, w.period_days, len(days), idx, spans_many, ctx)
+            w.incomes[idx] = _alloc_amount(amount, monthly, ov, w.period_days, len(days), idx, spans_many, ctx, inc)
     return [w for w in windows if w.incomes]
 
 
@@ -2143,26 +2188,45 @@ def calculate_dismissal(inp: DismissalInput, opts: dict, **deps) -> DismissalRes
     dis_total = sum((r.pay_amount for r in rows if r.kind == "dismissal"), ZERO)
     wage_total = sum((r.wage for r in rows), ZERO)
     ded_total = sum((r.deduction for r in rows), ZERO)
-    terminated = inp.termination_date is not None
+    # 근로관계가 실제로 끝난 날(지연손해금 DI-03 의 마지막 근무일). 갱신기대권이 인정되면 원래 계약만료일이 아니라
+    # 갱신 간주된 계약기간 만료일에 끝나고(DW-10, 2007두1729), 그 날이 없으면 근로관계가 계속된 것으로 본다.
+    renewal = inp.termination_cause == "contract_end" and inp.renewal_expectation
+    t_end = inp.renewed_term_end if renewal else inp.termination_date
+    terminated = t_end is not None
     status = "terminated" if terminated else ("reinstated" if inp.reinstatement_date is not None else "continuing")
+    renewal_note = ""
+    if renewal:
+        renewal_note = (f"원래 계약만료일 {_fmt(inp.termination_date)}은 갱신기대권(갱신 간주, 2007두1729)으로 근로관계 종료일이 "
+                        "아님 — " + (f"갱신 간주된 계약기간 만료일 {_fmt(t_end)}을 종료일로 봄" if terminated
+                                    else "갱신 간주 계약기간 만료일(renewed_term_end)이 없어 근로관계 계속으로 봄"))
+        trace.append(Trace("DW-10", "근로관계 종료일(지연손해금용)", _fmt(t_end) if terminated else "계속", renewal_note))
+    wl = inp.worker_last_working_day
+    if wl is not None and (t_end is None or wl < t_end):
+        ctx.warn((f"worker.last_working_day {_fmt(wl)} 이 해고기간 임금 모듈의 근로관계 종료일 {_fmt(t_end)} 보다 앞섭니다. "
+                  if terminated else f"worker.last_working_day {_fmt(wl)} 가 있는데 해고기간 임금 모듈은 근로관계가 "
+                  f"{'복직으로 이어진' if status == 'reinstated' else '계속되는'} 것으로 계산했습니다. ")
+                 + "지연손해금 모듈은 worker.last_working_day 를 마지막 근무일로 보아 구법 도래분 해고기간 임금에 그 15일째부터 "
+                 "연 20%를 붙입니다(DI-03) — 해고일·원래 계약만료일을 적었다면 지우고, 실제로 근로관계가 끝났다면 "
+                 "dismissal.termination 에도 적으십시오")
     claims, installments = [], []
     for r in rows:
         if r.pay_amount <= 0:
             continue
         cat = "해고 전 미지급 임금" if r.kind == "pre_dismissal" else "해고기간 임금"
         label = f"{cat} {r.label}({_fmt(r.start)}~{_fmt(r.end)})"
-        before_t = (r.pay_date <= inp.termination_date) if terminated and r.pay_date else None
+        before_t = (r.pay_date <= t_end) if terminated and r.pay_date else None
         note = (f"정기지급일 {_fmt(r.pay_date)}; 근로관계 {status}"
-                + (f", 종료일 {_fmt(inp.termination_date)}({TERMINATION_CAUSES[inp.termination_cause]}), "
-                   f"제36조 기한 {_fmt(inp.termination_date + timedelta(days=14))} — 이율 판단은 지연손해금 모듈" if terminated else "")
+                + (f", 종료일 {_fmt(t_end)}({TERMINATION_CAUSES[inp.termination_cause]}"
+                   + (f" — 갱신 간주, 원래 계약만료일 {_fmt(inp.termination_date)}" if renewal else "")
+                   + f"), 제36조 기한 {_fmt(t_end + timedelta(days=14))} — 이율 판단은 지연손해금 모듈" if terminated else "")
                 + ("; 원천징수 후 금액" if o["dw_amount_basis"] == "net_of_withholding" else ""))
         claims.append(Claim(cat, label, r.pay_amount, r.pay_date, False, note=note))
         installments.append(DismissalInstallment(label, r.kind, r.period_start, r.period_end, r.pay_amount, r.pay_date, before_t))
 
     info = DismissalClaimInfo(
-        employment_status=status, reinstatement_date=inp.reinstatement_date, termination_date=inp.termination_date,
-        termination_cause=inp.termination_cause,
-        settlement_deadline=(inp.termination_date + timedelta(days=14)) if terminated else None,
+        employment_status=status, reinstatement_date=inp.reinstatement_date, termination_date=t_end,
+        termination_cause=inp.termination_cause if terminated else None,
+        settlement_deadline=(t_end + timedelta(days=14)) if terminated else None,
         dismissal_invalid_final=inp.dismissal_invalid_final,
         remedy_order_issued=(inp.remedy_order or {}).get("issued"), remedy_order_final=(inp.remedy_order or {}).get("final"),
         remedy_order_date=(inp.remedy_order or {}).get("date"), employer_merchant=inp.employer_merchant,
@@ -2171,6 +2235,8 @@ def calculate_dismissal(inp: DismissalInput, opts: dict, **deps) -> DismissalRes
         amount_basis=o["dw_amount_basis"], installments=installments, payments=list(inp.payments),
         interest_end_cause=_INTEREST_END_CAUSE.get(inp.termination_cause) if terminated else None,
     )
+    if renewal_note:
+        info.notes.append(renewal_note)
     if any(r.pay_date and r.pay_date >= DATE_NEW_ART37 - timedelta(days=1) for r in rows):
         info.notes.append("정기지급일이 2025. 10. 22. 이후인 임금이 있습니다 — 개정 제37조 제1항 제2호 적용 여부는 불명확(지연손해금 모듈)")
     if inp.payments:
