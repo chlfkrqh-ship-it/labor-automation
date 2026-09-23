@@ -40,10 +40,11 @@ FIELDS = [
     ("사고일자", "accident", None),
     ("입원치료 종료일", "cure_end", "부상만. 없으면 비움"),
     ("가동연한(년)", "work_limit_years", "기본 65"),
+    ("가동 종료일", "work_end", "보통 비움. 2월 29일생이고 가동연한이 끝나는 해가 평년이면 필수"),
     ("변론 종결일", "argument_end", None),
     ("법정이율(%)", "legal_rate", "기본 5"),
     ("기대여명(년)", "life_expectancy", "표시용"),
-    ("여명 종료일", "life_end", "표시용"),
+    ("여명 종료일", "life_end", "가동종료일보다 앞서면 여명단축으로 계산(프로그램 대조 전)"),
     ("[일실수입]", None, None),
     ("직종", "occupation", "예: 보통인부"),
     ("농촌노임 사용", "rural", "예 / 아니오"),
@@ -56,8 +57,9 @@ FIELDS = [
     ("향후 개호 종료일", "caregiving_end", None),
     ("향후 개호 인원", "caregiving_headcount", "예: 1 또는 0.5"),
     ("향후 개호 기간분할", "caregiving_month_mode", "월 단위 / 분기반기 단위 (기본 월 단위)"),
+    ("향후 개호 노임 직종", "caregiving_occupation", "향후 개호가 있으면 필수. 노임표 직종명 그대로(예: 보통인부)"),
     ("일실 퇴직금", "severance", "직접 계산한 금액"),
-    ("장례비", "funeral_cost", "사망이면 기본 5,000,000"),
+    ("장례비", "funeral_cost", "사망만. 계산표에 따로 적고 합계에는 넣지 않음"),
     ("[과실상계 · 공제]", None, None),
     ("원고측 과실비율(%)", "fault_rate", None),
     ("과실상계 전 공제액", "pre_offset_deduction", "산재 휴업급여·장해급여 등"),
@@ -69,7 +71,7 @@ FIELDS = [
     ("적용 위자료", "solatium", None),
 ]
 
-DATE_FIELDS = {"birth", "accident", "cure_end", "argument_end", "life_end",
+DATE_FIELDS = {"birth", "accident", "cure_end", "work_end", "argument_end", "life_end",
                "caregiving_start", "caregiving_end"}
 INT_FIELDS = {"work_limit_years"}
 DEC_FIELDS = {"legal_rate", "life_expectancy", "past_treatment", "past_caregiving_days",

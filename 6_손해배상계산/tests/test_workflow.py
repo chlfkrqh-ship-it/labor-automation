@@ -105,6 +105,18 @@ def test_입력서를_읽으면_사건이_된다(tmp_path):
     assert len(case.wages) == 5
 
 
+
+def test_입력서의_개호_노임_직종과_가동_종료일을_읽는다(tmp_path):
+    form = _fill(make_template(tmp_path / "입력서.xlsx"))
+    ws = openpyxl.load_workbook(form)
+    sheet = ws.active
+    rows = {sheet.cell(r, 2).value: r for r in range(1, sheet.max_row + 1)}
+    sheet.cell(rows["향후 개호 노임 직종"], 4).value = "보통인부"
+    sheet.cell(rows["가동 종료일"], 4).value = "2060-02-28"
+    ws.save(form)
+    case = read_form(form)
+    assert case.caregiving_occupation == "보통인부" and case.work_end == date(2060, 2, 28)
+
 def test_입력폴더에_넣으면_결과가_나온다(workspace):
     root, processed = workspace
     assert processed == 1
