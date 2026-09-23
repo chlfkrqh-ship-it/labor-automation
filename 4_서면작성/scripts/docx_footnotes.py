@@ -17,6 +17,12 @@ docx_footnotes.py — 서면 docx의 본문 속 각주 표시를 실제 Word 각
   - 각주번호: 문자 스타일 'footnote reference'(위첨자), 본문 어구 바로 뒤(조사 앞이라도 됨)
   - 각주 본문: 단락 스타일 'footnote text'(10pt, 줄간격 1.25, 왼쪽 정렬), 첫 run은 각주번호, 이어서 한 칸 띄고 문장
   - 원문자는 본문 한글 글꼴로 통일, 가운뎃점 낱말은 noProof (docx_normalize.py와 같은 규칙)
+
+변환 방식
+  담당자가 Word 로 고친 수정안에도 돌리므로 문단을 다시 짜지 않는다. 표시 글자만 떼어 내 그 자리에
+  각주번호 run 을 넣고, 다른 run·탭·줄바꿈·변경 추적(w:ins)·하이퍼링크 안 글자는 제자리에 둔다.
+  바꾼 뒤 문단 글자가 '표시만 뺀 원래 글자'와 다르면 저장하지 않고 멈춘다.
+  닫는 ']]' 가 없거나 ']' 하나로 닫은 표시는 바꾸지 않고, --check 가 남은 표시로 센다(종료 코드 1).
 """
 import sys, re, copy
 from docx import Document
@@ -26,7 +32,10 @@ from docx.oxml import OxmlElement
 from lxml import etree
 
 W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
-MARK = re.compile(r"\[\[각주:\s*(.*?)\]\]", re.S)
+# 내용에 '[[' 나 ']]' 가 끼면 표시로 보지 않는다. ']' 하나로 잘못 닫은 표시가 뒤따르는 정상 표시와
+# 그 사이 본문 문장까지 삼켜 각주로 옮기는 일을 막는다.
+MARK = re.compile(r"\[\[각주:\s*((?:(?!\[\[|\]\]).)*)\]\]", re.S)
+OPEN = '[[각주'
 CIRC = re.compile(r"([①-⑳]+)")
 
 
@@ -82,17 +91,10 @@ def _ensure_footnotes_part(doc):
     return part
 
 
-def _text_run(template_r, text, font, rstyle=None):
-    """new run copying template formatting, with circled-number / dot-word rules applied"""
-    r = copy.deepcopy(template_r) if template_r is not None else OxmlElement('w:r')
-    for child in list(r):
-        if child.tag != qn('w:rPr'):
-            r.remove(child)
-    rpr = r.find(qn('w:rPr'))
-    if rpr is None:
-        rpr = OxmlElement('w:rPr'); r.insert(0, rpr)
-    if rstyle:
-        rs = OxmlElement('w:rStyle'); rs.set(qn('w:val'), rstyle); rpr.insert(0, rs)
+def _text_run(text, font):
+    """각주 본문용 새 run. 원문자·가운뎃점 낱말 규칙을 적용한다."""
+    r = OxmlElement('w:r')
+    rpr = OxmlElement('w:rPr'); r.append(rpr)
     if CIRC.fullmatch(text):
         for old in rpr.findall(qn('w:rFonts')): rpr.remove(old)
         f = OxmlElement('w:rFonts')
@@ -120,7 +122,144 @@ def _add_footnote_body(fn_root, fid, text, ref_sid, txt_sid, font):
     etree.SubElement(r0, qn('w:footnoteRef'))
     # text runs
     for seg in _segments(' ' + text.strip()):
-        p.append(_text_run(None, seg, font))
+        p.append(_text_run(seg, font))
+
+
+_SKIP = (qn('w:del'), qn('w:moveFrom'), qn('w:txbxContent'), qn('w:p'))
+
+
+def _runs(p):
+    """문단에 보이는 run 을 문서 순서대로. w:ins·w:hyperlink·누름틀 안의 run 은 넣고,
+    삭제 표시(w:del·w:moveFrom) 안의 run 과 글상자 안 문단의 run 은 뺀다."""
+    for r in p.iter(qn('w:r')):
+        a = r.getparent()
+        while a is not None and a is not p and a.tag not in _SKIP:
+            a = a.getparent()
+        if a is p:
+            yield r
+
+
+def _atoms(p):
+    """[(요소, 글자)] — w:t 는 그 글자, w:tab 은 '\\t', w:br·w:cr 은 '\\n'."""
+    out = []
+    for r in _runs(p):
+        for ch in r:
+            if ch.tag == qn('w:t'):
+                out.append((ch, ch.text or ''))
+            elif ch.tag == qn('w:tab'):
+                out.append((ch, '\t'))
+            elif ch.tag in (qn('w:br'), qn('w:cr')):
+                out.append((ch, '\n'))
+    return out
+
+
+def visible_text(p):
+    """문단의 보이는 글자(탭·줄바꿈 포함, 삭제 표시 제외). p 는 w:p 요소."""
+    return ''.join(t for _, t in _atoms(p))
+
+
+def _paragraphs(doc):
+    """본문의 모든 문단(표 칸·글상자 안 포함). 문단마다 제 run 만 보므로 글자를 두 번 세지 않는다."""
+    return list(doc.element.body.iter(qn('w:p')))
+
+
+def _in_textbox(p):
+    a = p.getparent()
+    while a is not None:
+        if a.tag == qn('w:txbxContent'):
+            return True
+        a = a.getparent()
+    return False
+
+
+def _content(r):
+    return [ch for ch in r if ch.tag != qn('w:rPr')]
+
+
+def _set_t(t, text):
+    t.text = text
+    t.set(qn('xml:space'), 'preserve')
+
+
+def _split_before(child):
+    """child 가 든 run 을 둘로 나눠 child 부터 끝까지를 같은 서식의 새 run 으로 옮긴다. child 가 든 run 을 돌려준다."""
+    r = child.getparent()
+    kids = _content(r)
+    i = kids.index(child)
+    if i == 0:
+        return r
+    new = r.makeelement(qn('w:r'), dict(r.attrib))
+    rpr = r.find(qn('w:rPr'))
+    if rpr is not None:
+        new.append(copy.deepcopy(rpr))
+    for ch in kids[i:]:
+        new.append(ch)
+    r.addnext(new)
+    return new
+
+
+def _isolate(t, lo, hi):
+    """w:t 의 글자 [lo, hi) 만 담은 run 을 떼어 내 그 w:t 를 돌려준다.
+    앞뒤 글자와 같은 run 의 다른 자식(탭·줄바꿈 등)은 같은 서식의 run 에 담겨 제자리에 남는다."""
+    text = t.text or ''
+    if hi < len(text):
+        tail = t.makeelement(qn('w:t'), {}); _set_t(tail, text[hi:])
+        _set_t(t, text[:hi]); t.addnext(tail)
+        _split_before(tail)
+    if lo > 0:
+        mid = t.makeelement(qn('w:t'), {}); _set_t(mid, (t.text or '')[lo:])
+        _set_t(t, (t.text or '')[:lo]); t.addnext(mid)
+        t = mid
+    _split_before(t)
+    if t.getnext() is not None:
+        _split_before(t.getnext())
+    return t
+
+
+def _ref_run(ref_sid, fid):
+    ref = OxmlElement('w:r'); rpr = OxmlElement('w:rPr')
+    rs = OxmlElement('w:rStyle'); rs.set(qn('w:val'), ref_sid); rpr.append(rs); ref.append(rpr)
+    fr = OxmlElement('w:footnoteReference'); fr.set(qn('w:id'), str(fid)); ref.append(fr)
+    return ref
+
+
+def _convert_paragraph(p, add_note):
+    """문단 안의 [[각주: …]] 표시를 각주번호로 바꾸고 바꾼 개수를 돌려준다.
+    add_note(각주 문장) 는 각주 본문을 만들고 본문 자리에 넣을 각주번호 run 을 돌려준다."""
+    done = 0
+    while True:
+        atoms = _atoms(p)
+        text = ''.join(t for _, t in atoms)
+        m = MARK.search(text)
+        if not m:
+            return done
+        s, e = m.span()
+        pieces, pos = [], 0
+        for el, t in atoms:
+            a, b = pos, pos + len(t); pos = b
+            if b <= s or a >= e:
+                continue
+            if el.tag == qn('w:t'):
+                el = _isolate(el, max(s, a) - a, min(e, b) - a)
+            pieces.append(el)
+        note = m.group(1).replace('\t', ' ').replace('\n', ' ')
+        pieces[0].getparent().addprevious(add_note(note))
+        for el in pieces:
+            r = el.getparent(); r.remove(el)
+            if not _content(r):
+                r.getparent().remove(r)
+        expected = text[:s] + text[e:]
+        if visible_text(p) != expected:
+            raise SystemExit("각주 변환 중 문단 글자가 달라져 저장하지 않았습니다(원문 보존). 문단 앞부분: "
+                             + repr(text[:60]))
+        done += 1
+
+
+def _leftovers(texts):
+    """남은 표시 수: (전체 '[[각주' 수, 그중 짝이 맞지 않아 바꿀 수 없는 수)"""
+    opened = sum(t.count(OPEN) for t in texts)
+    complete = sum(len(MARK.findall(t)) for t in texts)
+    return opened, opened - complete
 
 
 def convert(path, check_only=False, list_only=False):
@@ -137,11 +276,19 @@ def convert(path, check_only=False, list_only=False):
                 print(f"[{i}] " + "".join(t.text or '' for t in f.iter(qn('w:t'))).strip())
         print(f"각주 {len(real)}개")
         return 0
-    marks = sum(len(MARK.findall(p.text)) for p in doc.paragraphs)
+    paras = _paragraphs(doc)
+    opened, broken = _leftovers([visible_text(p) for p in paras])
     if check_only:
-        print(f"남은 [[각주:]] 표시 {marks}건 / 현재 각주 {len(real)}개")
-        return 1 if marks else 0
-    if marks == 0:
+        # 각주 본문에 표시 글자가 들어간 경우(잘못 닫은 표시를 예전 방식으로 바꾼 흔적)도 센다
+        in_notes = sum("".join(t.text or '' for t in f.iter(qn('w:t'))).count(OPEN)
+                       for f in (fn_root.findall(qn('w:footnote')) if fn_root is not None else []))
+        print(f"남은 [[각주:]] 표시 {opened}건" + (f"(닫는 ']]' 가 맞지 않는 표시 {broken}건 포함)" if broken else "")
+              + f" / 현재 각주 {len(real)}개" + (f" / 각주 본문에 남은 표시 {in_notes}건" if in_notes else ""))
+        return 1 if opened or in_notes else 0
+    if opened == broken:
+        if broken:
+            print(f"변환할 표시 없음 / 닫는 ']]' 가 맞지 않는 [[각주 표시 {broken}건은 바꾸지 않았습니다 — 초안을 고쳐 다시 병합합니다")
+            return 1
         print(f"변환할 표시 없음 / 현재 각주 {len(real)}개")
         return 0
     part = _ensure_footnotes_part(doc)
@@ -149,62 +296,30 @@ def convert(path, check_only=False, list_only=False):
     ref_sid = _style_id(doc, 'footnote reference', 'character')
     txt_sid = _style_id(doc, 'footnote text', 'paragraph')
     next_id = max([i for i in [int(f.get(qn('w:id'))) for f in fn_root.findall(qn('w:footnote'))]] + [0]) + 1
-    done = 0
-    for p in doc.paragraphs:
-        if '[[각주:' not in p.text:
-            continue
-        runs = [r for r in p._p.findall(qn('w:r')) if r.find(qn('w:t')) is not None]
-        full = "".join(r.find(qn('w:t')).text or '' for r in runs)
-        spans = [(m.start(), m.end(), m.group(1)) for m in MARK.finditer(full)]
-        if not spans:
-            continue
-        # rebuild runs
-        new_runs = []
-        pos = 0
-        span_i = 0
-        for r in runs:
-            t = r.find(qn('w:t')).text or ''
-            start, end = pos, pos + len(t)
-            cursor = start
-            while cursor < end:
-                # inside a marker?
-                inside = next(((s, e, c) for s, e, c in spans if s <= cursor < e), None)
-                if inside:
-                    s, e, c = inside
-                    if cursor == s or (cursor == start and s < start):
-                        pass
-                    # emit reference at marker start
-                    if cursor == s:
-                        ref = OxmlElement('w:r'); rpr = OxmlElement('w:rPr')
-                        rs = OxmlElement('w:rStyle'); rs.set(qn('w:val'), ref_sid); rpr.append(rs); ref.append(rpr)
-                        fr = OxmlElement('w:footnoteReference'); fr.set(qn('w:id'), str(next_id)); ref.append(fr)
-                        new_runs.append(ref)
-                        _add_footnote_body(fn_root, next_id, c, ref_sid, txt_sid, font)
-                        next_id += 1; done += 1
-                    cursor = min(e, end)
-                    continue
-                nxt = min([s for s, e, c in spans if s > cursor] + [end])
-                piece = t[cursor - start: nxt - start]
-                if piece:
-                    new_runs.append(_text_run(r, piece, font))
-                cursor = nxt
-            pos = end
-        for r in runs:
-            r.getparent().remove(r)
-        # insert after pPr (keep any non-text runs like drawings at their place is not needed here)
-        anchor = p._p.find(qn('w:pPr'))
-        for i, nr in enumerate(new_runs):
-            if anchor is None and i == 0:
-                p._p.insert(0, nr)
-            else:
-                (anchor if i == 0 else new_runs[i - 1]).addnext(nr)
+
+    def add_note(note):
+        nonlocal next_id
+        _add_footnote_body(fn_root, next_id, note, ref_sid, txt_sid, font)
+        ref = _ref_run(ref_sid, next_id)
+        next_id += 1
+        return ref
+
+    done = sum(_convert_paragraph(p, add_note) for p in paras
+               if OPEN in visible_text(p) and not _in_textbox(p))
     part._blob = etree.tostring(fn_root, xml_declaration=True, encoding='UTF-8', standalone=True)
     doc.save(path)
     print(f"각주 {done}건 변환 → 총 {len(real) + done}개 (본문 한글 글꼴 {font})")
+    left, _ = _leftovers([visible_text(p) for p in _paragraphs(doc)])
+    if left:
+        print(f"바꾸지 못한 [[각주 표시 {left}건 — 닫는 ']]' 를 확인해 초안을 고칩니다")
+        return 1
     return 0
 
 
 if __name__ == '__main__':
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(encoding='utf-8')
     if len(sys.argv) > 1 and sys.argv[1] in ('-h', '--help'):
         print(__doc__); sys.exit(0)
     if len(sys.argv) < 2:
