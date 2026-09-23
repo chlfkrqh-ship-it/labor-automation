@@ -6,7 +6,7 @@
 규칙을 새로 만들지 않고 그 문서들에 적힌 것만 검사한다.
 
     python 4_서면작성/scripts/style_check.py 출력/서면초안.md
-    python 4_서면작성/scripts/style_check.py 출력/최종서면.docx --json
+    python 4_서면작성/scripts/style_check.py "출력/(의뢰인명) 서면명_초안.docx" --json
 
 `위반` 이 하나라도 있으면 종료 코드 1을 낸다. `참고` 는 세어서 보여 줄 뿐이며
 판단을 대신하지 않는다. 사람이 그 자리를 열어 보고 정한다.
