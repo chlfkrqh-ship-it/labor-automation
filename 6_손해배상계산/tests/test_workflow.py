@@ -10,6 +10,7 @@ from pathlib import Path
 
 import openpyxl
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -273,6 +274,15 @@ def test_생년월일이나_사고일자가_없는_사건_파일은_멈춘다(tm
 
 # ── 입력서 읽기 ─────────────────────────────────────────────────────────
 
+
+
+def test_kind_가_빠진_노동_사건_파일은_무엇을_적을지_알린다(tmp_path):
+    raw = yaml.safe_load((ROOT / "cases" / "labor_sample.yaml").read_text(encoding="utf-8"))
+    raw.pop("kind")
+    path = tmp_path / "사건.yaml"
+    path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+    with pytest.raises(cli.InputError, match="kind: labor"):
+        cli.load_injury(path)
 
 def test_노임_키가_엑셀에서_날짜로_바뀌어도_읽힌다(tmp_path):
     blank = openpyxl.load_workbook(make_template(tmp_path / "빈양식.xlsx")).active

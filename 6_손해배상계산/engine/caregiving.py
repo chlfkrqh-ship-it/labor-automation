@@ -225,8 +225,8 @@ def build_caregiving_rows(
 ) -> list[CaregivingRow]:
     """향후 개호비 순번을 만든다. 일실수입과 같은 방식으로 240 상한을 건다.
 
-    설명서 24쪽처럼 기간별로 인원을 달리하려면 구간을 나눠 여러 번 호출하고
-    이어 붙이면 된다. 그때는 saved 를 이어받아야 하므로 chain_caregiving 을 쓴다.
+    설명서 24쪽처럼 기간별로 인원을 달리하는 계산은 아직 없다. 구간을 나눠 여러 번 호출하면 240 상한의
+    누적(saved)이 이어지지 않으므로 그렇게 이어 붙이지 않는다(프로그램으로 계산한다).
     """
     head = Decimal(str(headcount))
     prior = Decimal(str(prior_ratio))

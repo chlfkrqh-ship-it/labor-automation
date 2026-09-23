@@ -191,6 +191,11 @@ def load_injury(path) -> Case:
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
         raise InputError("사건 파일은 '키: 값' 형식이어야 합니다. cases/sample.yaml 을 참조하십시오.")
+    labor = [k for k in ("worker", "ordinary", "overtime", "leave", "average_wage", "retirement", "dismissal",
+                         "interest") if k in raw]
+    if labor:
+        raise InputError(f"노동 금액 절({', '.join(labor)})이 있는 사건 파일입니다. 노동 금액이면 맨 위에 "
+                         "kind: labor 를 적으십시오(cases/labor_sample.yaml 참조).")
     missing = [f"{label}({key})" for label, key in REQUIRED_LABELS if not raw.get(key)]
     if missing:
         raise InputError("사건 파일에 필수값이 비어 있습니다: " + ", ".join(missing))

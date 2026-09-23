@@ -150,9 +150,10 @@ OW-07 비교 자체, OW-M3(수당별·지급기일별 산정 단위), OW-19 배�
            parallel: true, source: "단협 30조"}
       good_faith_excluded:           # 신의칙 인정 기간·항목(items 비우면 모든 항목 — 경고)
         - {from: 2021-01-01, to: 2022-12-31, items: [정기상여금], note: "판결 3쪽"}
-      parallel_claims:               # (수당, 청구묶음)별 병행사건 여부
-        - {allowance: overtime, bundle: 최초, served: 2022-05-02, parallel: true}
-        - {allowance: public_holiday, bundle: 2025확장, served: 2025-03-10, parallel: false}
+      parallel_claims:               # (수당, 청구묶음)별 병행사건 여부. 사건.yaml 조립 계산(calculate.py)은
+                                     #   수당마다 bundle 을 비운 한 줄만 받는다 — 묶음이 여럿이면 기간을 나눈 사건.yaml 로 따로 계산
+        - {allowance: overtime, served: 2022-05-02, parallel: true}
+        - {allowance: public_holiday, bundle: 2025확장, served: 2025-03-10, parallel: false}   # 조립 계산이 쓰지 않는 수당
       agreed:                        # 약정 통상임금(전체 비교용, 법정 계산과 섞지 않음)
         monthly_hours: 183
         daily_hours: 8
@@ -1136,7 +1137,8 @@ def calculate_ordinary(inp: OrdinaryInput, opts: dict, **deps) -> OrdinaryResult
 
     if start < BOUNDARY and any(it.parallel for it in inp.items) and not inp.parallel_claims:
         warnings.append("OW-03a: 병행사건 여부를 항목 단위로만 적었습니다. 법정수당 청구별로 소송물이 다르므로(2021다239134) "
-                        "수당·청구묶음별 parallel_claims 입력을 권합니다(청구기간 확장·새 수당 추가의 병행 여부는 하급심만 있음)")
+                        "수당별 parallel_claims 입력을 권합니다(사건.yaml 조립 계산은 수당마다 bundle 을 비운 한 줄. "
+                        "청구기간 확장·새 수당 추가의 병행 여부는 하급심만 있음)")
     if any(p.parallel for p in inp.parallel_claims) and not any(it.parallel for it in inp.items):
         warnings.append("OW-03a: 병행사건 청구묶음이 있으나 parallel 로 표시한 항목이 없어 구 법리와 같게 계산됩니다")
     regime_matters = any(it.old is not None and it.new is not None and (it.old.included, it.old.amount) != (it.new.included, it.new.amount)
