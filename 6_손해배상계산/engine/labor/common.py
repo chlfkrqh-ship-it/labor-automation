@@ -12,9 +12,10 @@
 from __future__ import annotations
 
 import calendar
+import re
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from decimal import ROUND_CEILING, ROUND_DOWN, ROUND_HALF_UP, Decimal
+from decimal import ROUND_CEILING, ROUND_DOWN, ROUND_HALF_UP, Decimal, InvalidOperation
 
 from ..case import _d as parse_date
 
@@ -30,11 +31,15 @@ class LaborError(ValueError):
 
 
 def dec(v, default=None) -> Decimal | None:
+    """숫자로 읽는다. 읽을 수 없으면 LaborError(ValueError) — 모듈의 입력 검사가 받는 예외와 같은 갈래다."""
     if v is None or v == "":
         return default
     if isinstance(v, Decimal):
         return v
-    return Decimal(str(v).replace(",", ""))
+    try:
+        return Decimal(str(v).replace(",", ""))
+    except InvalidOperation:
+        raise LaborError(f"숫자로 읽을 수 없는 값입니다: {v!r} — 단위(%·원)나 글자 없이 숫자만 적으십시오") from None
 
 
 # ---------------------------------------------------------------- 날짜
@@ -171,8 +176,62 @@ class OptionSpec:
     choices: dict = field(default_factory=dict)
 
 
+def _is_date_like(v) -> bool:
+    return isinstance(v, date) or (isinstance(v, str) and re.fullmatch(r"\d{4}-\d{1,2}-\d{1,2}", v.strip()) is not None)
+
+
+def _option_value(spec: OptionSpec, value):
+    """사건.yaml 에 적은 옵션 값을 검사한다. YAML 이 문자열 선택지를 다른 형으로 읽은 경우만 되돌린다.
+
+    - `off`·`on` 은 YAML 이 불리언으로 읽는다 → 선택지에 'off'·'on' 이 있으면 문자열로 되돌린다.
+    - `52.14` 는 실수로 읽는다 → 같은 글자의 선택지가 있으면 문자열로 되돌린다.
+    - 선택지가 없는 옵션은 기본값의 형(참·거짓, 날짜, 숫자)에 맞는지 본다. 'false' 같은 문자열이나 빈 값이
+      조용히 참·거짓으로 읽히지 않게 한다. 기본값이 None 인 옵션(di_claimed_rate_cap 등)만 비워 둘 수 있다.
+    """
+    key = spec.key
+    if spec.choices:
+        try:
+            if value in spec.choices:
+                return value
+        except TypeError:            # 목록·사전 등 해시할 수 없는 값
+            pass
+        if isinstance(value, bool) and ("on" if value else "off") in spec.choices:
+            return "on" if value else "off"
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and str(value) in spec.choices:
+            return str(value)
+        if all(isinstance(k, bool) for k in spec.choices):
+            hint = " — true 또는 false 로 따옴표 없이 적으십시오"
+        elif not isinstance(value, str) and any(isinstance(k, str) for k in spec.choices):
+            hint = " — 문자열 선택지는 따옴표로 감싸 적으십시오(예: \"off\")"
+        else:
+            hint = ""
+        raise LaborError(f"옵션 {key} 의 값 {value!r}({type(value).__name__}) 은 허용되지 않습니다. "
+                         f"가능: {', '.join(map(str, spec.choices))}{hint}")
+    if value is None or value == "":
+        if spec.default is None:
+            return value
+        raise LaborError(f"옵션 {key} 이 비어 있습니다 — 기본값({spec.default})을 쓰려면 이 줄을 지우고, 아니면 값을 적으십시오")
+    if isinstance(spec.default, bool):
+        if not isinstance(value, bool):
+            raise LaborError(f"옵션 {key} 은 true 또는 false 로 따옴표 없이 적어야 합니다: {value!r}")
+    elif _is_date_like(spec.default):
+        try:
+            parse_date(value)
+        except Exception:
+            raise LaborError(f"옵션 {key} 의 날짜 {value!r} 를 읽을 수 없습니다 — YYYY-MM-DD 로 적으십시오") from None
+    elif isinstance(spec.default, (int, float, Decimal)) or spec.default is None:
+        if isinstance(value, str) and value.strip().endswith("%"):
+            raise LaborError(f"옵션 {key} 의 값 {value!r}: % 없이 숫자만 적으십시오(예: 연 12% 이면 12)")
+        if isinstance(spec.default, (int, float, Decimal)):
+            try:
+                dec(value)
+            except LaborError:
+                raise LaborError(f"옵션 {key} 의 값 {value!r} 을 숫자로 읽을 수 없습니다") from None
+    return value
+
+
 def resolve_options(raw: dict | None, *spec_groups) -> tuple[dict, list[tuple[OptionSpec, object, bool]]]:
-    """(값 사전, [(spec, 값, 기본값 여부)]) 를 돌려준다. 모르는 키·허용되지 않는 값은 오류."""
+    """(값 사전, [(spec, 값, 기본값 여부)]) 를 돌려준다. 모르는 키·허용되지 않는 값·형이 맞지 않는 값은 오류(_option_value)."""
     raw = dict(raw or {})
     specs: dict[str, OptionSpec] = {}
     for group in spec_groups:
@@ -184,10 +243,7 @@ def resolve_options(raw: dict | None, *spec_groups) -> tuple[dict, list[tuple[Op
     values, used = {}, []
     for key, spec in specs.items():
         is_default = key not in raw
-        value = spec.default if is_default else raw[key]
-        if spec.choices and value not in spec.choices:
-            raise LaborError(
-                f"옵션 {key} 의 값 {value!r} 은 허용되지 않습니다. 가능: {', '.join(map(str, spec.choices))}")
+        value = _option_value(spec, spec.default if is_default else raw[key])
         values[key] = value
         used.append((spec, value, is_default))
     return values, used
