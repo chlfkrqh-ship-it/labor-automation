@@ -62,6 +62,8 @@ AW-07 [법령] 시행령 제2조 제1항 "그 기간과 그 기간 중에 지급
       규정하고 그 기간 임금 차감은 조문에 없다 — 엔진은 시행령 제2조와 같이 빼되 근거를 '해석'으로 trace 한다.
       제외일수는 산정기간과 겹치는 날(양끝 포함)의 합집합. 제외기간 임금 `wages` 가 산정기간 밖까지 걸친 기간의
       금액이면 aw_partial_period 로 일할한다. 연차휴가·유급 약정휴가 사용기간은 제외하지 않는다(임금근로시간정책팀-145).
+      수습을 3개월보다 길게 입력하면 기간은 시작일부터 3개월로 자르고, 그 wages 는 입력 기간 전체의 금액으로 보아
+      입력 기간 역일수로 일할한다(warning).
 AW-08 [판례확립] 제6호는 적법한 쟁의행위만. 위법 직장폐쇄로 사용자가 임금지급의무를 지면 제외 안 함.
       대법원 2019. 6. 13. 선고 2015다65561 "위와 같은 요건을 충족하지 못하는 위법한 쟁의행위기간은 이에 포함되지
       않는다", "위법한 직장폐쇄로 사용자가 여전히 임금지급의무를 부담하는 경우라면 … 제6호에 해당하는 기간이라고
@@ -72,6 +74,8 @@ AW-09 [법령(고시)] 평균임금산정 특례 고시(제2015-77호) 제1조 �
       제외기간이 산정기간 전부를 덮는 사안이라 '3개월 이상' 판정 방식을 가르지 못한다 → `aw_long_exclusion_trigger`.
       제외기간 최초일은 이어진(겹치거나 맞닿은) 제외기간 묶음의 첫날. 새 발생일로 AW-02·03·05·06 을 다시 적용하고
       통상임금도 새 산정기간 말일 기준(근로기준정책과-64). 고시가 현재 최신본인지는 다시 확인하지 못했다(warning).
+      새 발생일이 입사일이면 AW-03 근로 첫날 규칙(`first_day_daily_wage`)을 쓰고, 없으면 오류로 멈춘다.
+      제외기간 최초일이 입사일보다 앞서면 입력 오류로 멈춘다.
 AW-10 [판례확립] 구속·직위해제·대기발령 기간은 시행령 제2조 어느 호에도 해당하지 않아 제외 불가. 대법원 1994.
       4. 12. 선고 92다20309 이유 본문 "원고의 경우와 같이 개인적인 범죄로 구속기소되어 직위해제되었던 기간은 위
       시행령 제2조 소정의 어느 기간에도 해당하지 않으므로", 2014다48057 "구속되거나 대기발령을 받은 기간은 …
@@ -121,7 +125,7 @@ RS-04 [불명확] 1일 평균임금 끝수 `aw_round_avg_daily`: jeon2_floor(기
       hire_date: 2012-01-02          # 비우면 worker.hire_date
       pay_period_start_day: 1        # 비우면 worker.pay_period_start_day(없으면 1)
       wages:                         # 임금산정기간별(month) 또는 임의 구간(start/end) 임금, 세전
-        - month: "2015-04"
+        - month: "2015-04"           # 따옴표로 감싼다(따옴표 없는 2015.10 은 YAML 이 숫자 2015.1 로 읽어 오류)
           items:
             기본급: 3000000                        # 숫자만 적으면 include: true
             가족수당: {amount: 60000, include: true}
@@ -469,8 +473,12 @@ def _span(s: date, e: date, label: str) -> None:
 def _month_period(key, start_day: int, label: str) -> tuple[str, date, date]:
     if isinstance(key, date):
         y, m = key.year, key.month
+    elif not isinstance(key, str):
+        # YAML 은 따옴표 없는 2015.10 을 숫자 2015.1 로 읽는다 — 10월과 1월을 가를 수 없으니 받지 않는다.
+        raise LaborError(f"평균임금: {label} 이(가) 숫자 {key!r} 로 읽혔습니다 — YAML 에서 따옴표 없는 2015.10 은 "
+                         "숫자 2015.1(1월)이 됩니다. \"2015-10\" 처럼 따옴표로 감싸 적으십시오")
     else:
-        parts = str(key).strip().replace(".", "-").split("-")
+        parts = key.strip().replace(".", "-").split("-")
         try:
             y, m = int(parts[0]), int(parts[1])
             date(y, m, 1)
@@ -539,9 +547,15 @@ def load_average_wage(raw: dict, worker: dict | None = None) -> AverageWageInput
     if occ < hire:
         raise LaborError(f"평균임금: 산정사유 발생일 {occ} 이 입사일 {hire} 보다 앞섭니다")
 
-    sd = raw.get("pay_period_start_day", worker.get("pay_period_start_day", 1))
+    sd = raw.get("pay_period_start_day")
+    if sd in (None, ""):
+        sd = worker.get("pay_period_start_day")
+    if sd in (None, ""):
+        sd = 1
     try:
-        sd = int(sd if sd not in (None, "") else 1)
+        if isinstance(sd, bool):
+            raise TypeError
+        sd = int(sd)
     except (ValueError, TypeError):
         raise LaborError(f"평균임금: pay_period_start_day 는 1~28 정수여야 합니다: {sd!r}") from None
     if not 1 <= sd <= 28:
@@ -793,6 +807,10 @@ def _effective_exclusions(inp: AverageWageInput, ctx: _Ctx) -> list:
                 e = cap
                 ctx.trace.append(Trace("AW-07", f"{label}: 수습 제외기간", f"{_fmt(p.start)}~{_fmt(cap)}",
                                        "수습 시작일부터 3개월 이내만 제외(제1호)"))
+                if p.wages:
+                    ctx.warn(f"{label}: 수습 제외기간을 {_fmt(p.start)}~{_fmt(cap)} 로 잘랐고, 입력 wages {p.wages}원은 입력 기간 "
+                             f"{days_inclusive(p.start, p.end)}일 전체의 금액으로 보아 일할해 뺐습니다 — 3개월 이내 부분의 "
+                             f"지급액을 알면 end 를 {_fmt(cap)} 로 하고 그 금액을 적으십시오(AW-07)")
         elif p.reason in ("childcare_reduced_hours", "family_care_reduced_hours"):
             ctx.trace.append(Trace("AW-07", f"{label}: 근로시간 단축기간", "기간·임금 제외",
                                    "조문은 '기간'만 제외 — 그 기간 임금 차감은 시행령 제2조 유추 해석"))
@@ -936,7 +954,9 @@ def _calc(inp: AverageWageInput, ctx: _Ctx, deps: dict, eff: list, O: date, star
         if ov is None:
             continue
         label = f"{EXCLUSION_REASONS[p.reason]} {_fmt(p.start)}~{_fmt(p.end)}"
-        pr = _prorate(p.wages, s, e, start, end, o, ctx, label) if p.wages else (ZERO, days_inclusive(*ov), "")
+        # wages 는 입력 기간(p.start~p.end) 전체의 금액이다. 수습을 3개월로 잘랐어도 분모는 입력 기간 역일수,
+        # 분자는 (잘린 제외기간 ∩ 산정기간) 일수로 일할한다.
+        pr = _prorate(p.wages, p.start, p.end, *ov, o, ctx, label) if p.wages else (ZERO, days_inclusive(*ov), "")
         v, cov, pnote = pr
         excluded_wages += v
         rows.append(AverageRow(calc, "excluded", label, *ov, cov, -v, False,
@@ -1015,8 +1035,10 @@ def _calc(inp: AverageWageInput, ctx: _Ctx, deps: dict, eff: list, O: date, star
     if wage_total < 0:
         raise LaborError(f"평균임금: 임금총액이 음수입니다({wage_total}) — 제외기간 임금(wages)이 산정기간 임금보다 많습니다")
     if counted <= 0:
-        raise LaborError(f"평균임금: 산정기간 {_fmt(start)}~{_fmt(end)} 이 전부 제외기간이라 산정할 수 없습니다 — "
-                         "aw_long_exclusion_trigger 또는 override_window(AW-12)를 검토하십시오")
+        # 원칙 산정이 여기서 멈추면 대체 산정기간(override_window)은 계산되지 않으므로 원칙 쪽에서는 권하지 않는다.
+        hint = ("aw_long_exclusion_trigger(AW-09)를 검토하십시오" if calc == "principle"
+                else "override_window 기간을 다시 정하십시오(AW-12)")
+        raise LaborError(f"평균임금: 산정기간 {_fmt(start)}~{_fmt(end)} 이 전부 제외기간이라 산정할 수 없습니다 — {hint}")
     daily = wage_total / counted
     rows.append(AverageRow(calc, "total", "임금총액 ÷ 산입일수", start, end, counted, wage_total, True,
                            f"임금 {wages_sum} + 추가 {extra_sum} − 제외기간 임금 {excluded_wages} + 상여 {bonus_add} "
@@ -1025,16 +1047,19 @@ def _calc(inp: AverageWageInput, ctx: _Ctx, deps: dict, eff: list, O: date, star
                       bonus_total, bonus_add, leave_add, alternatives, wage_total, daily)
 
 
-def _principle_window(inp: AverageWageInput, ctx: _Ctx, eff: list) -> tuple[date, date, date]:
-    """AW-02·03·09 를 적용한 (발생일, 시작, 끝)."""
+def _principle_window(inp: AverageWageInput, ctx: _Ctx, eff: list) -> tuple[date, date | None, date | None]:
+    """AW-02·03·09 를 적용한 (발생일, 시작, 끝).
+
+    발생일이 입사일이면(처음부터 그렇거나 AW-09 로 제외기간 최초일인 입사일로 옮겨진 경우) 산정기간이 없으므로
+    (입사일, None, None) 을 돌려준다 — 호출자가 근로 첫날 규칙(AW-03, 특례 고시 제2조)을 적용한다.
+    """
     o = ctx.o
     O = inp.occurrence_date
     blocks = _blocks(eff)
     for _ in range(50):
+        if O == inp.hire_date:
+            return O, None, None
         start, end, missing, short = window_bounds(O, inp.hire_date, o["aw_window_month_end"])
-        if end < start:
-            raise LaborError(f"평균임금: 발생일 {_fmt(O)} 이 입사일 {_fmt(inp.hire_date)} 이하여서 산정기간이 없습니다 — "
-                             "근로 첫날이면 first_day_daily_wage(특례 고시 제2조), 아니면 override_window 를 적으십시오")
         if missing:
             ctx.warn(f"발생일 {_fmt(O)} 의 3개월 전 달에 같은 날짜가 없어 aw_window_month_end={o['aw_window_month_end']} 로 "
                      f"시작일 {_fmt(start)} 을 썼습니다 — 원문 근거 미확인(AW-02)")
@@ -1053,6 +1078,9 @@ def _principle_window(inp: AverageWageInput, ctx: _Ctx, eff: list) -> tuple[date
                     break
         if hit is None or hit[0] >= O:
             return O, start, end
+        if hit[0] < inp.hire_date:
+            raise LaborError(f"평균임금: 제외기간 최초일 {_fmt(hit[0])} 이 입사일 {_fmt(inp.hire_date)} 보다 앞섭니다 — "
+                             "특례 고시 제1조(AW-09)로 발생일을 옮길 수 없으니 excluded_periods 의 start 를 확인하십시오")
         ctx.rows.append(AverageRow("principle", "shift", "제외기간 3개월 이상 — 발생일 변경", hit[0], hit[1],
                                    days_inclusive(*hit), None, False,
                                    f"발생일 {_fmt(O)} → 제외기간 최초일 {_fmt(hit[0])}(특례 고시 제1조, {o['aw_long_exclusion_trigger']})"))
@@ -1062,6 +1090,31 @@ def _principle_window(inp: AverageWageInput, ctx: _Ctx, eff: list) -> tuple[date
                  f"({o['aw_long_exclusion_trigger']})은 불확정이고 고시(제2015-77호) 최신본 여부는 다시 확인하지 못했습니다")
         O = hit[0]
     raise LaborError("평균임금: 제외기간 특례 적용이 반복되어 끝나지 않습니다 — excluded_periods 를 확인하십시오")
+
+
+def _first_day(inp: AverageWageInput, ctx: _Ctx, eff: list, O: date) -> WindowCalc:
+    """근로 첫날 산정사유(AW-03, 특례 고시 제2조) — 입력 발생일이 입사일이거나 AW-09 로 입사일로 옮겨진 경우."""
+    shifted = O != inp.occurrence_date
+    probation = any(p.reason == "probation" and s <= O <= e for p, s, e in eff)
+    probation_note = (" 수습기간 중 산정사유가 생긴 경우 수습기간을 제외기간으로 둘지(excluded_periods 에서 뺄지)는 "
+                      "이 엔진이 판단하지 않으니 사람이 정하십시오." if probation else "")
+    if inp.first_day_daily_wage is None:
+        if not shifted:
+            raise LaborError("평균임금: 근로 첫날 산정사유가 발생했습니다 — 약정 임금의 1일 평균액(first_day_daily_wage)을 "
+                             "적어야 합니다(평균임금산정 특례 고시 제2조)")
+        raise LaborError(f"평균임금: 특례 고시 제1조(AW-09)로 발생일 {_fmt(inp.occurrence_date)} 이 제외기간 최초일인 입사일 "
+                         f"{_fmt(O)} 로 옮겨져 그 전 산정기간이 없습니다 — 근로 첫날 규칙(고시 제2조, AW-03)에 따라 약정 임금의 "
+                         "1일 평균액(first_day_daily_wage)을 적으십시오." + probation_note)
+    why = "특례 고시 제2조" + (" — 특례 고시 제1조(AW-09)로 발생일이 입사일로 옮겨짐" if shifted else "")
+    principle = WindowCalc("principle", O, O, O - timedelta(days=1), 0, 0, 0, ZERO, ZERO, ZERO, ZERO, ZERO, ZERO,
+                           {}, ZERO, inp.first_day_daily_wage)
+    ctx.trace.append(Trace("AW-03", "근로 첫날 발생", str(inp.first_day_daily_wage), why + " — 약정 임금 1일 평균액"))
+    ctx.rows.append(AverageRow("principle", "total", "근로 첫날 — 약정 임금 1일 평균액", O, O, 0,
+                               inp.first_day_daily_wage, True, why))
+    if shifted and probation:
+        ctx.warn(f"수습기간을 제외기간으로 둔 채 발생일을 입사일 {_fmt(O)} 로 옮겨 first_day_daily_wage 를 썼습니다(AW-09·AW-03)."
+                 + probation_note)
+    return principle
 
 
 def calculate_average_wage(inp: AverageWageInput, opts: dict, **deps) -> AverageWageResult:
@@ -1086,18 +1139,10 @@ def calculate_average_wage(inp: AverageWageInput, opts: dict, **deps) -> Average
     eff = _effective_exclusions(inp, ctx)
 
     # ---- 원칙 산정
-    if inp.occurrence_date == inp.hire_date:
-        if inp.first_day_daily_wage is None:
-            raise LaborError("평균임금: 근로 첫날 산정사유가 발생했습니다 — 약정 임금의 1일 평균액(first_day_daily_wage)을 "
-                             "적어야 합니다(평균임금산정 특례 고시 제2조)")
-        O = inp.occurrence_date
-        principle = WindowCalc("principle", O, O, O - timedelta(days=1), 0, 0, 0, ZERO, ZERO, ZERO, ZERO, ZERO, ZERO,
-                               {}, ZERO, inp.first_day_daily_wage)
-        trace.append(Trace("AW-03", "근로 첫날 발생", str(inp.first_day_daily_wage), "특례 고시 제2조 — 약정 임금 1일 평균액"))
-        rows.append(AverageRow("principle", "total", "근로 첫날 — 약정 임금 1일 평균액", O, O, 0,
-                               inp.first_day_daily_wage, True, "특례 고시 제2조"))
+    O, start, end = _principle_window(inp, ctx, eff)
+    if start is None:
+        principle = _first_day(inp, ctx, eff, O)
     else:
-        O, start, end = _principle_window(inp, ctx, eff)
         principle = _calc(inp, ctx, deps, eff, O, start, end, "principle")
         trace.append(Trace("AW-01", "원칙 1일 평균임금", str(_settle(principle.daily).normalize()),
                            f"{principle.wage_total} ÷ {principle.counted_days}일"))

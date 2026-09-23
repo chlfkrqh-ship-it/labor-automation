@@ -354,6 +354,69 @@ def test_산정기간_전부_제외인데_입사일_이전으로_옮겨지면_�
         run(raw)
 
 
+def test_AW09_로_발생일이_입사일로_옮겨지면_근로_첫날_규칙():
+    # 입사일부터 업무상 요양하다 퇴직 — 산정기간 전부 제외 → 제외기간 최초일(입사일)로 발생일 이동 → 특례 고시 제2조
+    raw = {"hire_date": "2024-01-02", "last_working_day": "2024-06-30", "first_day_daily_wage": 100000,
+           "excluded_periods": [{"reason": "industrial_accident", "start": "2024-01-02", "end": "2024-06-30"}]}
+    res = run(raw)
+    assert res.original_occurrence_date == date(2024, 7, 1) and res.occurrence_date == date(2024, 1, 2)
+    assert res.average_daily_wage == 100000
+    assert any(r.kind == "shift" for r in res.rows) and any(t.rule == "AW-09" for t in res.trace)
+    del raw["first_day_daily_wage"]
+    with pytest.raises(LaborError, match="AW-09.*first_day_daily_wage"):
+        run(raw)
+
+
+@pytest.mark.parametrize("trigger", ["window_fully_excluded", "continuous_3_months"])
+def test_입사일부터_수습_중_발생이면_첫날_규칙과_수습_경고(trigger):
+    raw = {"hire_date": "2024-01-02", "occurrence_date": "2024-03-15", "first_day_daily_wage": 95000,
+           "wages": [{"month": "2024-01", "items": {"임금": 2900000}}],
+           "excluded_periods": [{"reason": "probation", "start": "2024-01-02", "end": "2024-04-01"}]}
+    res = run(raw, aw_long_exclusion_trigger=trigger)
+    assert res.occurrence_date == date(2024, 1, 2) and res.average_daily_wage == 95000
+    assert any("수습" in w and "사람이 정하십시오" in w for w in res.warnings)
+    del raw["first_day_daily_wage"]
+    with pytest.raises(LaborError, match="first_day_daily_wage.*수습"):
+        run(raw, aw_long_exclusion_trigger=trigger)
+
+
+def test_제외기간이_입사일보다_앞서면_오류():
+    raw = {"hire_date": "2024-01-02", "last_working_day": "2024-06-30",
+           "excluded_periods": [{"reason": "industrial_accident", "start": "2023-12-01", "end": "2024-06-30"}]}
+    with pytest.raises(LaborError, match="입사일.*앞섭니다"):
+        run(raw)
+
+
+def test_원칙_산정_불가_오류는_대체_산정기간을_권하지_않음():
+    # 재직 3개월 미만이고 산정기간 전부가 3개월 미만 제외기간 — continuous_3_months 이면 발생일을 옮기지 않아 산입일수 0.
+    # 원칙 산정이 멈추면 override_window 는 계산되지 않으므로 오류 문구가 그것을 권하면 안 된다.
+    raw = flat("2024-05-15", "2024-06-30", 0, hire="2024-05-15", last_working_day="2024-06-30",
+               excluded_periods=[{"reason": "approved_leave", "start": "2024-05-15", "end": "2024-06-30"}])
+    with pytest.raises(LaborError, match="aw_long_exclusion_trigger") as exc:
+        run(raw, aw_long_exclusion_trigger="continuous_3_months")
+    assert "override_window" not in str(exc.value)
+
+
+def test_수습을_3개월보다_길게_입력하면_임금은_입력기간으로_일할():
+    # 수습 입력 2024. 1. 2.~4. 30.(120일, 임금 11,900,000원) → 제외는 3개월 이내 1. 2.~4. 1.만.
+    # 산정기간 2. 1.~4. 30.(90일)과 겹친 61일분 = 11,900,000 × 61/120 을 뺀다(잘린 기간 91일로 나누지 않음).
+    raw = {"hire_date": "2024-01-02", "last_working_day": "2024-04-30",
+           "wages": [{"month": "2024-01", "items": {"임금": 2900000}}]
+           + [{"month": m, "items": {"임금": 3000000}} for m in ("2024-02", "2024-03", "2024-04")],
+           "excluded_periods": [{"reason": "probation", "start": "2024-01-02", "end": "2024-04-30", "wages": 11900000}]}
+    res = run(raw)
+    assert (res.window_start, res.window_end, res.window_days) == (date(2024, 2, 1), date(2024, 4, 30), 90)
+    assert (res.excluded_days, res.counted_days) == (61, 29)
+    assert res.principle.excluded_wages == D(11900000) * 61 / 120
+    assert close(res.principle_daily, (D(9000000) - D(11900000) * 61 / 120) / 29)
+    assert any("AW-07" in w and "입력 기간" in w for w in res.warnings)
+    # 3개월 이내로 입력하면 그 기간(91일) 금액으로 일할 — 종전과 같다
+    raw2 = dict(raw, excluded_periods=[{"reason": "probation", "start": "2024-01-02", "end": "2024-04-01", "wages": 8900000}])
+    res2 = run(raw2)
+    assert res2.principle.excluded_wages == D(8900000) * 61 / 91
+    assert not any("AW-07" in w and "입력 기간" in w for w in res2.warnings)
+
+
 # ================================================================ AW-10·12·13·14
 def test_통상임금_하한_발동과_비교방식():
     # 3개월 임금 2,730,000원/91일 = 30,000원 < 1일 통상임금 80,000원
@@ -420,6 +483,34 @@ def test_발생일_누락_worker_사용():
         load_average_wage({"hire_date": "2020-01-01"})
     inp = load_average_wage({}, {"hire_date": "2020-01-01", "last_working_day": "2024-06-30", "pay_period_start_day": 21})
     assert inp.occurrence_date == date(2024, 7, 1) and inp.pay_period_start_day == 21
+
+
+def test_빈칸_임금산정기간_시작일은_worker_값():
+    worker = {"hire_date": "2019-01-01", "last_working_day": "2019-12-31", "pay_period_start_day": 21}
+    for blank in (None, ""):
+        assert load_average_wage({"pay_period_start_day": blank}, worker).pay_period_start_day == 21
+    assert load_average_wage({"pay_period_start_day": None}, dict(worker, pay_period_start_day=None)).pay_period_start_day == 1
+    for bad in (0, True, "스무하루"):
+        with pytest.raises(LaborError, match="pay_period_start_day"):
+            load_average_wage({"pay_period_start_day": bad}, worker)
+    # 21일~20일 임금산정기간 사업장: 빈칸이면 키를 뺀 것과 같은 1일 평균임금
+    wages = [{"month": m, "items": {"임금": a}}
+             for m, a in (("2019-09", 3600000), ("2019-10", 3100000), ("2019-11", 3000000), ("2019-12", 4100000))]
+    blank = run({"pay_period_start_day": None, "wages": wages}, worker)
+    omitted = run({"wages": wages}, worker)
+    assert blank.average_daily_wage == omitted.average_daily_wage == D("108204.76")
+
+
+def test_따옴표_없는_점_표기_월은_오류():
+    import yaml
+
+    raw = yaml.safe_load("hire_date: 2010-01-01\nlast_working_day: 2015-12-31\n"
+                         "wages:\n  - {month: 2015.10, items: {임금: 3000000}}\n")
+    assert raw["wages"][0]["month"] == 2015.1              # YAML 이 10월을 숫자 2015.1(1월)로 읽는다
+    with pytest.raises(LaborError, match="따옴표"):
+        load_average_wage(raw)
+    raw["wages"][0]["month"] = "2015.10"                   # 따옴표로 감싼 점 표기는 받는다
+    assert load_average_wage(raw).wages[0].key == "2015-10"
 
 
 def test_통상임금_deps_누락():
