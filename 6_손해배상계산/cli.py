@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from engine.calculate import calculate
@@ -158,6 +159,24 @@ def _wage_lookup(case: Case):
     return wage_of, has_wage, notes
 
 
+def _caregiving_lookup(case: Case):
+    """향후 개호비 단가 조회기 (calculate 에 넘길 인자, notes).
+
+    caregiving_occupation(예: 보통인부)을 적으면 노임표에서 그 직종 노임을 개호 단가로 쓴다. 마지막 공표
+    반기 뒤는 피해자 노임과 같이 마지막 단가를 쓰고 notes 에 적는다. caregiving_wages 표가 있으면 엔진이
+    그 표를 쓰므로 넘기지 않는다. 둘 다 없으면 엔진이 이유를 적고 멈춘다(피해자 노임으로 대신하지 않는다).
+    """
+    if not (case.caregiving_start and case.caregiving_end) or case.caregiving_wages or not case.caregiving_occupation:
+        return {}, []
+    if case.caregiving_rural:
+        raise InputError("농촌 노임(분기)을 개호 단가로 쓰려면 caregiving_wages 표에 적으십시오. "
+                         "caregiving_occupation 은 직종별 노임(반기)만 찾습니다.")
+    price_of, has, notes = _wage_lookup(replace(case, occupation=case.caregiving_occupation, wages={}, rural=False))
+    kwargs = {"caregiving_price_of": price_of, "caregiving_has_wage": has,
+              "caregiving_basis": f"노임표 직종 '{case.caregiving_occupation}' 노임"}
+    return kwargs, notes
+
+
 def load_injury(path) -> Case:
     """신체손해 사건 파일(YAML)을 읽는다. 생년월일·사고일자가 비어 있으면 멈춘다.
 
@@ -178,7 +197,9 @@ def load_injury(path) -> Case:
 def run_injury(case: Case, out) -> Path:
     """신체손해 계산표를 만들고 요약을 출력한다."""
     wage_of, has_wage, notes = _wage_lookup(case)
-    result = calculate(case, wage_of, has_wage)
+    care, care_notes = _caregiving_lookup(case)
+    result = calculate(case, wage_of, has_wage, **care)
+    notes = notes + [f"개호 단가 — {n}" for n in care_notes]
     out = write_workbook(result, out)
 
     st = result.settlement

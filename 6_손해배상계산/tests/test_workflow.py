@@ -137,7 +137,8 @@ def test_잘못된_입력은_오류폴더로(tmp_path_factory):
 
 def _calc(case):
     wage_of, has_wage, notes = cli._wage_lookup(case)
-    return calculate(case, wage_of, has_wage), notes
+    care, care_notes = cli._caregiving_lookup(case)
+    return calculate(case, wage_of, has_wage, **care), notes + care_notes
 
 
 def _first_day_after(key, rural=False):
@@ -174,11 +175,17 @@ def test_노임표_마지막_반기_뒤의_사고와_개호도_마지막_단가�
 
     for month_mode in (True, False):                      # 향후 개호 시작이 마지막 단가 뒤
         care = replace(data, caregiving_start=later, caregiving_end=date(2071, 7, 27),
-                       caregiving_month_mode=month_mode)
-        result, _ = _calc(care)
+                       caregiving_month_mode=month_mode, caregiving_occupation=base.occupation)
+        result, notes = _calc(care)
         assert result.caregiving_rows and {r.unit_price for r in result.caregiving_rows} == {last_wage}
-        direct, _ = _calc(replace(care, wages=table))
+        assert any("마지막 공표 단가" in n for n in notes)
+        direct, _ = _calc(replace(care, caregiving_occupation="", caregiving_wages=table))
         assert result.future_caregiving_total == direct.future_caregiving_total
+    with pytest.raises(ValueError, match="caregiving_occupation"):     # 개호 단가 기준이 없으면 멈춘다
+        _calc(replace(data, caregiving_start=later, caregiving_end=date(2071, 7, 27)))
+    with pytest.raises(cli.InputError, match="caregiving_wages"):      # 농촌 개호 단가는 표로
+        _calc(replace(data, caregiving_start=later, caregiving_end=date(2071, 7, 27),
+                      caregiving_occupation=base.occupation, caregiving_rural=True))
 
     q_last = max((int(r["year"]), int(r["quarter"])) for r in wt.quarterly)
     rural, notes = _calc(replace(data, rural=True, accident=_first_day_after(q_last, rural=True), cure_end=None))

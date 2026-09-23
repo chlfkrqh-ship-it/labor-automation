@@ -90,6 +90,8 @@ class Case:
     # 원본은 개호비 화면에서 직종을 따로 고르므로 피해자 노임으로 대신하지 않는다(calculate.py).
     caregiving_wages: dict = field(default_factory=dict)
     caregiving_rural: bool = False       # 개호 단가가 농촌 노임(분기 단위)이면 True. 표 키 번호가 분기가 된다
+    # 개호 단가를 노임표의 직종 노임으로 쓸 때 그 직종명(예: 보통인부). caregiving_wages 표가 있으면 표가 우선한다(cli.py)
+    caregiving_occupation: str = ""
     severance: Decimal = Decimal(0)
     # 사망 사건 장례비. 비우면 0 이다(기본값을 채우지 않는다). 재산적 손해·합계에는 넣지 않는다(calculate.py).
     funeral_cost: Decimal = Decimal(0)
