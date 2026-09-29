@@ -9,11 +9,18 @@ rem because the file encoding and the console code page must match.
 rem Why .git sits outside OneDrive: see ??/git-??-??.md
 
 setlocal
-set "GD=%LOCALAPPDATA%\labor-automation\repo.git"
+rem The repo is looked up in three places, same order as receive.py.
+rem USERPROFILE first: the Claude desktop app is a Store app, so its writes
+rem under LOCALAPPDATA land in a private copy (Packages\Claude_*\LocalCache\Local)
+rem that programs outside the app do not see. Older PCs have the repo there.
+set "GD="
+if exist "%USERPROFILE%\labor-automation\repo.git" set "GD=%USERPROFILE%\labor-automation\repo.git"
+if not defined GD if exist "%LOCALAPPDATA%\labor-automation\repo.git" set "GD=%LOCALAPPDATA%\labor-automation\repo.git"
+if not defined GD for /d %%P in ("%LOCALAPPDATA%\Packages\Claude_*") do if exist "%%~fP\LocalCache\Local\labor-automation\repo.git" set "GD=%%~fP\LocalCache\Local\labor-automation\repo.git"
 for %%I in ("%~dp0..\..") do set "WT=%%~fI"
 
-if not exist "%GD%" (
-    echo Repository not found: %GD%
+if not defined GD (
+    echo Repository not found. Looked in USERPROFILE and LOCALAPPDATA labor-automation folders.
     echo Run setup first: powershell -ExecutionPolicy Bypass -File "%~dp0repo-setup.ps1"
     exit /b 1
 )

@@ -22,10 +22,10 @@
 
 **파이썬 가상환경과 모델 파일은 OneDrive에 두지 않는다.** 5_녹취록의 환경은 가상환경과 전사 모델을 합쳐 수 GB이고, PC마다 따로 설치해야 한다. 동기화하면 용량만 먹는 것이 아니라 서로의 환경을 깨뜨린다. 화자 분리 모델(35MB)만 예외로 `5_녹취록/models/` 에 둔다(루트 `CLAUDE.md`).
 
-**시스템 파일은 git으로 관리하고, 사건 자료는 git에 올리지 않는다.** `.git/`을 OneDrive 안에 두면 두 PC의 index·lock 파일이 충돌해 저장소가 깨지므로, **저장소만 `%LOCALAPPDATA%\labor-automation\repo.git` 에 두고 작업본은 이 폴더 그대로 쓴다.** 폴더를 옮기지 않으므로 상대경로 규칙과 기존 스크립트가 그대로 돈다.
+**시스템 파일은 git으로 관리하고, 사건 자료는 git에 올리지 않는다.** `.git/`을 OneDrive 안에 두면 두 PC의 index·lock 파일이 충돌해 저장소가 깨지므로, **저장소만 `%USERPROFILE%\labor-automation\repo.git` 에 두고 작업본은 이 폴더 그대로 쓴다.** 예전에 만든 PC는 `%LOCALAPPDATA%` 나 Claude 앱 전용 가상 폴더(`%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Local`)에 있을 수 있고, `g.bat`·`receive.py` 가 세 곳을 모두 찾는다. 폴더를 옮기지 않으므로 상대경로 규칙과 기존 스크립트가 그대로 돈다.
 
 ```
-%LOCALAPPDATA%\labor-automation\repo.git\   ← .git (PC마다 따로, 동기화하지 않음)
+%USERPROFILE%\labor-automation\repo.git\    ← .git (PC마다 따로, 동기화하지 않음)
 %OneDrive%\노동사건자동화\                    ← 작업본
 %LOCALAPPDATA%\노동사건자동화\                ← 파이썬 가상환경, 음성 모델
 ```
