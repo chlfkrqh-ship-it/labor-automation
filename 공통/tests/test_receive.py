@@ -8,8 +8,10 @@ import unittest
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'scripts' / 'receive.py'
+# 시험이 이 PC의 진짜 저장소(%USERPROFILE%·%LOCALAPPDATA% 아래)를 잡지 않게 둘 다 없는 곳으로 돌린다
+NOWHERE = str(Path(tempfile.gettempdir()) / 'receive-tests-nowhere')
 ENV = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@t', GIT_COMMITTER_NAME='t',
-           GIT_COMMITTER_EMAIL='t@t', GIT_CONFIG_NOSYSTEM='1')
+           GIT_COMMITTER_EMAIL='t@t', GIT_CONFIG_NOSYSTEM='1', USERPROFILE=NOWHERE, LOCALAPPDATA=NOWHERE)
 
 
 def git(cwd, *args):
@@ -99,9 +101,28 @@ class ReceiveTests(unittest.TestCase):
         text = (self.pc / '판례기록.md').read_bytes().decode('utf-8')
         self.assertEqual(text, '첫 줄(클라우드)\r\n둘째\r\n셋째\r\n넷째\r\n끝 줄\r\n더한 줄(PC)\r\n')   # 줄끝은 이 PC 것 그대로
 
-    def run_auto(self, appdata):
+    def run_auto(self, appdata, home=NOWHERE):
         return subprocess.run([sys.executable, '-B', str(SCRIPT), '--root', str(self.pc), '--auto'],
-                              env=dict(ENV, LOCALAPPDATA=str(appdata)), capture_output=True, text=True, encoding='utf-8')
+                              env=dict(ENV, LOCALAPPDATA=str(appdata), USERPROFILE=str(home)),
+                              capture_output=True, text=True, encoding='utf-8')
+
+    def test_auto_finds_repo_in_claude_app_private_folder(self):
+        # Claude 앱(스토어 앱) 안에서 %LOCALAPPDATA% 에 만든 저장소는 앱 전용 가상 폴더에 실제로 있다
+        appdata = Path(self.tmp.name) / 'appdata'
+        private = appdata / 'Packages' / 'Claude_pzs8sxrjxfjjc' / 'LocalCache' / 'Local' / 'labor-automation'
+        private.mkdir(parents=True)
+        shutil.move(str(self.pc / '.git'), str(private / 'repo.git'))
+        r = self.run_auto(appdata)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.read('지침/a.md'), '2\n')
+
+    def test_repo_under_user_profile_is_found_first(self):
+        home = Path(self.tmp.name) / 'home'
+        (home / 'labor-automation').mkdir(parents=True)
+        shutil.move(str(self.pc / '.git'), str(home / 'labor-automation' / 'repo.git'))
+        r = self.run_auto(Path(self.tmp.name) / 'no-appdata', home=home)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.read('지침/a.md'), '2\n')
 
     def test_auto_does_nothing_outside_pc_layout(self):
         # 클라우드 세션처럼 작업본 안에 .git 이 있고 %LOCALAPPDATA% 저장소가 없으면 손대지 않는다

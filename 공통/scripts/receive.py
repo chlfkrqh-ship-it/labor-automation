@@ -19,8 +19,8 @@ fetch 뒤 HEAD 를 origin/main 으로 옮기고(reset --mixed, 파일은 그대�
 돌고, 클라우드 세션처럼 그 구성이 없으면 아무것도 하지 않는다. 오류가 나도 작업 시작을 막지 않고(종료 코드 0), 받은 것이
 있을 때만 몇 줄 알린다.
 
-사건 자료(.gitignore 대상)는 보지 않는다. .git 은 g.bat 과 같이 %LOCALAPPDATA%\\labor-automation\\repo.git
-이고, 없으면 작업본 안의 .git 을 쓴다. 저장소가 없거나 fetch 가 실패하면 종료 코드 1 — 건너뛰고 본 작업을 한다.
+사건 자료(.gitignore 대상)는 보지 않는다. 저장소(.git)는 g.bat 과 같은 순서로 찾는다(pc_repo). 없으면 작업본 안의
+.git 을 쓴다. 저장소가 없거나 fetch 가 실패하면 종료 코드 1 — 건너뛰고 본 작업을 한다.
 """
 from __future__ import annotations
 
@@ -34,11 +34,26 @@ from pathlib import Path
 ZERO = '0' * 40
 
 
+def pc_repo() -> Path | None:
+    """이 PC의 저장소. %USERPROFILE%, %LOCALAPPDATA%, Claude 앱 가상 폴더 순서로 찾는다(g.bat 과 같다).
+
+    Claude 데스크톱 앱은 스토어 앱이어서, 앱 안에서 %LOCALAPPDATA% 아래 만든 파일은 앱 전용 가상 폴더
+    (%LOCALAPPDATA%\\Packages\\Claude_*\\LocalCache\\Local)로 간다. 앱 안의 git 은 그 저장소를 제자리에 있는 것처럼
+    보지만, 앱 밖에서 도는 파이썬(스토어판 등)에는 보이지 않는다. 그래서 가상 폴더의 실제 경로까지 본다.
+    """
+    home, local = os.environ.get('USERPROFILE'), os.environ.get('LOCALAPPDATA')
+    candidates = [Path(home) / 'labor-automation' / 'repo.git'] if home else []
+    if local:
+        candidates.append(Path(local) / 'labor-automation' / 'repo.git')
+        candidates += sorted(Path(local).glob('Packages/Claude_*/LocalCache/Local/labor-automation/repo.git'))
+    return next((c for c in candidates if c.is_dir()), None)
+
+
 class Git:
     def __init__(self, root: Path, pc_only: bool = False):
         self.root = root
-        gd = Path(os.environ.get('LOCALAPPDATA') or '/nonexistent') / 'labor-automation' / 'repo.git'
-        if gd.is_dir():
+        gd = pc_repo()
+        if gd:
             self.base = ['git', f'--git-dir={gd}', f'--work-tree={root}']
         elif (root / '.git').exists() and not pc_only:
             self.base = ['git']

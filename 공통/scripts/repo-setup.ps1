@@ -3,8 +3,11 @@
 #   .\공통\scripts\repo-setup.ps1                     # 원격 없이 (이력만)
 #   .\공통\scripts\repo-setup.ps1 -원격 https://github.com/{계정}/{저장소}.git
 #
-# .git 은 %LOCALAPPDATA%\labor-automation\repo.git 에 둔다. OneDrive 안에 두면 두 PC의
+# .git 은 %USERPROFILE%\labor-automation\repo.git 에 둔다. OneDrive 안에 두면 두 PC의
 # index·lock 파일이 충돌해 저장소가 깨진다. 작업본은 이 폴더 그대로이고 아무것도 옮기지 않는다.
+# %LOCALAPPDATA% 에 두지 않는 까닭: Claude 데스크톱 앱(스토어 앱) 안에서 돌리면 그 아래 만든 파일이 앱 전용
+# 가상 폴더(Packages\Claude_*\LocalCache\Local)로 가서 앱 밖 프로그램에는 보이지 않는다.
+# 예전에 %LOCALAPPDATA% 나 그 가상 폴더에 만든 저장소가 있으면 그것을 그대로 쓴다(g.bat·receive.py 와 같은 순서).
 
 param(
     [string]$원격 = "",
@@ -14,7 +17,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$저장소 = Join-Path $env:LOCALAPPDATA "labor-automation\repo.git"
+$후보 = @((Join-Path $env:USERPROFILE "labor-automation\repo.git"), (Join-Path $env:LOCALAPPDATA "labor-automation\repo.git"))
+$후보 += @(Get-ChildItem (Join-Path $env:LOCALAPPDATA "Packages") -Directory -Filter "Claude_*" -ErrorAction SilentlyContinue |
+    ForEach-Object { Join-Path $_.FullName "LocalCache\Local\labor-automation\repo.git" })
+$저장소 = $후보 | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $저장소) { $저장소 = $후보[0] }
 $작업본 = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
@@ -56,5 +63,5 @@ if ($원격) {
 
 Write-Host ""
 Write-Host "이제 git 은 사람이 치지 않는다. 시스템 파일을 고치면 작업을 맡은 AI 가 올린다." -ForegroundColor Cyan
-Write-Host "다른 PC에서 따로 받을 것도 없다(파일은 OneDrive 가 맞춰 둔다). 절차: 공통\운영.md '시스템 파일 올리기'"
+Write-Host "받는 것도 AI 가 새 작업을 열 때 한다: 공통\scripts\receive.py . 절차: 공통\운영.md '시스템 파일 올리기'"
 Write-Host "이력을 직접 볼 때만:  공통\scripts\g.bat log --oneline -10"
