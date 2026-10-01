@@ -44,6 +44,12 @@ def jo_400(*added):
             *({'항내용': x} for x in added)]}]}}}
 
 
+def law_body(name, law_id, effective, *articles, **basic):
+    """법령 전체 본문 응답. 기본정보에 법령ID 는 있고 법령일련번호는 없다. articles 는 조문내용이다."""
+    return {'법령': {'기본정보': {'법령명_한글': name, '법령ID': law_id, '시행일자': effective, **basic},
+                   '조문': {'조문단위': [{'조문여부': '조문', '조문내용': text} for text in articles]}}}
+
+
 class LawGoTests(unittest.TestCase):
     """네트워크 없이 가짜 응답으로 시험한다."""
 
@@ -541,13 +547,18 @@ class LawGoTests(unittest.TestCase):
         self.assertIn('### 첨부파일', lawgo.markdown(doc))
 
     def test_law_show_uses_mst_and_history_filters(self):
-        self.routes[('info', 'law', '283457', 'JSON')] = {'법령': {'기본정보': {
-            '법령명_한글': '근로기준법', '시행일자': '20260820', '공포번호': '21065', '소관부처': {'content': '고용노동부', '소관부처코드': '1492000'},
-            '법종구분': {'content': '법률'}}, '조문': self.ARTICLE['법령']['조문']}}
+        basic = {'법령명_한글': '근로기준법', '법령ID': '001872', '시행일자': '20260820', '공포일자': '20260219', '공포번호': '21065',
+                 '소관부처': {'content': '고용노동부', '소관부처코드': '1492000'}, '법종구분': {'content': '법률'}}
+        self.routes[('info', 'law', '283457', 'JSON')] = {'법령': {'기본정보': basic}}
+        self.routes[('list', 'eflaw', '', '1')] = self.VERSIONS
+        self.routes[('info', 'eflaw', '283457', 'JSON')] = {'법령': {'기본정보': basic, '조문': self.ARTICLE['법령']['조문']}}
         doc = lawgo.show('법령', '283457')
-        self.assertEqual(self.calls[-1]['MST'], '283457')
+        self.assertEqual((self.calls[-1]['target'], self.calls[-1]['MST'], self.calls[-1]['efYd']), ('eflaw', '283457', '20260820'))
         self.assertEqual((doc['제목'], doc['기관'], doc['구분'], doc['링크']), ('근로기준법', '고용노동부', '법률', 'https://www.law.go.kr/법령/근로기준법'))
         self.assertIn('제6장의2 직장 내 괴롭힘의 금지', doc['본문']['조문'])
+        self.assertEqual(doc['시행예정'], [])                              # 앞으로 시행될 판본이 없으면 안내 줄도 없다
+        self.assertIn('## [법령] 고용노동부 2026-08-20 21065 근로기준법\n', lawgo.markdown(doc))
+        self.assertNotIn('시행예정', lawgo.markdown(doc))
         self.routes[('list', 'eflaw', '근로기준법', '1')] = {'LawSearch': {'totalCnt': '0'}}
         lawgo.search('법령', '근로기준법', history=True)
         self.assertEqual((self.calls[-1]['target'], self.calls[-1]['nw']), ('eflaw', '1,2,3'))
@@ -557,6 +568,177 @@ class LawGoTests(unittest.TestCase):
         for kind, extra in (('판례', dict(org='고용노동부')), ('법령', dict(rule_kind='예규')), ('노동위', dict(history=True))):
             with self.assertRaises(lawgo.LawGoError):
                 lawgo.search(kind, 'x', **extra)
+
+    def test_law_show_takes_text_in_force_not_text_as_promulgated(self):
+        """법령 전체 본문도 시행일 기준으로 받는다(2026. 10. 1. 민사소송법).
+
+        일련번호로 받는 공포일 기준 본문(law)에는 뒤에 공포되어 먼저 시행된 개정(제402조의2)이 없다. 법령ID를 찾는 데에만 쓴다.
+        """
+        promulgated = law_body('민사소송법', '001700', '20250712', '제402조(항소장각하명령)', 법종구분={'content': '법률'})
+        self.routes[('info', 'law', '252393', 'JSON')] = promulgated
+        self.routes[('list', 'eflaw', '', '1')] = self.CIVIL_VERSIONS
+        self.routes[('info', 'eflaw', '252393', 'JSON')] = law_body(
+            '민사소송법', '001700', '20250712', '제402조(항소장각하명령)', '제402조의2(항소이유서의 제출)', 법종구분={'content': '법률'})
+        cache = Path(self.tmp.name) / '캐시' / 'lawgo'
+        lawgo.write(cache / 'law' / '252393.json', json.dumps(promulgated['법령'], ensure_ascii=False))      # 예전 조회로 받아 둔 보관 파일
+        doc = lawgo.show('법령', '252393')
+        self.assertEqual(doc['본문']['조문'], '제402조(항소장각하명령)\n\n제402조의2(항소이유서의 제출)')
+        self.assertEqual((doc['id'], doc['제목'], doc['현행'], doc['기준일'], doc['시행일자'], doc['공포']),
+                         ('252393', '민사소송법', '현행', '2026-10-01', '2025-07-12', '2023-07-11 제19516호'))
+        lookup, listing, body = self.calls
+        self.assertEqual((lookup['path'], lookup['target'], lookup['MST'], lookup['JO']), ('lawService.do', 'law', '252393', '000100'))
+        self.assertEqual((listing['path'], listing['target'], listing['LID'], listing['nw']), ('lawSearch.do', 'eflaw', '001700', '1,2,3'))
+        self.assertEqual((body['path'], body['target'], body['MST'], body['efYd'], body.get('JO')),
+                         ('lawService.do', 'eflaw', '252393', '20250712', None))
+        # article 처럼 앞으로 시행될 판본을 알린다. 오늘 본문이 곧 바뀔 수 있기 때문이다
+        self.assertEqual(doc['시행예정'], ['2026-10-02 시행(2026-09-29 제21993호)', '2028-03-01 시행(2026-03-17 제21455호)'])
+        text = lawgo.markdown(doc)
+        self.assertIn('- 법제처 일련번호: 252393\n- 구분: 법률\n- 현행: 현행\n- 기준일: 2026-10-01\n- 시행일자: 2025-07-12\n'
+                      '- 공포: 2023-07-11 제19516호\n- 법령ID: 001700\n', text)
+        self.assertIn('- 시행예정: 2026-10-02 시행(2026-09-29 제21993호), 2028-03-01 시행(2026-03-17 제21455호) (본문이 바뀌는지는 --date 로 확인)\n', text)
+        # 전체 본문은 판본·시행일로 보관한다. 어느 판본이 오늘 시행 중인지는 조회할 때마다 목록으로 가린다
+        lawgo.show('법령', '252393')
+        self.assertEqual(self.steps(), ['본문 law', '목록 eflaw', '본문 eflaw', '본문 law', '목록 eflaw'])
+        self.assertTrue((cache / 'eflaw' / '252393_20250712.json').is_file())
+        lawgo.show('법령', '252393', refresh=True)
+        self.assertEqual(self.steps()[5:], ['본문 law', '목록 eflaw', '본문 eflaw'])
+
+    def test_law_show_refuses_version_not_in_force_unless_dated(self):
+        """기준일 없이 넘긴 판본이 오늘 시행 중이 아니면(연혁·시행예정) 받지 않고 알린다. 기준일을 주면 그날 시행 중인 판본을 받는다."""
+        self.routes[('list', 'eflaw', '', '1')] = self.CIVIL_VERSIONS
+        for mst, effective in (('258669', '20250301'), ('252393', '20250712'), ('290113', '20261002')):
+            self.routes[('info', 'law', mst, 'JSON')] = law_body('민사소송법', '001700', effective)
+            self.routes[('info', 'eflaw', mst, 'JSON')] = law_body('민사소송법', '001700', effective, mst + ' 판본의 본문')
+        for mst, effective in (('258669', '2025-03-01'), ('290113', '2026-10-02')):          # 연혁, 시행예정
+            with self.assertRaises(lawgo.LawGoError) as caught:
+                lawgo.show('법령', mst)
+            self.assertEqual(str(caught.exception),
+                             f'법령 {mst}: 민사소송법 {effective} 시행 판본은 오늘(2026-10-01) 시행 중인 판본이 아닙니다. '
+                             '오늘 시행 중인 판본은 252393(2025-07-12 시행)입니다. '
+                             f"이 판본의 본문은 --date 에 시행일({effective.replace('-', '')})을 주어 받습니다.")
+        self.assertNotIn('본문 eflaw', self.steps())
+        doc = lawgo.show('법령', '258669', date='20250301')
+        self.assertEqual((doc['id'], doc['본문']['조문'], doc['현행'], doc['기준일'], doc['시행일자']),
+                         ('258669', '258669 판본의 본문', '연혁', '2025-03-01', '2025-03-01'))
+        self.assertNotIn('시행예정', doc)                                  # 기준일을 준 조회에는 적지 않는다
+        # 넘긴 판본이 그날 시행 중이 아니어도 기준일을 주면 그날 시행 중인 판본을 받고, 받은 판본을 결과에 적는다
+        doc = lawgo.show('법령', '252393', date='2025-06-30')
+        self.assertEqual((doc['id'], doc['현행'], doc['기준일'], doc['시행일자'], doc['공포']),
+                         ('258669', '연혁', '2025-06-30', '2025-03-01', '2024-01-16 제20003호'))
+        doc = lawgo.show('법령', '252393', date='20261002')
+        self.assertEqual((doc['id'], doc['현행'], doc['시행일자']), ('290113', '시행예정', '2026-10-02'))
+        # 시행일이 되면 목록의 표시와 상관없이 시행예정 판본이 현행이고, 전날까지의 현행 판본은 연혁이다
+        with mock.patch.object(lawgo, 'today', lambda: '20261002'):
+            self.assertEqual(lawgo.show('법령', '290113')['현행'], '현행')
+            with self.assertRaises(lawgo.LawGoError) as caught:
+                lawgo.show('법령', '252393')
+        self.assertIn('오늘 시행 중인 판본은 290113(2026-10-02 시행)입니다', str(caught.exception))
+        with self.assertRaises(lawgo.LawGoError) as caught:
+            lawgo.show('법령', '252393', date='19590101')
+        self.assertIn('민사소송법: 1959-01-01 당시 시행 중이던 판본을 찾지 못했습니다', str(caught.exception))
+        self.routes[('info', 'law', '111111', 'JSON')] = law_body('민사소송법', '001700', '20100101')
+        with self.assertRaises(lawgo.LawGoError) as caught:
+            lawgo.show('법령', '111111')
+        self.assertIn('시행일 기준 판본 목록에 없는 일련번호입니다. 오늘 시행 중인 판본은 252393(2025-07-12 시행)입니다.', str(caught.exception))
+        self.routes[('info', 'law', '99999999', 'JSON')] = {'Law': '일치하는 법령이 없습니다.  법령명을 확인하여 주십시오.'}
+        with self.assertRaises(lawgo.LawGoError) as caught:
+            lawgo.show('법령', '99999999')
+        self.assertIn('법령 99999999: 일치하는 법령이 없습니다', str(caught.exception))
+        for kind, ident, date in (('법령', '252393', '2025'), ('판례', '228521', '20250301')):       # 날짜 꼴, 법령이 아닌 종류
+            with self.assertRaises(lawgo.LawGoError):
+                lawgo.show(kind, ident, date=date)
+
+    def test_law_show_picks_row_by_effective_date_when_one_serial_has_several(self):
+        """한 일련번호에 시행일이 여럿이고 그 사이에 다른 일련번호의 시행일이 끼어 있다(2026. 10. 1. 고용보험법 모양). 본문은 기준일로 정한다."""
+        rows = [version(mst, effective, promulgated, number, law_id='001761', name='고용보험법') for mst, effective, promulgated, number in (
+            ('284449', '20280101', '20260317', '21473'), ('284449', '20270101', '20260317', '21473'),
+            ('286253', '20261127', '20260526', '21699'), ('284449', '20260918', '20260317', '21473'),
+            ('270000', '20260918', '20250101', '20700'),                 # 시행일이 같은 다른 공포분
+            ('283373', '20260820', '20260219', '21372'), ('284449', '20260317', '20260317', '21473'))]
+        self.routes[('list', 'eflaw', '', '1')] = {'LawSearch': {'totalCnt': '7', 'law': rows}}
+        # 공포일 기준 본문은 그 공포분의 마지막 시행일(2028. 1. 1.) 모습으로 온다
+        self.routes[('info', 'law', '284449', 'JSON')] = law_body('고용보험법', '001761', '20280101', '제10조(적용 제외) 20280101 시행 본문')
+        for day in ('20260317', '20260918', '20270101'):
+            self.routes[('info', 'eflaw', '284449', 'JSON', day)] = law_body('고용보험법', '001761', day, f'제10조(적용 제외) {day} 시행 본문')
+        doc = lawgo.show('법령', '284449')
+        self.assertEqual((doc['본문']['조문'], doc['시행일자'], doc['현행']), ('제10조(적용 제외) 20260918 시행 본문', '2026-09-18', '현행'))
+        self.assertEqual(doc['시행예정'], ['2026-11-27 시행(2026-05-26 제21699호)', '2027-01-01 시행(2026-03-17 제21473호)',
+                                         '2028-01-01 시행(2026-03-17 제21473호)'])
+        doc = lawgo.show('법령', '284449', date='20270615')
+        self.assertEqual((doc['본문']['조문'], doc['기준일'], doc['시행일자'], doc['현행']),
+                         ('제10조(적용 제외) 20270101 시행 본문', '2027-06-15', '2027-01-01', '시행예정'))
+        doc = lawgo.show('법령', '284449', date='20260401')
+        self.assertEqual((doc['본문']['조문'], doc['시행일자'], doc['현행']), ('제10조(적용 제외) 20260317 시행 본문', '2026-03-17', '연혁'))
+        # 다른 일련번호가 시행 중인 날에는 오늘 시행 중인 판본이 아니고, 다음 시행일이 되면 다시 시행 중이다
+        with mock.patch.object(lawgo, 'today', lambda: '20261201'):
+            with self.assertRaises(lawgo.LawGoError) as caught:
+                lawgo.show('법령', '284449')
+        self.assertIn('고용보험법 2026-03-17·2026-09-18·2027-01-01·2028-01-01 시행 판본은 오늘(2026-12-01) 시행 중인 판본이 아닙니다. '
+                      '오늘 시행 중인 판본은 286253(2026-11-27 시행)입니다. '
+                      '이 판본의 본문은 --date 에 시행일(20260317·20260918·20270101·20280101)을 주어 받습니다.', str(caught.exception))
+        with mock.patch.object(lawgo, 'today', lambda: '20270101'):
+            doc = lawgo.show('법령', '284449')
+        self.assertEqual((doc['시행일자'], doc['현행']), ('2027-01-01', '현행'))
+        # 시행일이 같은 판본이 여럿이면 넘긴 판본을 받는다(본문은 같다)
+        self.routes[('info', 'law', '270000', 'JSON')] = law_body('고용보험법', '001761', '20260918')
+        self.routes[('info', 'eflaw', '270000', 'JSON')] = law_body('고용보험법', '001761', '20260918', '제10조(적용 제외) 20260918 시행 본문')
+        doc = lawgo.show('법령', '270000')
+        self.assertEqual((doc['id'], doc['공포'], doc['현행']), ('270000', '2025-01-01 제20700호', '현행'))
+        self.assertEqual((self.calls[-1]['MST'], self.calls[-1]['efYd']), ('270000', '20260918'))
+
+    def test_law_show_body_saved_before_effective_date_is_fetched_again(self):
+        """시행 전에 받아 둔 전체 본문도 다시 받는다. 시행일 이후에 받아 둔 것은 보관함에서 쓴다."""
+        self.routes[('list', 'eflaw', '', '1')] = self.CIVIL_VERSIONS
+        self.routes[('info', 'law', '290113', 'JSON')] = law_body('민사소송법', '001700', '20261002')
+        self.routes[('info', 'eflaw', '290113', 'JSON')] = law_body('민사소송법', '001700', '20261002', '공포된 때의 본문')
+        self.assertEqual(lawgo.show('법령', '290113', date='20261002')['본문']['조문'], '공포된 때의 본문')
+        cache = Path(self.tmp.name) / '캐시' / 'lawgo' / 'eflaw' / '290113_20261002.json'
+
+        def saved(*moment):                                                  # 보관한 때(한국 시각)
+            os.utime(cache, (datetime(*moment, tzinfo=lawgo.KST).timestamp(),) * 2)
+
+        saved(2026, 10, 1, 23, 59)                                           # 시행 전날
+        self.routes[('info', 'eflaw', '290113', 'JSON')] = law_body('민사소송법', '001700', '20261002', '그 사이 개정이 반영된 본문')
+        self.assertEqual(lawgo.show('법령', '290113', date='20261002')['본문']['조문'], '그 사이 개정이 반영된 본문')
+        self.assertEqual(self.steps().count('본문 eflaw'), 2)
+        saved(2026, 10, 2, 0, 1)                                             # 시행일
+        lawgo.show('법령', '290113', date='20261002')
+        self.assertEqual(self.steps().count('본문 eflaw'), 2, 'body saved on the effective date was requested again')
+
+    def test_harvest_law_bodies_take_text_in_force(self):
+        """harvest 가 받는 법령 본문도 show 와 같은 길로 시행일 기준 본문을 받는다."""
+        self.routes[('list', 'law', '민사소송법', '1')] = self.CIVIL
+        self.routes[('list', 'eflaw', '', '1')] = self.CIVIL_VERSIONS
+        self.routes[('info', 'law', '252393', 'JSON')] = law_body('민사소송법', '001700', '20250712', '제402조(항소장각하명령)')
+        self.routes[('info', 'eflaw', '252393', 'JSON')] = law_body('민사소송법', '001700', '20250712', '제402조(항소장각하명령)', '제402조의2(항소이유서의 제출)')
+        out = Path(self.tmp.name) / '작업' / '법제처'
+        summary = lawgo.harvest(['법령'], ['민사소송법'], texts=5, out=str(out))['종류별']['법령']
+        self.assertEqual((summary['본문'], summary['본문실패']), (1, []))
+        text = (out / '법제처_본문_법령.md').read_text(encoding='utf-8')
+        self.assertIn('제402조의2(항소이유서의 제출)', text)
+        self.assertIn('- 현행: 현행\n- 기준일: 2026-10-01\n- 시행일자: 2025-07-12\n- 공포: 2023-07-11 제19516호\n', text)
+        # 목록이 준 판본이 오늘 시행 중이 아니면 다른 날의 본문을 받지 않고 본문실패에 사유를 남긴다
+        with mock.patch.object(lawgo, 'today', lambda: '20261002'):
+            failed = lawgo.harvest(['법령'], ['민사소송법'], texts=5)['종류별']['법령']['본문실패']
+        self.assertEqual([f['id'] for f in failed], ['252393'])
+        self.assertIn('오늘 시행 중인 판본은 290113(2026-10-02 시행)입니다', failed[0]['사유'])
+
+    def test_cli_show_law_takes_date_and_reports_version(self):
+        self.routes[('list', 'eflaw', '', '1')] = self.CIVIL_VERSIONS
+        self.routes[('info', 'law', '252393', 'JSON')] = law_body('민사소송법', '001700', '20250712')
+        self.routes[('info', 'eflaw', '258669', 'JSON')] = law_body('민사소송법', '001700', '20250301', '제402조의2(항소이유서의 제출)')
+        out = Path(self.tmp.name) / '민사소송법.md'
+        with mock.patch.object(sys, 'argv', ['lawgo.py', 'show', '법령', '252393', '--date', '20250301', '--out', str(out)]), \
+                mock.patch('sys.stdout', new_callable=io.StringIO) as printed:
+            self.assertEqual(lawgo.main(), 0)
+        result = json.loads(printed.getvalue())
+        self.assertEqual((result['id'], result['현행'], result['기준일'], result['시행일자'], result['공포'], list(result['글자수'])),
+                         ('258669', '연혁', '2025-03-01', '2025-03-01', '2024-01-16 제20003호', ['조문']))
+        self.assertIn('- 법제처 일련번호: 258669\n', out.read_text(encoding='utf-8'))
+        with mock.patch.object(sys, 'argv', ['lawgo.py', 'show', '판례', '228521', '--date', '20250301']), \
+                mock.patch('sys.stderr', new_callable=io.StringIO) as err:
+            self.assertEqual(lawgo.main(), 2)
+        self.assertIn('기준일은 법령에만 쓸 수 있습니다', err.getvalue())
 
     def test_byl_search_makes_file_links_and_show_is_blocked(self):
         """별표·서식은 목록의 파일 링크로 쓴다. 본문(lawService.do)은 뷰어 HTML만 오므로 show를 막는다."""
