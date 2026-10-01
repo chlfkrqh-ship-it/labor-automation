@@ -87,6 +87,38 @@ const 시험들 = {
     try { await 환경.ctx.lboxText(주소(1)); return '오류가 나지 않았다'; }
     catch (e) { return !환경.저장['lbox중단'] && !환경.저장['lbox경고'] || '표시가 남았다'; }
   },
+  async 이미지판결문은멈추지않고건너뛴다() {   // 2026. 10. 1. 대구지방법원 2023나320025: '텍스트 변환 진행중' 189자 화면
+    const 환경 = 새환경(입력);
+    const 이미지화면 = '<main>대구지방법원 2026. 2. 5. 선고 2023나320025 판결 [임금] 텍스트 변환 진행중 본 판례는 텍스트 변환 작업 중입니다. 빠른 시일 내에 텍스트 형태로 제공될 수 있도록 최선을 다하겠습니다.</main>';
+    환경.ctx.응답 = async u => (u.endsWith('1001') ? {url: u, ok: true, status: 200, text: async () => 이미지화면} : 좋은본문(u));
+    const 받은 = await 환경.ctx.lboxText(주소(3));
+    const 마지막 = 환경.ctx.lboxText.마지막;
+    return 받은.length === 2 && 마지막.이미지.length === 1 && 마지막.이미지[0].endsWith('1001') && 마지막.못받은.length === 0
+      && !환경.저장['lbox중단'] && !환경.저장['lbox경고'] && 환경.요청.length === 3 && 기록(환경).length === 3
+      || JSON.stringify({받은: 받은.length, 이미지: 마지막.이미지, 못받은: 마지막.못받은, 중단: 환경.저장['lbox중단'], 요청: 환경.요청.length});
+  },
+  async 안내문구가없어도이미지표시가있는짧은화면은건너뛴다() {
+    const 환경 = 새환경(입력);
+    환경.ctx.응답 = async u => ({url: u, ok: true, status: 200, text: async () => '<main>짧은 화면</main><script>{\\"isImagePrecedent\\":true}</script>'});
+    const 받은 = await 환경.ctx.lboxText(주소(1));
+    return 받은.length === 0 && 환경.ctx.lboxText.마지막.이미지.length === 1 && !환경.저장['lbox중단'] || JSON.stringify(환경.ctx.lboxText.마지막);
+  },
+  async 글자가있는이미지판결문은본문으로받는다() {   // 글자 변환이 끝난 사건은 이미지 표시가 남아 있어도 본문이다
+    const 환경 = 새환경(입력);
+    환경.ctx.응답 = async u => ({url: u, ok: true, status: 200, text: async () => '<main>' + 판결문 + '</main><script>{\\"isImagePrecedent\\":true}</script>'});
+    const 받은 = await 환경.ctx.lboxText(주소(1));
+    return 받은.length === 1 && 환경.ctx.lboxText.마지막.이미지.length === 0 || JSON.stringify(환경.ctx.lboxText.마지막);
+  },
+  async 그밖의짧은화면은멈추고화면글자를사유에남긴다() {
+    const 환경 = 새환경(입력);
+    환경.ctx.응답 = async u => ({url: u, ok: true, status: 200, text: async () => '<main>존재하지 않거나 삭제된 페이지입니다</main>'});
+    try { await 환경.ctx.lboxText(주소(2)); return '오류가 나지 않았다'; }
+    catch (e) {
+      const 표시 = 환경.저장['lbox중단'] || '';
+      return /판결문이 아닌 화면/.test(e.message) && 표시.includes('삭제된 페이지') && !환경.저장['lbox경고'] && 환경.요청.length === 1
+        || JSON.stringify({오류: e.message, 표시});
+    }
+  },
   async 멈춤표시가있으면보내지않는다() {
     const 환경 = 새환경(입력);
     환경.저장['lbox중단'] = '다른 세션';
@@ -209,6 +241,45 @@ const 시험들 = {
     };
     const 결과 = await 환경.ctx.lboxHarvestRun(['"가"'], {pages: 2});
     return 결과.실패.length === 1 && /2쪽/.test(결과.실패[0]) && 결과.건수 === 1 || JSON.stringify(결과.실패);
+  },
+  // 아래 넷은 2026. 10. 1. 첫 검색 목록에 있던 유사 사례를 본문을 받지 않아 놓친 일을 막으려는 것이다
+  async 수확기는좁은검색어의스니펫을남긴다() {
+    const 환경 = 새환경(입력);
+    const 줄 = (id, snippet) => ({textSubInfo: {id, quoted_count: 0}, mainTitle: '해고무효확인', snippet});
+    환경.ctx.응답 = async (url, opt) => {
+      const b = JSON.parse(opt.body), 넓은 = b.query === '"가"';
+      return {ok: true, status: 200, json: async () => ({count: 넓은 ? 500 : 5, result: [줄('서울고등법원-2021나1', 넓은 ? '기본급 인상분 대목' : '명절상품권 대목')]})};
+    };
+    const 결과 = await 환경.ctx.lboxHarvestRun(['"가"', '"나"'], {pages: 1, 인용망: 0, 피인용: false});
+    const r = 결과.rows[0];
+    return 결과.rows.length === 1 && r.스니펫 === '명절상품권 대목' && r.스니펫건수 === 5 && r.출처 === '"가" / "나"' || JSON.stringify(r);
+  },
+  async 수확을모으면좁은스니펫과출처가남는다() {
+    const {ctx} = 새환경(입력);
+    const 기본 = {rows: [{id: 'x-1', 점수: 0.02, 출처: '"가"', 스니펫: '넓은 대목', 스니펫건수: 500}, {id: 'x-2', 점수: 0.01, 출처: '"가"', 스니펫: '넓은 대목', 스니펫건수: 500}]};
+    const 추가 = {rows: [{id: 'x-2', 점수: 0.03, 출처: '"나"', 스니펫: '좁은 대목', 스니펫건수: 5}]};
+    const 모은 = ctx.lboxMerge(기본, 추가);
+    return 모은.length === 2 && 모은[0].id === 'x-2' && 모은[0].스니펫 === '좁은 대목' && 모은[0].출처 === '"가" / "나"' && 모은[0].점수 === 0.04
+      && 기본.rows[1].스니펫 === '넓은 대목' || JSON.stringify(모은);
+  },
+  async 받지않은후보는사건명이아니라낱말과검색어로고른다() {
+    const {ctx} = 새환경(입력);
+    const rows = [
+      {id: '서울고등법원-2021나1', 사건: '해고무효확인', 스니펫: '기본급 인상분', 출처: '"복지포인트" "통상임금" / "명절상품권"'},
+      {id: '대법원-2010두2', 사건: '평균임금정정신청불승인취소', 스니펫: '명절 선물도 평균임금', 출처: '"복지포인트" "통상임금"'},
+      {id: '대법원-2020다3', 사건: '임금', 스니펫: '정기상여금', 출처: '"복지포인트" "통상임금"'},
+      {id: '대법원-2020다4', 사건: '임금', 스니펫: '선물비', 출처: '"선물비" "통상임금"'},
+    ];
+    const 남은 = ctx.lboxUnread(rows, {낱말: ['선물', '상품권'], 검색어: ['"명절상품권"'], 받은: ['https://lbox.kr/case/대법원/2020다4']});
+    return JSON.stringify(남은.map(r => r.id)) === JSON.stringify(['서울고등법원-2021나1', '대법원-2010두2'])
+      && 남은[0].걸린검색어.length === 1 && 남은[0].걸린낱말.length === 0 && 남은[1].걸린낱말[0] === '선물' || JSON.stringify(남은);
+  },
+  async 대목뽑기는겹치는곳을합친다() {
+    const {ctx} = 새환경(입력);
+    const text = '머리 '.repeat(100) + '가'.repeat(1000) + '명절상품권' + '나'.repeat(100) + '상품권' + '다'.repeat(2000) + '상품권' + '라'.repeat(500);
+    const 뽑음 = ctx.lboxExcerpt(text, ['명절상품권', '상품권'], 200, 6);
+    return 뽑음.대목.length === 2 && 뽑음.곳 === 4 && 뽑음.남은대목 === 0 && 뽑음.대목[0].includes('명절상품권') && 뽑음.머리.startsWith('머리')
+      || JSON.stringify({곳: 뽑음.곳, 대목수: 뽑음.대목.length, 남은: 뽑음.남은대목});
   },
 };
 
