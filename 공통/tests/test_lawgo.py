@@ -376,6 +376,8 @@ class LawGoTests(unittest.TestCase):
         self.assertNotIn('제6장의2', doc['조문'])
         self.assertEqual((doc['기준'], doc['시행일자'], doc['공포'], doc['링크']),
                          ('현행', '2026-08-20', '2026-02-19 제21065호', 'https://www.law.go.kr/법령/근로기준법/제76조의2'))
+        self.assertEqual(doc['시행예정'], [])                              # 앞으로 시행될 판본이 없으면 안내 줄도 없다
+        self.assertNotIn('시행예정', lawgo.article_markdown(doc))
         self.assertEqual((self.calls[-1]['efYd'], self.calls[-1]['JO']), ('20260820', '007602'))
         lawgo.article('근로기준법', '제76조의2')
         self.assertEqual(self.steps(), ['목록 law', '목록 eflaw', '본문 eflaw', '목록 law', '목록 eflaw'])   # 조문은 보관함에서
@@ -399,15 +401,22 @@ class LawGoTests(unittest.TestCase):
         body = self.calls[-1]
         self.assertEqual((body['path'], body['target'], body['MST'], body['efYd'], body['JO']),
                          ('lawService.do', 'eflaw', '252393', '20250712', '040000'))
-        # 오늘 날짜를 기준일로 준 조회와 같은 판본, 같은 보관 파일이다
+        # 현행 조회에는 앞으로 시행될 판본을 알린다. 현행 조문이 곧 바뀔 수 있기 때문이다
+        self.assertEqual(doc['시행예정'], ['2026-10-02 시행(2026-09-29 제21993호)', '2028-03-01 시행(2026-03-17 제21455호)'])
+        self.assertIn('- 공포: 2023-07-11 제19516호\n- 시행예정: 2026-10-02 시행(2026-09-29 제21993호), 2028-03-01 시행(2026-03-17 제21455호) '
+                      '(이 조문이 바뀌는지는 --date 로 확인)\n- 링크: ', lawgo.article_markdown(doc))
+        # 오늘 날짜를 기준일로 준 조회와 같은 판본, 같은 보관 파일이다. 기준일을 준 조회에는 시행예정을 적지 않는다
         dated = lawgo.article('민사소송법', '400', date='20261001')
         self.assertEqual((dated['기준'], dated['시행일자'], dated['조문']), ('2026-10-01', '2025-07-12', doc['조문']))
         self.assertEqual(self.steps(), ['목록 law', '목록 eflaw', '본문 eflaw', '목록 law', '목록 eflaw'])
+        self.assertNotIn('시행예정', dated)
+        self.assertNotIn('시행예정', lawgo.article_markdown(dated))
         # 시행예정 판본은 시행일이 되면 목록의 표시와 상관없이 현행으로 고른다
         self.routes[('info', 'eflaw', '290113', 'JSON')] = jo_400(self.PARAGRAPH_3)
         with mock.patch.object(lawgo, 'today', lambda: '20261002'):
             doc = lawgo.article('민사소송법', '400')
         self.assertEqual((doc['기준'], doc['시행일자'], doc['공포']), ('현행', '2026-10-02', '2026-09-29 제21993호'))
+        self.assertEqual(doc['시행예정'], ['2028-03-01 시행(2026-03-17 제21455호)'])
         self.routes[('info', 'eflaw', '252393', 'JSON')] = {'법령': {'기본정보': {'법령명_한글': '민사소송법'}}}
         with self.assertRaises(lawgo.LawGoError) as caught:
             lawgo.article('민사소송법', '999')
@@ -434,6 +443,15 @@ class LawGoTests(unittest.TestCase):
         self.assertEqual((self.calls[-1]['MST'], self.calls[-1]['efYd']), ('284449', '20260918'))
         doc = lawgo.article('고용보험법', '10', date='20270615')
         self.assertEqual((doc['조문'], doc['기준'], doc['시행일자']), ('제10조(적용 제외) 2027. 1. 1. 시행 본문', '2027-06-15', '2027-01-01'))
+
+    def test_upcoming_versions_are_listed_by_effective_date(self):
+        """시행예정 판본은 시행일 순서로, 같은 날 시행되는 공포분은 한 항목에 묶어 적는다. 기준일까지 시행된 줄은 뺀다."""
+        rows = [version('284449', '20280101', '20260317', '21473'), version('286253', '20270101', '20260526', '21699'),
+                version('284449', '20270101', '20260317', '21473'), version('284449', '20260918', '20260317', '21473')]
+        self.assertEqual(lawgo.upcoming(rows, '20261001'), ['2027-01-01 시행(2026-03-17 제21473호·2026-05-26 제21699호)',
+                                                            '2028-01-01 시행(2026-03-17 제21473호)'])
+        self.assertEqual(lawgo.upcoming(rows, '20270101'), ['2028-01-01 시행(2026-03-17 제21473호)'])
+        self.assertEqual(lawgo.upcoming(rows, '20280101'), [])
 
     def test_article_body_saved_before_effective_date_is_fetched_again(self):
         """시행 전에 받아 둔 본문은 그 사이 공포된 개정이 반영되면 달라지므로 다시 받는다. 시행일 이후에 받아 둔 것은 보관함에서 쓴다."""

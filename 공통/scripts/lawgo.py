@@ -621,6 +621,15 @@ def today():
     return datetime.now(KST).strftime('%Y%m%d')
 
 
+def upcoming(versions, day):
+    """기준일 뒤에 시행될 판본을 시행일 순서로 적는다. 같은 날 시행되는 공포분이 여럿이면 한 항목에 묶는다."""
+    dates = {}
+    for v in sorted(versions, key=lambda v: (v.get('시행일자') or '', v.get('공포일자') or '')):
+        if (v.get('시행일자') or '') > day:
+            dates.setdefault(v['시행일자'], []).append(f"{ymd(v.get('공포일자'))} 제{v.get('공포번호', '')}호")
+    return [f"{ymd(d)} 시행({'·'.join(labels)})" for d, labels in dates.items()]
+
+
 def article(name, number, *, date=None, oc=None):
     """법령 조문 하나를 받는다. date(YYYYMMDD)를 주면 그날, 없으면 오늘 시행 중인 판본의 조문을 받는다.
 
@@ -631,6 +640,8 @@ def article(name, number, *, date=None, oc=None):
       개정은 들어 있다(고용보험법 284449에 2027. 1. 1. 시행분 제10조가 들어 있다).
     - eflawjosub(시행일 기준): 한 일련번호에 시행일이 여럿이면 efYd 를 따르지 않을 때가 있고(고용보험법 284449 제75조를
       efYd=20260317로 받아도 2026. 9. 18. 시행분이 온다), 조문참고자료([본조신설 …]·[시행일: …])가 빠져 온다.
+
+    date 가 없으면 앞으로 시행될 판본을 '시행예정'에 함께 적는다. 현행 조문이 곧 바뀔 수 있음을 알리기 위한 것이다.
     """
     oc = oc_value(oc)
     law, jo = find_law(name, oc), jo_code(number)
@@ -668,13 +679,15 @@ def article(name, number, *, date=None, oc=None):
                          f"판본(시행 {ymd(version['시행일자'])})에 없는 조문입니다")
     return {'법령': version.get('법령명한글') or law['법령명한글'], '조': label, '기준': ymd(day) if date else '현행',
             '시행일자': ymd(version.get('시행일자')), '공포': f"{ymd(version.get('공포일자'))} 제{version.get('공포번호', '')}호",
+            **({} if date else {'시행예정': upcoming(versions, day)}),
             '링크': 'https://www.law.go.kr/법령/' + re.sub(r'\s', '', law['법령명한글']) + '/' + label,
             '조문': '\n\n'.join(article_text(u) for u in units)}
 
 
 def article_markdown(doc):
+    soon = f"- 시행예정: {', '.join(doc['시행예정'])} (이 조문이 바뀌는지는 --date 로 확인)\n" if doc.get('시행예정') else ''
     return (f"## {doc['법령']} {doc['조']} ({doc['기준']} 기준, 시행 {doc['시행일자']})\n\n"
-            f"- 공포: {doc['공포']}\n- 링크: {doc['링크']}\n\n{doc['조문']}\n")
+            f"- 공포: {doc['공포']}\n{soon}- 링크: {doc['링크']}\n\n{doc['조문']}\n")
 
 
 def check(oc=None):
