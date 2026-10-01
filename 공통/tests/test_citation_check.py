@@ -183,7 +183,8 @@ class EvidenceRenameTests(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self.tmp.name)
+        # %TEMP% 가 짧은 이름(사용자~1 꼴)으로 잡힌 환경에서는 풀어 주지 않으면 resolve() 한 경로와 달라 '루트밖'으로 판정된다
+        self.root = Path(self.tmp.name).resolve()
         self.patch = mock.patch.object(evidence_rename, 'ROOT', self.root)
         self.patch.start()
         self.folder = self.root / '사건' / '라운드1' / '상대증거'
