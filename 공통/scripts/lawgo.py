@@ -22,6 +22,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # 사건번호 정규식의 단일 원본은 공통/scripts/system.py 이다.
@@ -34,6 +35,7 @@ PAGE = 100          # API가 한 번에 돌려주는 최대 건수
 DELAY = 0.3         # 호출 사이 간격(초). 공식 API이지만 한꺼번에 몰아 보내지 않는다
 OPENER = urllib.request.urlopen
 CALLS = {'n': 0}
+KST = timezone(timedelta(hours=9))      # 법령 시행일은 한국 날짜이다. PC 시간대와 상관없이 한국 시각으로 센다
 
 # 일련번호·일자는 목록과 본문에서 필드 이름이 다른 경우가 있어 후보를 차례로 본다.
 TYPES = {
@@ -229,6 +231,10 @@ def joined(value):
     return to_text(value)
 
 
+CIRCLED = {n: chr(code + n - first) for first, last, code in ((16, 20, 0x246F), (21, 35, 0x3251), (36, 50, 0x32B1))
+           for n in range(first, last + 1)}
+
+
 def article_text(unit):
     """조문단위 하나를 조문내용 → 항 → 호 → 목 순서의 텍스트로 만든다. 번호는 내용 안에 들어 있다."""
     lines = [joined(unit.get('조문내용'))]
@@ -236,7 +242,8 @@ def article_text(unit):
         if not isinstance(hang, dict):
             lines.append(joined(hang))
             continue
-        lines.append(joined(hang.get('항내용')))
+        # 전체 본문 조회(law·eflaw)는 16항부터 항 번호를 '<16>' 꼴로 준다. 조문에 쓰는 동그라미 숫자(⑯)로 바꾼다
+        lines.append(re.sub(r'^<(\d+)>', lambda m: CIRCLED.get(int(m.group(1)), m.group(0)), joined(hang.get('항내용'))))
         for ho in as_list(hang.get('호')):
             if not isinstance(ho, dict):
                 lines.append(joined(ho))
@@ -610,33 +617,46 @@ def find_law(name, oc):
                      + (' (후보: ' + ', '.join(i.get('법령명한글', '') for i in items[:8]) + ')' if items else ''))
 
 
+def today():
+    return datetime.now(KST).strftime('%Y%m%d')
+
+
 def article(name, number, *, date=None, oc=None):
-    """법령 조문 하나를 받는다. date(YYYYMMDD)를 주면 그날 시행 중이던 판본의 조문을 받는다."""
+    """법령 조문 하나를 받는다. date(YYYYMMDD)를 주면 그날, 없으면 오늘 시행 중인 판본의 조문을 받는다.
+
+    판본은 시행일 기준 목록(eflaw)에서 고르고, 조문은 시행일 기준 본문(eflaw)에 조 번호를 붙여 받는다. 조문만 받는 조회 둘은
+    2026. 10. 1. 실측에서 그날 시행 중인 본문과 달랐으므로 쓰지 않는다.
+    - lawjosub(공포일 기준): 같은 법령일련번호라도 그 공포분의 공포 당시 본문을 준다. 뒤에 공포되어 먼저 시행된 개정은 빠지고
+      (민사소송법 252393에 2024. 1. 16. 공포·2025. 3. 1. 시행 개정인 제400조제3항·제402조의2가 없다), 같은 공포분의 시행 전
+      개정은 들어 있다(고용보험법 284449에 2027. 1. 1. 시행분 제10조가 들어 있다).
+    - eflawjosub(시행일 기준): 한 일련번호에 시행일이 여럿이면 efYd 를 따르지 않을 때가 있고(고용보험법 284449 제75조를
+      efYd=20260317로 받아도 2026. 9. 18. 시행분이 온다), 조문참고자료([본조신설 …]·[시행일: …])가 빠져 온다.
+    """
     oc = oc_value(oc)
     law, jo = find_law(name, oc), jo_code(number)
-    version, day = law, None
-    if date:
-        day = re.sub(r'\D', '', date)
-        if len(day) != 8:
-            raise LawGoError('기준일은 20190716 꼴로 적으십시오.')
-        versions, page = [], 1
-        while True:
-            items = list_items(unwrap(call('lawSearch.do', {'target': 'eflaw', 'LID': law['법령ID'], 'nw': '1,2,3',
-                                                            'display': PAGE, 'page': page, 'sort': 'efdes'}, oc)))
-            versions += [v for v in items if v.get('법령ID') == law['법령ID']]     # 제명이 바뀐 옛 판본도 법령ID는 같다
-            if len(items) < PAGE:
-                break
-            page += 1
-        past = [v for v in versions if v.get('시행일자') and v['시행일자'] <= day]
-        if not past:
-            raise LawGoError(f"{law['법령명한글']}: {ymd(day)} 당시 시행 중이던 판본을 찾지 못했습니다.")
-        version = max(past, key=lambda v: v['시행일자'])
-        params = {'target': 'eflawjosub', 'MST': version['법령일련번호'], 'efYd': version['시행일자'], 'JO': jo}
-    else:
-        params = {'target': 'lawjosub', 'MST': law['법령일련번호'], 'JO': jo}
-    # 법령일련번호(MST)는 판본마다 달라지므로 판본·시행일·조 번호로 보관하면 개정 뒤에도 섞이지 않는다
-    cache = home() / '캐시' / 'lawgo' / 'article' / f"{params['MST']}_{params.get('efYd', '현행')}_{jo}.json"
-    if cache.is_file():
+    day = re.sub(r'\D', '', date) if date else today()
+    if len(day) != 8:
+        raise LawGoError('기준일은 20190716 꼴로 적으십시오.')
+    versions, page = [], 1
+    while True:
+        items = list_items(unwrap(call('lawSearch.do', {'target': 'eflaw', 'LID': law['법령ID'], 'nw': '1,2,3',
+                                                        'display': PAGE, 'page': page, 'sort': 'efdes'}, oc)))
+        versions += [v for v in items if v.get('법령ID') == law['법령ID']]     # 제명이 바뀐 옛 판본도 법령ID는 같다
+        if len(items) < PAGE:
+            break
+        page += 1
+    past = [v for v in versions if v.get('시행일자') and v['시행일자'] <= day]
+    if not past:
+        raise LawGoError(f"{law['법령명한글']}: {ymd(day)} 당시 시행 중이던 판본을 찾지 못했습니다.")
+    # 목록의 현행·시행예정 표시가 아니라 시행일자로 고른다(시행일이 지난 줄에 '시행예정'이 남아 있는 법령이 있다).
+    # 시행일이 같은 판본이 여럿이면 본문은 같으므로(그날의 통합 본문) 나중에 공포된 것으로 공포 표시를 맞춘다
+    version = max(past, key=lambda v: (v['시행일자'], v.get('공포일자') or ''))
+    params = {'target': 'eflaw', 'MST': version['법령일련번호'], 'efYd': version['시행일자'], 'JO': jo}
+    # 한 법령일련번호(MST)에 시행일이 여럿일 수 있으므로 판본·시행일·조 번호로 보관한다. 시행 전에 받은 본문은 그 사이 공포된
+    # 개정이 반영되면 달라지므로, 시행일 이후에 받아 둔 것만 쓰고 그 전에 받아 둔 것은 다시 받는다.
+    # 예전에 lawjosub·eflawjosub 으로 받아 둔 article 폴더의 파일은 쓰지 않는다
+    cache = home() / '캐시' / 'lawgo' / 'eflaw' / f"{params['MST']}_{params['efYd']}_{jo}.json"
+    if cache.is_file() and datetime.fromtimestamp(cache.stat().st_mtime, KST).strftime('%Y%m%d') >= params['efYd']:
         data = json.loads(cache.read_text(encoding='utf-8'))
     else:
         data = unwrap(call('lawService.do', params, oc))
@@ -644,9 +664,9 @@ def article(name, number, *, date=None, oc=None):
     label = jo_label(jo)
     units = [u for u in as_list((data.get('조문') or {}).get('조문단위')) if isinstance(u, dict) and u.get('조문여부') != '전문']
     if not units:
-        raise LawGoError(f"{law['법령명한글']} {label}: " + (f"{ymd(day)} 당시 판본(시행 {ymd(version['시행일자'])})에 없는 조문입니다"
-                                                             if day else '없는 조문입니다'))
-    return {'법령': version.get('법령명한글') or law['법령명한글'], '조': label, '기준': ymd(day) if day else '현행',
+        raise LawGoError(f"{law['법령명한글']} {label}: {ymd(day) + ' 당시' if date else '현행'} "
+                         f"판본(시행 {ymd(version['시행일자'])})에 없는 조문입니다")
+    return {'법령': version.get('법령명한글') or law['법령명한글'], '조': label, '기준': ymd(day) if date else '현행',
             '시행일자': ymd(version.get('시행일자')), '공포': f"{ymd(version.get('공포일자'))} 제{version.get('공포번호', '')}호",
             '링크': 'https://www.law.go.kr/법령/' + re.sub(r'\s', '', law['법령명한글']) + '/' + label,
             '조문': '\n\n'.join(article_text(u) for u in units)}
@@ -684,9 +704,9 @@ def main():
     s = subs.add_parser('show', help='본문을 받는다(보관함에 있으면 요청하지 않는다). 법령은 법령일련번호(MST)를 넘긴다')
     s.add_argument('kind'); s.add_argument('id'); s.add_argument('--refresh', action='store_true')
     s.add_argument('--out', help='마크다운 파일로 쓴다')
-    s = subs.add_parser('article', help='법령 조문 하나를 받는다. --date를 주면 그날 시행 중이던 조문')
+    s = subs.add_parser('article', help='법령 조문 하나를 받는다. --date를 주면 그날, 없으면 오늘 시행 중인 조문')
     s.add_argument('law', help='법령명(예: 근로기준법, 근로기준법 시행령)'); s.add_argument('number', help='조 번호(예: 23, 76의2)')
-    s.add_argument('--date', help='기준일 20190716'); s.add_argument('--out', help='마크다운 파일로 쓴다')
+    s.add_argument('--date', help='기준일 20190716(기본: 오늘)'); s.add_argument('--out', help='마크다운 파일로 쓴다')
     s = subs.add_parser('file', help="별표·서식 파일을 내려받는다. search 결과의 '한글파일'·'PDF파일' 주소를 넘긴다")
     s.add_argument('url'); s.add_argument('--out', required=True, help='저장할 경로')
     s = subs.add_parser('harvest', help='여러 검색어·종류를 한꺼번에 받고 합친다')
