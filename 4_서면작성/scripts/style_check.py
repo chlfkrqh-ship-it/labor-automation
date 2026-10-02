@@ -60,6 +60,9 @@ CITED = re.compile(r'(?:\([^()]*?(?:' + _system.EVIDENCE_NUMBER + r')[^()]*\)'
                    r'|\[[^\[\]]*?(?:' + _system.EVIDENCE_NUMBER + r')[^\[\]]*\])\s*\.?\s*$')
 # 발췌 캡션 한 줄('[갑 제8호증 징계처분사유설명서]')은 사실 문단이 아니다.
 CAPTION = re.compile(r'^\[[^\[\]]*\]$')
+# 캡션 줄 바로 아래에 그림 줄이 붙은 묶음('[갑 제8호증 …]' + '![](갑8.png)')도 문단이 아니다.
+# 증거를 인용한 사실 문단 뒤에 이 묶음이 오는 것은 정해진 모양이므로 평가 문단으로 세지 않는다.
+CAPTION_BLOCK = re.compile(r'^\[[^\[\]]*\](?:\s*!\[[^\[\]]*\]\([^()]*\))*$')
 POINTER = ('이처럼', '이와 같이', '이에 따를 때', '이러한', '이는', '특히', '무엇보다',
            '오히려', '앞서', '상술한', '그럼에도', '따라서', '결국',
            '이상과 같이', '가사', '백번', '위와 같은', '구체적으로', '나아가', '즉',
@@ -184,7 +187,8 @@ def check(path: Path):
         plain = PLAIN.search(sentences)
         if plain:
             add(notes, '해라체 종결', line, text, plain[0].strip())
-        if previous_cited and not text.startswith(POINTER):
+        if (previous_cited and not text.startswith(POINTER)
+                and not CAPTION_BLOCK.match(own.strip())):
             add(notes, '증거 인용 뒤 평가 문단에 지시 접속어 없음', line, text)
         if NESTED.search(own):
             add(notes, '괄호 안 내부 소괄호', line, text,

@@ -192,6 +192,13 @@ class StyleRuleTests(unittest.TestCase):
         # 발췌 캡션 한 줄은 사실 문단이 아니다
         result = self.check('[갑 제8호증 징계처분사유설명서]', '원고는 성실히 근무하였습니다.')
         self.assertEqual(self.found(result, rule, 'notes'), [])
+        # 증거를 인용한 문단 바로 뒤의 캡션·그림 묶음은 평가 문단이 아니다(2026. 10. 3. 한영대 재심청구서)
+        result = self.check('신고인은 "다 빼고 찾아 뵐게요"라고 답하였습니다(증 제7호증).',
+                            '[증 제7호증 신고인과 주고받은 메시지]\n![](증7-2.png)')
+        self.assertEqual(self.found(result, rule, 'notes'), [])
+        # 인용 문단 → 캡션 → 다음 문단: 캡션도, 캡션 뒤 문단도 세지 않는다
+        result = self.check('원고는 입사하였습니다(갑 제2호증).', '[갑 제2호증 근로계약서]', '원고는 성실히 근무하였습니다.')
+        self.assertEqual(self.found(result, rule, 'notes'), [])
 
     def test_appendix_below_rule_is_not_checked(self):
         result = self.check('원고는 입사하였습니다.', '---', '① [확인 필요 사항]', '[반박 보완 필요] 둘째, 근태기록')
