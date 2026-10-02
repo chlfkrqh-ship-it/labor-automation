@@ -118,13 +118,15 @@ class StyleRuleTests(unittest.TestCase):
     def test_captions_and_bracket_citations_are_not_memos(self):
         result = self.check('[을나 제5호증 사실확인서]',
                             '[을 제2호증 경력확인서]',
+                            '[증 제11호증 이체확인증]',
+                            '[갑 제7호증 이체확인증(2026. 7. 5.)]',
                             '[서울중앙지방법원 2020. 1. 1. 선고 2019가합12345 해고무효확인 판결 中]',
                             '피고는 보충교섭을 거쳤습니다[갑 제3호증 보충교섭협약서(2022. 12. 14.자) 제10조].')
         self.assertEqual(self.found(result, '대괄호 메모 잔존'), [])
 
     def test_memos_are_violations(self):
         for memo in ('[반박 보완 필요]', '[확인 필요]', '【판례 확인 필요】', '[갑 제3호증 원본 확인 필요]',
-                     '[원고 입사일 확인]', '[금액: 계산 확인 전]'):
+                     '[원고 입사일 확인]', '[금액: 계산 확인 전]', '[입사일 확인 증빙]', '[송금 확인증빙]'):
             with self.subTest(memo=memo):
                 self.assertEqual(len(self.found(self.check(memo), '대괄호 메모 잔존')), 1)
 
