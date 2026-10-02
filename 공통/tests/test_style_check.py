@@ -196,6 +196,11 @@ class StyleRuleTests(unittest.TestCase):
         result = self.check('신고인은 "다 빼고 찾아 뵐게요"라고 답하였습니다(증 제7호증).',
                             '[증 제7호증 신고인과 주고받은 메시지]\n![](증7-2.png)')
         self.assertEqual(self.found(result, rule, 'notes'), [])
+        # 인용 문단 뒤의 (n) 소제목·'(n) 소결'·'가.' 제목은 평가 문단이 아니다
+        result = self.check('원고는 입사하였습니다(갑 제2호증).', '(2) 원고는 성실히 근무하였습니다.')
+        self.assertEqual(self.found(result, rule, 'notes'), [])
+        result = self.check('원고는 입사하였습니다(갑 제2호증).', '(3) 소결')
+        self.assertEqual(self.found(result, rule, 'notes'), [])
         # 인용 문단 → 캡션 → 다음 문단: 캡션도, 캡션 뒤 문단도 세지 않는다
         result = self.check('원고는 입사하였습니다(갑 제2호증).', '[갑 제2호증 근로계약서]', '원고는 성실히 근무하였습니다.')
         self.assertEqual(self.found(result, rule, 'notes'), [])

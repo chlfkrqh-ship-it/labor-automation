@@ -54,6 +54,9 @@ SENTENCE = re.compile(_END)
 PLAIN = re.compile(r'(?<!니)' + _END + r'(?:\s|$)')
 # 개요 기호('가. ', '다. ')는 문장 끝이 아니다.
 OUTLINE = re.compile(r'^[가-하]\.\s')
+# 목차 제목 줄('가. …', '(1) …', '(3) 소결')은 평가 문단이 아니다. 증거를 인용한 문단 뒤에 다음 소제목이 오는 것은
+# 정해진 모양이다(2026. 10. 3. 한영대 재심청구서에 (n) 소제목을 넣으며 고침).
+HEADING = re.compile(r'^(?:[가-하]\.|\(\d{1,2}\)|\([가-하]\))\s\S.{0,88}$')
 # 증거 인용으로 끝나는 사실 문단 뒤에는 지시 접속어로 시작하는 평가 문단이 온다.
 # 호증 표기는 공통/scripts/system.py 의 정의를 쓴다('갑 제2, 3호증' 같은 병기 포함).
 CITED = re.compile(r'(?:\([^()]*?(?:' + _system.EVIDENCE_NUMBER + r')[^()]*\)'
@@ -109,9 +112,12 @@ def paragraphs(path: Path):
     """
     if path.suffix.lower() == '.docx':
         import docx
+        # 번호 매기기 제목 스타일('1.번호매기기', '가.번호매기기', '(1) 번호매기기')은 목차 제목이다.
+        # 본문 스타일은 '…_내용'으로 끝나므로 걸러지지 않는다.
         return [(i + 1, p.text.strip(), True)
                 for i, p in enumerate(docx.Document(str(path)).paragraphs)
-                if p.text.strip() and not p.style.name.startswith(('Heading', '제목'))]
+                if p.text.strip() and not p.style.name.startswith(('Heading', '제목'))
+                and not re.search(r'번호\s*매기기$', p.style.name)]
     lines = path.read_text(encoding='utf-8-sig').split('\n')
     result, buffer, start, body = [], [], 0, True
     for number, line in enumerate(lines, 1):
@@ -188,7 +194,7 @@ def check(path: Path):
         if plain:
             add(notes, '해라체 종결', line, text, plain[0].strip())
         if (previous_cited and not text.startswith(POINTER)
-                and not CAPTION_BLOCK.match(own.strip())):
+                and not CAPTION_BLOCK.match(own.strip()) and not HEADING.match(own.strip())):
             add(notes, '증거 인용 뒤 평가 문단에 지시 접속어 없음', line, text)
         if NESTED.search(own):
             add(notes, '괄호 안 내부 소괄호', line, text,
