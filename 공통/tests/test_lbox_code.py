@@ -1,9 +1,12 @@
+import base64
+import io
 import json
 from pathlib import Path
 import re
 import shutil
 import subprocess
 import unittest
+import zipfile
 
 SKILL = Path(__file__).parents[2] / '.claude' / 'skills' / 'lbox-검색' / 'SKILL.md'
 HARNESS = Path(__file__).with_name('lbox_code_harness.js')
@@ -43,6 +46,7 @@ class LboxCodeTests(unittest.TestCase):
             'harvest': self.block('async function lboxHarvest'),
             'cites': self.block('function lboxCites'),
             'opener': self.block('await (async url =>'),
+            'pdf': self.block('function lboxZip'),
         }
         run = subprocess.run(['node', str(HARNESS)], input=json.dumps(payload, ensure_ascii=False),
                              capture_output=True, text=True, encoding='utf-8', timeout=120)
@@ -51,6 +55,12 @@ class LboxCodeTests(unittest.TestCase):
         self.assertGreaterEqual(len(results), 15)
         failed = {r['name']: r['detail'] for r in results if not r['ok']}
         self.assertEqual(failed, {})
+        # 브라우저 코드가 만든 압축파일을 파이썬으로 다시 열어 본다(한글 이름·내용·CRC)
+        packed = next(r['detail'] for r in results if r['name'] == '_압축파일')
+        with zipfile.ZipFile(io.BytesIO(base64.b64decode(packed))) as z:
+            self.assertIsNone(z.testzip())
+            self.assertEqual(z.namelist(), ['각주01_대법원 2016다48785 판결.pdf', 'b.pdf'])
+            self.assertEqual(z.read('b.pdf'), b'%PDF-1.7 x')
 
 
 if __name__ == '__main__':

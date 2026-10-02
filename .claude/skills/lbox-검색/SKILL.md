@@ -1,6 +1,6 @@
 ---
 name: lbox-검색
-description: LBOX에서 판례·결정례·유권해석을 검색하는 공통 규칙. 검토의견 작성, 판례 나열, 서면 보강, 서면 작성 등 LBOX를 쓰는 모든 작업에서 사용한다.
+description: LBOX에서 판례·결정례·유권해석을 검색하는 공통 규칙. 검토의견 작성, 판례 나열, 서면 보강, 서면 작성 등 LBOX를 쓰는 모든 작업에서 사용한다. 판결 전문 PDF를 내려받아 달라는 요청(별첨용 압축파일)도 여기 9항대로 한다.
 ---
 
 # LBOX 검색 규칙
@@ -803,3 +803,90 @@ lboxCiteRank(Object.entries(보관).map(([url, text]) => ({url, text})), 판례.
 ## 8. 검색을 마친 뒤
 
 작업에 쓴 판례·결정례·유권해석은 `lbox-하이라이트` 스킬에 따라 LBOX 원문에 하이라이트를 남긴다.
+
+## 9. 판결 전문 PDF 내려받기
+
+의뢰인에게 별첨으로 보낼 판결 전문이나 "판례를 내려받아 달라"는 요청을 받으면 **묻거나 다른 길을 시험하지 않고 아래 방식으로 곧바로 받는다**(2026. 10. 2. 담당자 지시). 20건이 2분 안에 끝난다.
+
+- **외부 엣지(Claude in Chrome)에서 한다.** 인앱 브라우저는 내려받을 때마다 Windows 저장 창이 떠서 쓸 수 없다. PC에 수신용 서버를 띄우는 방법은 보안 검사에서 거부되므로 시도하지 않는다. 엣지의 LBOX 로그인(`GET .../highlights` 200)을 먼저 본다.
+- **판결마다 화면을 열어 '더보기 → 다운로드'를 누르지 않는다.** 한 건에 2~3분이 걸린다. 2026. 10. 2. 그렇게 21건을 받다가 6분에 3건밖에 못 받아 담당자가 직접 받겠다고 하였다. 백그라운드 작업에 한 건씩 맡기지도 않는다.
+- 조종 탭(`https://lbox.kr/robots.txt`)에 3항 첫 블록과 아래 블록을 붙여 넣고 `lboxPdfZip`을 부른다. LBOX 화면의 다운로드 단추가 보내는 것과 같은 요청(`POST /gw/research/api/v3/precedents/{법원명}-{사건번호}/pdf`)을 판결마다 4초 간격으로 보내 PDF를 받고, 브라우저 안에서 압축파일 하나로 묶어 **한 번만** 내려받는다. 파일마다 따로 내려받으면 엣지가 여러 파일 다운로드 허용을 묻는다.
+- 요청 본문이 `{}`이면 하이라이트 없는 판결문이 온다(화면에서 '하이라이트 포함 — 전체'를 끈 것과 크기가 같았다). 의뢰인에게 보내는 것은 하이라이트 없는 판으로 받는다.
+- 요청은 본문 수신과 같은 사용량 기록·간격·멈춤 표시를 쓴다(3항 '계정 보호'). 응답이 `/recaptcha`로 넘어가면 멈춤 표시를 남기고 선다. `status 404`는 LBOX에 그 문서가 없는 것이다(상·하위 판결란에 사건번호만 나오는 심리불속행 기각 판결 등). 건너뛰고 답변에 적는다.
+
+```js
+// 판결 전문 PDF 를 여러 건 받아 압축파일 하나로 내려받는다. 3항 첫 블록(lboxGuard·lboxUsage·lboxPace)을 먼저 붙여 넣는다
+function lboxZip(files) {                 // files: [{name, data: Uint8Array}]. 압축하지 않고 담기만 한다(PDF 는 이미 압축되어 있다)
+  const 표 = lboxZip.표 || (lboxZip.표 = Uint32Array.from({length: 256}, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; }));
+  const crc = u => { let c = 0xFFFFFFFF; for (let i = 0; i < u.length; i++) c = 표[(c ^ u[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+  const enc = new TextEncoder(), 앞 = [], 뒤 = []; let 자리 = 0;
+  for (const f of files) {
+    const 이름 = enc.encode(f.name), c = crc(f.data), n = f.data.length;
+    const h = new DataView(new ArrayBuffer(30));                // 파일 머리. 0x0800 은 이름이 UTF-8 이라는 표시
+    h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true); h.setUint16(12, 0x21, true);
+    h.setUint32(14, c, true); h.setUint32(18, n, true); h.setUint32(22, n, true); h.setUint16(26, 이름.length, true);
+    앞.push(new Uint8Array(h.buffer), 이름, f.data);
+    const d = new DataView(new ArrayBuffer(46));                // 끝에 붙는 목록
+    d.setUint32(0, 0x02014b50, true); d.setUint16(4, 20, true); d.setUint16(6, 20, true); d.setUint16(8, 0x0800, true); d.setUint16(14, 0x21, true);
+    d.setUint32(16, c, true); d.setUint32(20, n, true); d.setUint32(24, n, true); d.setUint16(28, 이름.length, true); d.setUint32(42, 자리, true);
+    뒤.push(new Uint8Array(d.buffer), 이름);
+    자리 += 30 + 이름.length + n;
+  }
+  const e = new DataView(new ArrayBuffer(22));
+  e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true);
+  e.setUint32(12, 뒤.reduce((a, b) => a + b.length, 0), true); e.setUint32(16, 자리, true);
+  return new Blob([...앞, ...뒤, new Uint8Array(e.buffer)], {type: 'application/zip'});
+}
+
+// 목록: [[LBOX id, 저장할 이름], …]. 1분 넘게 걸리므로 기다리지 않고 걸어 둔 뒤 lboxPdfZip.마지막 을 본다
+async function lboxPdfZip(목록, 파일이름 = 'lbox_pdf.zip') {
+  lboxGuard();
+  const 쓰임 = lboxUsage();
+  if (쓰임.최근1시간 + 목록.length > 쓰임.시간당 || 쓰임.최근24시간 + 목록.length > 쓰임.하루)
+    throw new Error(`본문 한도 초과(받을 ${목록.length}건 · 최근 1시간 ${쓰임.최근1시간}/${쓰임.시간당} · 24시간 ${쓰임.최근24시간}/${쓰임.하루}). 받지 않고 사용자에게 알린다`);
+  const 결과 = [], 파일들 = [];
+  lboxPdfZip.마지막 = {끝: false, 결과, 받은: 0};
+  for (const [id, name] of 목록) {
+    try {
+      await lboxPace();                  // 본문 수신·원문 열기와 같은 간격(4초)과 사용량 기록을 쓴다
+      const r = await fetch('/gw/research/api/v3/precedents/' + encodeURIComponent(id) + '/pdf',
+        {method: 'POST', headers: {'content-type': 'application/json'}, body: '{}'});   // {} 이면 하이라이트 없는 판결문
+      if (r.url.includes('/recaptcha')) {
+        if (!localStorage.getItem('lbox중단'))
+          localStorage.setItem('lbox중단', `${new Date().toLocaleString('ko-KR')} 이용 확인 화면 ${r.url} (PDF 내려받기)`);
+        localStorage.setItem('lbox경고', Date.now());
+        결과.push([id, '이용 확인 화면']); break;
+      }
+      if (!r.ok) { 결과.push([id, 'status ' + r.status]); continue; }   // 404 는 LBOX 에 그 문서가 없는 것이다
+      const data = new Uint8Array(await r.arrayBuffer());
+      if (String.fromCharCode(...data.slice(0, 5)) !== '%PDF-') { 결과.push([id, 'PDF 가 아님(' + data.length + '바이트)']); continue; }
+      파일들.push({name, data}); 결과.push([id, 'ok', data.length]);
+    } catch (e) { 결과.push([id, '오류 ' + e.message]); if (e.message.includes('LBOX 요청 멈춤')) break; }
+  }
+  if (파일들.length) {                   // 한 번만 내려받는다
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(lboxZip(파일들)); a.download = 파일이름;
+    document.body.appendChild(a); a.click(); a.remove();
+  }
+  return lboxPdfZip.마지막 = {끝: true, 결과, 받은: 파일들.length};
+}
+
+Object.assign(globalThis, {lboxZip, lboxPdfZip});
+```
+
+```js
+lboxPdfZip([
+  ['대법원-2016다48785', '각주01_대법원 2016다48785 전원합의체 판결.pdf'],
+  ['서울고등법원-2021나2005261', '각주03-1_서울고등법원 2021나2005261 판결.pdf'],
+  ['수원지방법원성남지원-2025가합1079', '각주15_수원지방법원 성남지원 2025가합1079 판결.pdf'],
+]).catch(e => (lboxPdfZip.오류 = e.message));
+// 30초쯤 뒤부터 lboxPdfZip.마지막 을 본다. 끝 이 true 이면 결과(건마다 ok·status 404 등)를 읽는다
+```
+
+받은 뒤에는 이렇게 한다.
+
+1. 다운로드 폴더(`%USERPROFILE%\Downloads`)에 생긴 `lbox_pdf.zip`을 사건 폴더의 `별첨_각주 판례/`에 풀고, PyMuPDF로 **PDF마다 첫 면에 그 사건번호가 있는지**와 면수를 확인한다. 다운로드 폴더에는 임시 파일을 남기지 않는다.
+2. 파이썬 `zipfile`로 별첨 압축파일을 다시 만들고 `testzip()`으로 확인한다. 이름은 `({의뢰인 약칭}) {사안} 관련 검토_별첨(각주 판례).zip`으로 한다.
+3. **저장 이름은 넘길 때 정한다.** 각주 판결이면 각주 번호를 앞에 붙인다(`각주03-1_…`, `각주03-2_…`). 한 각주에 여럿이면 가지 번호를 단다.
+4. **받는 범위.** 각주에 사건번호가 적힌 판결은 모두 받는다. 확정 표시에 적은 상급심도 넣고, 각주가 '원심 인정사실'을 들었으면 그 원심 판결도 넣는다. 행정해석·결정례는 이 요청으로 받아지지 않으므로 뺀 사실을 답변에 적는다.
+5. LBOX가 만든 PDF에는 면마다 옅은 LBOX 표시가 들어 있다.

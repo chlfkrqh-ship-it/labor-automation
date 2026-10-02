@@ -1,17 +1,18 @@
 // lbox-검색 스킬의 브라우저 코드를 node 에서 가짜 LBOX 로 돌려 본다. test_lbox_code.py 가 부른다.
-// 입력(stdin): {main, harvest, cites, opener} — SKILL.md 의 코드 블록 원문. 출력(stdout): [{name, ok, detail}]
+// 입력(stdin): {main, harvest, cites, opener, pdf} — SKILL.md 의 코드 블록 원문. 출력(stdout): [{name, ok, detail}]
 const vm = require('vm');
 
 function 새환경(blocks) {
   let 지금 = Date.UTC(2026, 8, 19, 0, 0, 0);
   const 저장 = {};
   const 요청 = [];
+  const 내려받기 = [];                                                                      // a.click() 으로 내려받은 것(이름·주소)
   class 가짜날짜 extends Date {
     constructor(...a) { if (a.length) super(...a); else super(지금); }
     static now() { return 지금; }
   }
   const ctx = {
-    console, JSON, Math, Promise, Object, Array, Set, Map, Error, RegExp, String, Number,
+    console, JSON, Math, Promise, Object, Array, Set, Map, Error, RegExp, String, Number, TextEncoder, Blob,
     encodeURIComponent, decodeURIComponent,
     Date: 가짜날짜,
     setTimeout: (fn, ms = 0) => { 지금 += Math.max(0, ms); setImmediate(fn); return 0; },   // 기다린 만큼 시계를 앞으로 돌린다
@@ -33,14 +34,19 @@ function 새환경(blocks) {
       return ctx.응답(url, opt);
     },
     응답: async () => { throw new Error('응답이 정해지지 않았다'); },
+    document: {
+      createElement: () => { const a = {click() { 내려받기.push({download: a.download, href: a.href}); }, remove() {}}; return a; },
+      body: {appendChild() {}},
+    },
+    URL: {createObjectURL: () => 'blob:가짜'},
   };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
-  for (const code of [blocks.main, blocks.harvest, blocks.cites]) vm.runInContext(code, ctx);
+  for (const code of [blocks.main, blocks.harvest, blocks.cites, blocks.pdf]) vm.runInContext(code, ctx);
   const m = blocks.opener.match(/await \((async url => \{[\s\S]*\})\)\('[^']*'\);?/);
   if (!m) throw new Error('원문 열기 블록 모양이 다르다');
   vm.runInContext('globalThis.원문열기 = (' + m[1] + ');', ctx);
-  return {ctx, 저장, 요청, 시각: () => 지금, 시각바꾸기: t => { 지금 = t; }};
+  return {ctx, 저장, 요청, 내려받기, 시각: () => 지금, 시각바꾸기: t => { 지금 = t; }};
 }
 
 const 판결문 = '대법원 2010. 1. 14. 선고 2009다12345 판결 [임금] ' + '이유 가. 판단 '.repeat(40);
@@ -281,9 +287,41 @@ const 시험들 = {
     return 뽑음.대목.length === 2 && 뽑음.곳 === 4 && 뽑음.남은대목 === 0 && 뽑음.대목[0].includes('명절상품권') && 뽑음.머리.startsWith('머리')
       || JSON.stringify({곳: 뽑음.곳, 대목수: 뽑음.대목.length, 남은: 뽑음.남은대목});
   },
+  // 아래 셋은 판결 전문 PDF 를 한꺼번에 받아 압축파일 하나로 내려받는 9항 코드이다(2026. 10. 2.)
+  async 압축파일은표준형식이다() {
+    const {ctx} = 새환경(입력);
+    const 글 = s => new TextEncoder().encode(s);
+    const z = ctx.lboxZip([{name: '각주01_대법원 2016다48785 판결.pdf', data: 글('hello')}, {name: 'b.pdf', data: 글('%PDF-1.7 x')}]);
+    const u = new Uint8Array(await z.arrayBuffer()), v = new DataView(u.buffer), 끝 = u.length - 22;
+    압축시험 = Buffer.from(u).toString('base64');                                         // test_lbox_code.py 가 zipfile 로 다시 연다
+    return v.getUint32(0, true) === 0x04034b50 && v.getUint16(6, true) === 0x0800 && v.getUint32(14, true) === 0x3610a686   // crc32('hello')
+      && v.getUint32(끝, true) === 0x06054b50 && v.getUint16(끝 + 10, true) === 2
+      || JSON.stringify({머리: v.getUint32(0, true).toString(16), crc: v.getUint32(14, true).toString(16), 개수: v.getUint16(끝 + 10, true)});
+  },
+  async 판결PDF를받아압축파일하나로내려받는다() {
+    const 환경 = 새환경(입력);
+    const pdf = new TextEncoder().encode('%PDF-1.7 가짜 판결문 %%EOF');
+    환경.ctx.응답 = async u => (u.includes(encodeURIComponent('대법원-2026다3'))
+      ? {url: u, ok: false, status: 404, arrayBuffer: async () => new ArrayBuffer(0)}
+      : {url: u, ok: true, status: 200, arrayBuffer: async () => pdf.buffer.slice(0)});
+    const 받음 = await 환경.ctx.lboxPdfZip([['대법원-2020다1', '각주01_가.pdf'], ['대법원-2026다3', '각주02_나.pdf'], ['서울고등법원-2021나2', '각주03_다.pdf']], '묶음.zip');
+    const t = 기록(환경), 벌어짐 = t.slice(1).map((x, i) => x - t[i]);
+    return 받음.끝 === true && 받음.받은 === 2 && 받음.결과[0][1] === 'ok' && 받음.결과[1][1] === 'status 404' && 받음.결과[2][1] === 'ok'
+      && 환경.요청.length === 3 && 환경.요청.every(x => x.method === 'POST' && x.url.endsWith('/pdf'))
+      && t.length === 3 && 벌어짐.every(x => x >= 4000) && 환경.내려받기.length === 1 && 환경.내려받기[0].download === '묶음.zip' && !환경.저장['lbox중단']
+      || JSON.stringify({받음, 요청: 환경.요청.length, 기록: t.length, 벌어짐, 내려받기: 환경.내려받기});
+  },
+  async 이용확인화면이면PDF받기를멈춘다() {
+    const 환경 = 새환경(입력);
+    환경.ctx.응답 = async u => ({url: 'https://lbox.kr/recaptcha?from=' + u, ok: true, status: 200, arrayBuffer: async () => new ArrayBuffer(0)});
+    const 받음 = await 환경.ctx.lboxPdfZip([['대법원-2020다1', '가.pdf'], ['대법원-2020다2', '나.pdf']]);
+    return 받음.받은 === 0 && 받음.결과.length === 1 && 받음.결과[0][1] === '이용 확인 화면' && !!환경.저장['lbox중단'] && !!환경.저장['lbox경고']
+      && 환경.요청.length === 1 && 환경.내려받기.length === 0
+      || JSON.stringify({받음, 중단: 환경.저장['lbox중단'], 요청: 환경.요청.length});
+  },
 };
 
-let 입력;
+let 입력, 압축시험 = '';
 (async () => {
   입력 = JSON.parse(require('fs').readFileSync(0, 'utf8'));
   const 결과 = [];
@@ -291,5 +329,6 @@ let 입력;
     try { const r = await fn(); 결과.push({name, ok: r === true, detail: r === true ? '' : String(r)}); }
     catch (e) { 결과.push({name, ok: false, detail: 'throw ' + e.message}); }
   }
+  결과.push({name: '_압축파일', ok: true, detail: 압축시험});
   process.stdout.write(JSON.stringify(결과));
 })();
