@@ -211,5 +211,35 @@ class StyleRuleTests(unittest.TestCase):
         self.assertEqual(result['appendix_paragraphs'], 2)
 
 
+class DocxHeadingTests(unittest.TestCase):
+    """docx 의 번호 매기기 제목은 실측에서 빠지되 앞 문단의 증거 인용 맥락을 끊는다(md 의 제목 줄과 같게).
+    2026. 10. 3. 한영대 재심청구서 병합본에서 '(3) …' 소제목 너머의 다음 목 첫 문단이 참고로 잡혔다."""
+
+    RULE = '증거 인용 뒤 평가 문단에 지시 접속어 없음'
+
+    def check(self, with_heading):
+        from docx.enum.style import WD_STYLE_TYPE
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / '제목.docx'
+            document = docx.Document()
+            heading = document.styles.add_style('(1) 번호매기기', WD_STYLE_TYPE.PARAGRAPH)
+            document.add_paragraph('신고인도 먼저 연락하여 서로 연락을 주고받았습니다(증 제7호증).')
+            if with_heading:
+                document.add_paragraph('산책으로 사생활을 침해한 사실도 없습니다.', style=heading)
+            document.add_paragraph('청구인은 점심 산책 때 신고인을 따라다닌 사실이 없습니다.')
+            document.save(path)
+            return style_check.check(path)
+
+    def test_numbered_heading_breaks_citation_context(self):
+        result = self.check(with_heading=True)
+        self.assertEqual([n for n in result['notes'] if n['rule'] == self.RULE], [])
+        self.assertEqual(result['appendix_paragraphs'], 0)   # 제목은 보완 메모로 세지 않는다
+        self.assertEqual(result['paragraphs'], 2)            # 제목은 본문 실측에서 빠진다
+
+    def test_without_heading_the_note_remains(self):
+        result = self.check(with_heading=False)
+        self.assertEqual(len([n for n in result['notes'] if n['rule'] == self.RULE]), 1)
+
+
 if __name__ == '__main__':
     unittest.main()

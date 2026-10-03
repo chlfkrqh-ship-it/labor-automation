@@ -114,10 +114,13 @@ def paragraphs(path: Path):
         import docx
         # 번호 매기기 제목 스타일('1.번호매기기', '가.번호매기기', '(1) 번호매기기')은 목차 제목이다.
         # 본문 스타일은 '…_내용'으로 끝나므로 걸러지지 않는다.
-        return [(i + 1, p.text.strip(), True)
+        # 제목은 본문여부를 None 으로 돌려준다. 실측과 문체 검사에서는 빠지되, md 의 제목 줄처럼 앞 문단의
+        # 증거 인용 맥락을 끊는다(제목 너머의 다음 목 첫 문단을 '증거 인용 뒤 평가 문단'으로 세지 않는다).
+        return [(i + 1, p.text.strip(),
+                 None if (p.style.name.startswith(('Heading', '제목'))
+                          or re.search(r'번호\s*매기기$', p.style.name)) else True)
                 for i, p in enumerate(docx.Document(str(path)).paragraphs)
-                if p.text.strip() and not p.style.name.startswith(('Heading', '제목'))
-                and not re.search(r'번호\s*매기기$', p.style.name)]
+                if p.text.strip()]
     lines = path.read_text(encoding='utf-8-sig').split('\n')
     result, buffer, start, body = [], [], 0, True
     for number, line in enumerate(lines, 1):
@@ -230,7 +233,7 @@ def check(path: Path):
     return {
         'file': path.as_posix(),
         'paragraphs': len(body_text),
-        'appendix_paragraphs': sum(1 for _, _, body in blocks if not body),
+        'appendix_paragraphs': sum(1 for _, _, body in blocks if body is False),   # None 은 docx 제목
         'sentences': len(lengths),
         'measured': measured,
         'violation_count': len(violations),
