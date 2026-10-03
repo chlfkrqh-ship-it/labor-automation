@@ -58,7 +58,7 @@ const 시험들 = {
   async 한도값() {
     const {ctx} = 새환경(입력);
     const 한 = ctx.본문한도;
-    return 한.동시 === 1 && 한.간격 === 4000 && 한.시간당 === 450 && 한.하루 === 3000 && 한.경고뒤 === 5 || JSON.stringify(한);
+    return 한.동시 === 1 && 한.간격 === 4000 && 한.시간당 === 150 && 한.하루 === 400 && 한.경고뒤 === 5 || JSON.stringify(한);
   },
   async 본문은간격을두고받는다() {
     const 환경 = 새환경(입력);
@@ -74,7 +74,7 @@ const 시험들 = {
   },
   async 한도를넘기면받지않는다() {
     const 환경 = 새환경(입력);
-    환경.저장['lbox본문'] = JSON.stringify(Array.from({length: 449}, (_, i) => 환경.시각() - 60e3 - i * 1000));
+    환경.저장['lbox본문'] = JSON.stringify(Array.from({length: 149}, (_, i) => 환경.시각() - 60e3 - i * 1000));
     환경.ctx.응답 = 좋은본문;
     try { await 환경.ctx.lboxText(주소(2)); return '오류가 나지 않았다'; }
     catch (e) { return /본문 한도 초과/.test(e.message) && 환경.요청.length === 0 || e.message; }
@@ -146,7 +146,7 @@ const 시험들 = {
     const 환경 = 새환경(입력);
     환경.저장['lbox경고'] = String(환경.시각() - 3600e3);
     const 쓰임 = 환경.ctx.lboxUsage();
-    return 쓰임.시간당 === 90 && 쓰임.하루 === 600 && 쓰임.동시 === 1 || JSON.stringify(쓰임);
+    return 쓰임.시간당 === 30 && 쓰임.하루 === 80 && 쓰임.동시 === 1 || JSON.stringify(쓰임);
   },
   async 원문열기는간격을두고기록한다() {
     const 환경 = 새환경(입력);
@@ -157,16 +157,16 @@ const 시험들 = {
   },
   async 원문열기도한도를지킨다() {
     const 환경 = 새환경(입력);
-    환경.저장['lbox본문'] = JSON.stringify(Array.from({length: 450}, (_, i) => 환경.시각() - 60e3 - i * 1000));
+    환경.저장['lbox본문'] = JSON.stringify(Array.from({length: 150}, (_, i) => 환경.시각() - 60e3 - i * 1000));
     try { await 환경.ctx.원문열기('https://lbox.kr/case/대법원/2017두57318'); return '오류가 나지 않았다'; }
-    catch (e) { return /본문 한도 초과/.test(e.message) && 기록(환경).length === 450 || e.message; }
+    catch (e) { return /본문 한도 초과/.test(e.message) && 기록(환경).length === 150 || e.message; }
   },
   async 원문열기는경고뒤낮춘한도를쓴다() {
     const 환경 = 새환경(입력);
     환경.저장['lbox경고'] = String(환경.시각());
-    환경.저장['lbox본문'] = JSON.stringify(Array.from({length: 90}, (_, i) => 환경.시각() - 60e3 - i * 1000));
+    환경.저장['lbox본문'] = JSON.stringify(Array.from({length: 30}, (_, i) => 환경.시각() - 60e3 - i * 1000));
     try { await 환경.ctx.원문열기('https://lbox.kr/case/대법원/2017두57318'); return '오류가 나지 않았다'; }
-    catch (e) { return /1시간 90\/90/.test(e.message) || e.message; }
+    catch (e) { return /1시간 30\/30/.test(e.message) || e.message; }
   },
   async 원문열기는멈춤표시를지킨다() {
     const 환경 = 새환경(입력);
