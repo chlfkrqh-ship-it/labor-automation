@@ -5,6 +5,7 @@ const vm = require('vm');
 function 새환경(blocks) {
   let 지금 = Date.UTC(2026, 8, 19, 0, 0, 0);
   const 저장 = {};
+  const 보관함 = new Map();                                                                  // 본문 보관함(IndexedDB) 흉내. lboxCache 가 쓰는 만큼만 있다
   const 요청 = [];
   const 내려받기 = [];                                                                      // a.click() 으로 내려받은 것(이름·주소)
   class 가짜날짜 extends Date {
@@ -25,7 +26,7 @@ function 새환경(blocks) {
     },
     DOMParser: class {
       parseFromString(html) {
-        const text = html.replace(/<[^>]+>/g, '');
+        const text = html.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/g, '').replace(/<[^>]+>/g, '');   // lboxText 가 지우는 script·style 속 글은 화면 글자가 아니다
         return {querySelectorAll: sel => (sel.startsWith('script') ? [] : [{innerText: text, textContent: text}])};
       }
     },
@@ -34,6 +35,24 @@ function 새환경(blocks) {
       return ctx.응답(url, opt);
     },
     응답: async () => { throw new Error('응답이 정해지지 않았다'); },
+    indexedDB: {
+      open() {
+        const 창고 = {
+          get(k) { const g = {}; setImmediate(() => { g.result = 보관함.get(k); if (g.onsuccess) g.onsuccess(); }); return g; },
+          put(v, k) { 보관함.set(k, v); },
+        };
+        const req = {result: {
+          createObjectStore() {}, close() {},
+          transaction() {                                                                   // 걸어 둔 get 이 모두 끝난 뒤에 oncomplete 를 부른다
+            const tx = {objectStore: () => 창고};
+            setImmediate(() => setImmediate(() => { if (tx.oncomplete) tx.oncomplete(); }));
+            return tx;
+          },
+        }};
+        setImmediate(() => { if (req.onsuccess) req.onsuccess(); });
+        return req;
+      },
+    },
     document: {
       createElement: () => { const a = {click() { 내려받기.push({download: a.download, href: a.href}); }, remove() {}}; return a; },
       body: {appendChild() {}},
@@ -46,7 +65,7 @@ function 새환경(blocks) {
   const m = blocks.opener.match(/await \((async url => \{[\s\S]*\})\)\('[^']*'\);?/);
   if (!m) throw new Error('원문 열기 블록 모양이 다르다');
   vm.runInContext('globalThis.원문열기 = (' + m[1] + ');', ctx);
-  return {ctx, 저장, 요청, 내려받기, 시각: () => 지금, 시각바꾸기: t => { 지금 = t; }};
+  return {ctx, 저장, 보관함, 요청, 내려받기, 시각: () => 지금, 시각바꾸기: t => { 지금 = t; }};
 }
 
 const 판결문 = '대법원 2010. 1. 14. 선고 2009다12345 판결 [임금] ' + '이유 가. 판단 '.repeat(40);
@@ -54,11 +73,36 @@ const 좋은본문 = url => ({url, ok: true, status: 200, text: async () => '<ma
 const 기록 = 환경 => JSON.parse(환경.저장['lbox본문'] || '[]');
 const 주소 = n => Array.from({length: n}, (_, i) => 'https://lbox.kr/case/대법원/2020다' + (1000 + i));
 
+// LBOX 판례 페이지 모양을 줄인 것이다(2026. 10. 7. 수원지방법원 안산지원 2025가합6356 응답에서 확인한 구조).
+// 화면에는 머리(사건명·상하위 판결)만 그려지고, 판결 글은 self.__next_f.push 조각 속 쿼리 자료로 온다. 조각은 실제처럼 둘로 나뉘어 올 수 있다
+const 화면머리 = '판례새 작업수원지방법원 안산지원 2026. 4. 23. 선고 2025가합6356 판결[해고무효확인청구의소]상•하위 판결1확정여부 미확인원고패인용된 판례8인용된 조문4AI 유사판례1관련 문서가 없습니다';
+const 쿼리 = (이름, data) => ({dehydratedAt: 0, state: {data, status: 'success'}, queryKey: ['precedents', 이름, '수원지방법원안산지원-2025가합6356'], queryHash: ''});
+const 문단들 = ['1. 기초사실', '가. 당사자들의 지위', '피고는 신용사업을 영업하는 법인이고, 원고는 피고 조합에 입사하여 총무팀 팀장으로 근무하였다.', '4. 결론', '따라서 원고의 이 사건 청구는 이유 없으므로 기각하기로 하여 주문과 같이 판결한다.'];
+const 글줄 = text => ({type: 'PARAGRAPH', text, align: 'LEFT', references: []});
+const 요소들 = [
+  {type: 'HEADER', text: '수원지방법원 안산지원 2026. 4. 23. 선고 2025가합6356 판결', tocType: 'TOC_2'}, {type: 'LINE', style: {lineType: 'SOLID'}},
+  {type: 'TABLE', colgroup: [1, 4], table: [{style: null, cols: [{contents: [글줄('원고')]}, {contents: [글줄('E'), 글줄('소송대리인 법무법인 홍재')]}]}, {style: null, cols: [{contents: [글줄('피고')]}, {contents: [글줄('F조합')]}]}]},
+  {type: 'HEADER', text: '주문', displayType: 'PRECEDENT_SECTION_HEADER'}, 글줄('1. 원고의 청구를 기각한다.'), {type: 'IMAGE', url: 'https://image.lbox.kr/그림.png'},
+  {type: 'HEADER', text: '이유', displayType: 'PRECEDENT_SECTION_HEADER'}, ...문단들.map(글줄), {type: 'FOOTNOTE', footnoteId: '1', text: '제14조(직장 내 성희롱 발생 시 조치)'},
+];
+const 판결문글 = ['수원지방법원 안산지원 2026. 4. 23. 선고 2025가합6356 판결', '원고 E 소송대리인 법무법인 홍재\n피고 F조합', '주문', '1. 원고의 청구를 기각한다.',
+  '이유', ...문단들, '제14조(직장 내 성희롱 발생 시 조치)'].join('\n');   // 요소들을 글로 푼 것. 표는 칸을 띄우고 행을 줄로 나눈다. 그림·줄은 글자가 없다
+const 이유쿼리 = (문단 = 문단들) => 쿼리('sidebar', {isImagePrecedent: false, relations: {lowerList: []}, reasonSentences: 문단});
+const 본문쿼리 = (요소 = 요소들) => 쿼리('contents', {tocId: 1, elements: 요소, limitType: null, annex: []});
+const 계정쿼리 = {dehydratedAt: 0, state: {data: {plans: [{이름: '스탠다드'}]}, status: 'success'}, queryKey: ['/catalog/subscription-status'], queryHash: ''};
+const 자료화면 = (쿼리들, {머리 = 화면머리, 따로온글 = '', 조각 = 2} = {}) => {
+  const 자료 = '1:"$Sreact.fragment"\n' + 따로온글 + '16:' + JSON.stringify(['$', '$L1e', null, {state: {mutations: [], queries: 쿼리들}, children: '$L2b'}]) + '\n2b:["$","main",null,{}]\n';
+  const 토막 = Array.from({length: 조각}, (_, k) => 자료.slice(Math.floor(자료.length * k / 조각), Math.floor(자료.length * (k + 1) / 조각)));
+  return '<html><body><main>' + 머리 + '</main><script>(self.__next_f=self.__next_f||[]).push([0])</script>'
+    + 토막.map(s => '<script>self.__next_f.push([1,' + JSON.stringify(s) + '])</script>').join('') + '</body></html>';
+};
+const 자료응답 = (쿼리들, 옵션) => async u => ({url: u, ok: true, status: 200, text: async () => 자료화면(쿼리들, 옵션)});
+
 const 시험들 = {
   async 한도값() {
     const {ctx} = 새환경(입력);
     const 한 = ctx.본문한도;
-    return 한.동시 === 1 && 한.간격 === 4000 && 한.시간당 === 250 && 한.하루 === 600 && 한.경고뒤 === 5 || JSON.stringify(한);
+    return 한.동시 === 1 && 한.간격 === 4000 && 한.시간당 === 250 && 한.하루 === 400 && 한.경고뒤 === 5 || JSON.stringify(한);
   },
   async 본문은간격을두고받는다() {
     const 환경 = 새환경(입력);
@@ -125,6 +169,87 @@ const 시험들 = {
         || JSON.stringify({오류: e.message, 표시});
     }
   },
+  // 아래는 판결 글이 화면에 그려지지 않고 페이지 자료로만 온 응답이다(2026. 10. 2. 수원지방법원 안산지원 2025가합6356의 142자 화면)
+  async 페이지자료에서판결문을꺼낸다() {
+    const {ctx} = 새환경(입력);
+    const 온 = ctx.lboxPageText(자료화면([계정쿼리, 이유쿼리(), 본문쿼리()]));
+    return !!온 && 온.범위 === '판결문' && 온.글 === 판결문글 || JSON.stringify(온);
+  },
+  async 본문자료가빠졌으면이유문단을꺼낸다() {
+    const {ctx} = 새환경(입력);
+    const 온 = ctx.lboxPageText(자료화면([계정쿼리, 이유쿼리()], {조각: 3}));
+    const 쿼리밖 = ctx.lboxPageText('<script>self.__next_f.push([1,' + JSON.stringify('16:{"data":{"reasonSentences":["가 [1] 나","다 \\"라\\" }"]}}\n') + '])</script>');
+    return !!온 && 온.범위 === '이유' && 온.글 === 문단들.join('\n') && !JSON.stringify(온).includes('스탠다드')   // 계정 정보는 돌려주지 않는다
+      && !!쿼리밖 && 쿼리밖.글 === '가 [1] 나\n다 "라" }' || JSON.stringify({온, 쿼리밖});
+  },
+  async 판결글이없는자료에서는아무것도꺼내지않는다() {
+    const {ctx} = 새환경(입력);
+    return ctx.lboxPageText(자료화면([계정쿼리, 이유쿼리([])])) === null && ctx.lboxPageText('<main>존재하지 않거나 삭제된 페이지입니다</main>') === null
+      && ctx.lboxPageText('<script>self.__next_f.push([1,"16:[\\"$\\",{\\"queries\\":[{\\"queryKey\\""])</script>') === null || '무언가 꺼냈다';   // 잘린 자료
+  },
+  async 따로온긴문단을제자리에되돌린다() {   // 긴 글은 'id:T바이트수,글'로 따로 오고 제자리에는 "$id" 만 남는다
+    const {ctx} = 새환경(입력);
+    const 긴문단 = '원고는 2024. 10. 14. 해고되었다(갑 제1호증, 𠀀 표시). ' + '가나다 abc '.repeat(120);
+    const 따로온글 = '25:T' + Buffer.byteLength(긴문단, 'utf8').toString(16) + ',' + 긴문단;
+    const 온 = ctx.lboxPageText(자료화면([이유쿼리(['1. 기초사실', '$25', '$$100을 지급하였다', '$3f'])], {따로온글}));
+    return !!온 && 온.글 === ['1. 기초사실', 긴문단, '$100을 지급하였다', '[긴 문단을 자료에서 찾지 못함]'].join('\n') || JSON.stringify(온 && 온.글.slice(0, 200));
+  },
+  async 화면에안그려진판결문은자료에서옮겨받고멈추지않는다() {
+    const 환경 = 새환경(입력);
+    환경.ctx.응답 = async u => (u.endsWith('1001') ? 자료응답([계정쿼리, 이유쿼리(), 본문쿼리()])(u) : 좋은본문(u));
+    const 받은 = await 환경.ctx.lboxText(주소(3));
+    const 마지막 = 환경.ctx.lboxText.마지막, 글 = (받은.find(x => x.url.endsWith('1001')) || {}).text || '';
+    const 다시 = await 환경.ctx.lboxText(주소(3));                                        // 보관함에 들어갔으므로 다시 요청하지 않는다
+    return 받은.length === 3 && 글 === 화면머리 + '\n[이 판결은 LBOX 화면 글이 아니라 페이지 자료의 판결문에서 옮긴 것이다]\n' + 판결문글
+      && 마지막.자료본문.length === 1 && 마지막.자료본문[0].endsWith('1001') && 마지막.이유만.length === 0 && 마지막.못받은.length === 0
+      && !환경.저장['lbox중단'] && !환경.저장['lbox경고'] && 환경.요청.length === 3 && 다시.length === 3 && 환경.ctx.lboxText.마지막.보관함에서 === 3
+      || JSON.stringify({받은: 받은.length, 글: 글.slice(0, 200), 마지막: {...마지막, 받은: 0}, 중단: 환경.저장['lbox중단'], 요청: 환경.요청.length});
+  },
+  // 본문 자료가 빠지고 이유 문단만 온 응답은 2026. 10. 2. 17:54부터 받은 판례 293건 전부였고 다음 날 24시간 제한이 왔다. 받은 글은 돌려주되 첫 건에서 멈춘다(10. 7. 사용자 결정)
+  async 이유문단만오면글은돌려주고첫건에서멈춘다() {
+    const 환경 = 새환경(입력);
+    환경.ctx.응답 = async u => (u.endsWith('1000') ? 좋은본문(u) : 자료응답([계정쿼리, 이유쿼리()])(u));
+    try { await 환경.ctx.lboxText(주소(4)); return '오류가 나지 않았다'; }
+    catch (e) {
+      const 마지막 = 환경.ctx.lboxText.마지막, 표시 = 환경.저장['lbox중단'] || '', 글 = (마지막.받은[1] || {}).text || '';
+      return /본문 수신 중단\(판결 본문이 오지 않음\(이유 문단만 옴\)/.test(e.message) && 표시.includes('판결 본문이 오지 않음') && 표시.includes('2020다1001') && !환경.저장['lbox경고']
+        && 환경.요청.length === 2 && 마지막.받은.length === 2 && 마지막.못받은.length === 2 && 마지막.새로받음 === 1
+        && 글 === 화면머리 + '\n[이 판결은 LBOX 화면 글이 아니라 페이지 자료의 이유 문단에서 옮긴 것이다. 주문·당사자 표시는 빠져 있다]\n' + 문단들.join('\n')
+        && 마지막.이유만.length === 1 && 마지막.자료본문.length === 1 && 마지막.이유만[0].endsWith('1001')
+        && 환경.보관함.size === 1 && ![...환경.보관함.keys()].some(k => k.endsWith('1001'))   // 주문이 없는 글은 보관함에 넣지 않는다. 다시 받을 때 온전한 본문을 받아야 한다
+        || JSON.stringify({오류: e.message, 표시, 요청: 환경.요청.length, 마지막: {...마지막, 받은: 마지막.받은.map(x => x.text.slice(0, 160))}, 보관함: [...환경.보관함.keys()]});
+    }
+  },
+  async 머리만온화면이200자를넘어도이유문단만온응답으로본다() {   // 2026. 10. 2. 상·하위 판결이 많아 머리가 205~225자였던 3건은 본문 없이 받은 것으로 보관되었다
+    const 환경 = 새환경(입력);
+    const 긴머리 = 화면머리 + '서울고등법원 2017누57976확정여부 미확인'.repeat(4);
+    환경.ctx.응답 = 자료응답([이유쿼리()], {머리: 긴머리});
+    try { await 환경.ctx.lboxText(주소(2)); return '오류가 나지 않았다(머리 ' + 긴머리.length + '자)'; }
+    catch (e) {
+      return 긴머리.length > 200 && /판결 본문이 오지 않음/.test(e.message) && 환경.요청.length === 1 && 환경.ctx.lboxText.마지막.이유만.length === 1 && 환경.보관함.size === 0
+        || JSON.stringify({오류: e.message, 머리: 긴머리.length});
+    }
+  },
+  async 자료에도판결글이없는짧은화면은종전대로멈춘다() {
+    const 환경 = 새환경(입력);
+    환경.ctx.응답 = 자료응답([계정쿼리, 이유쿼리([])]);
+    try { await 환경.ctx.lboxText(주소(2)); return '오류가 나지 않았다'; }
+    catch (e) {
+      const 마지막 = 환경.ctx.lboxText.마지막;
+      return /판결문이 아닌 화면/.test(e.message) && (환경.저장['lbox중단'] || '').includes('관련 문서가 없습니다') && !환경.저장['lbox경고'] && 환경.요청.length === 1
+        && 마지막.받은.length === 0 && 마지막.자료본문.length === 0 && 마지막.이유만.length === 0 || JSON.stringify({오류: e.message, 마지막});
+    }
+  },
+  async 본문이화면에온판결과결정례는화면글자그대로받는다() {
+    const 환경 = 새환경(입력);
+    const 그려진화면 = 화면머리 + 판결문글.replace('\n제14조', '1제14조').replace(/\n/g, '');   // 짧은 판결이 화면에 그려져 온 것. 자료에도 같은 글이 있고, 화면에는 각주 번호가 더 있다
+    const 결정례 = 'https://lbox.kr/decision/' + encodeURIComponent('중앙노동위원회-2020부해1'), 판정 = '중앙노동위원회 2020부해1 판정사항 판정요지 ' + '가. 판단 '.repeat(60);
+    환경.ctx.응답 = async u => ({url: u, ok: true, status: 200, text: async () => (u === 결정례 ? 자료화면([이유쿼리()], {머리: 판정}) : 자료화면([이유쿼리(), 본문쿼리()], {머리: 그려진화면}))});
+    const 받은 = await 환경.ctx.lboxText([주소(1)[0], 결정례]);
+    const 마지막 = 환경.ctx.lboxText.마지막;
+    return 그려진화면.length < 1000 && 받은.length === 2 && 받은[0].text === 그려진화면 && 받은[1].text === 판정.trim() && 마지막.자료본문.length === 0 && !환경.저장['lbox중단']
+      || JSON.stringify({받은: 받은.map(x => x.text.slice(0, 80)), 마지막: {...마지막, 받은: 0}, 중단: 환경.저장['lbox중단']});
+  },
   async 멈춤표시가있으면보내지않는다() {
     const 환경 = 새환경(입력);
     환경.저장['lbox중단'] = '다른 세션';
@@ -146,7 +271,7 @@ const 시험들 = {
     const 환경 = 새환경(입력);
     환경.저장['lbox경고'] = String(환경.시각() - 3600e3);
     const 쓰임 = 환경.ctx.lboxUsage();
-    return 쓰임.시간당 === 50 && 쓰임.하루 === 120 && 쓰임.동시 === 1 || JSON.stringify(쓰임);
+    return 쓰임.시간당 === 50 && 쓰임.하루 === 80 && 쓰임.동시 === 1 || JSON.stringify(쓰임);
   },
   async 원문열기는간격을두고기록한다() {
     const 환경 = 새환경(입력);
