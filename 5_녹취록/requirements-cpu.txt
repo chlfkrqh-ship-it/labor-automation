@@ -2,11 +2,14 @@
 #
 # faster-whisper : 전사 (CTranslate2 기반. torch 를 쓰지 않는다)
 # sherpa-onnx    : 화자 분리 (ONNX Runtime. CPU 에서 돈다)
+# onnxruntime    : 화자 수를 지정했을 때 diarize.py 가 세그멘테이션 모델을 직접 돌린다
+#                  (faster-whisper 가 이미 끌어오므로 새로 받는 것은 없다)
 # av, numpy      : diarize.py 가 오디오를 16kHz mono 로 디코딩할 때 쓴다
 # certifi        : Windows Store 파이썬이 시스템 CA 를 못 찾는 경우 대비
 
 faster-whisper>=1.1
 sherpa-onnx>=1.10
+onnxruntime
 av>=12
 numpy>=1.24
 certifi

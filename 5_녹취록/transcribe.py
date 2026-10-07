@@ -82,6 +82,10 @@ LABOR_INITIAL_PROMPT = (
 # 확인 필요 구간 판정 기준. 설계안 수치를 그대로 씁니다.
 REVIEW_AVG_LOGPROB = -1.0
 REVIEW_NO_SPEECH = 0.5
+# 인식 힌트 문장과 연달아 이만큼(글자) 같으면 힌트를 받아 적은 것으로 봅니다.
+PROMPT_ECHO_CHARS = 12
+# 화자 수를 지정했는데 한 화자의 구간이 전체의 이 비율에 못 미치면 몰림을 의심합니다.
+LOPSIDED_SHARE = 0.10
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # 이 폴더(5_녹취록)의 상위가 저장소 작업본 루트입니다.
@@ -304,6 +308,47 @@ def _review_flag(avg_logprob, no_speech_prob):
     return reasons
 
 
+def _echoes_prompt(text, prompt):
+    """세그먼트가 인식 힌트 문장을 받아 적은 것인지 봅니다.
+
+    전사기는 힌트 문장을 '앞서 나온 말'로 받는데, 첫 구간에서 실제 말 대신 그 문장을 이어
+    적는 일이 있습니다. large-v3 에 사건 어휘 힌트를 주었더니 7분 통화의 첫 30초가 "○○○,
+    ○○이, … 같은 말이 나옵니다." 로 채워졌고, avg_logprob 는 -0.14 여서 신뢰도 기준으로는
+    걸리지 않았습니다(large-v3-turbo 는 같은 힌트로 정상).
+
+    문장부호·공백을 빼고 힌트와 연달아 PROMPT_ECHO_CHARS 글자 이상 같으면 그렇다고 봅니다.
+    힌트에 든 낱말 한두 개가 실제 대화에 나오는 것으로는 걸리지 않습니다.
+    """
+    n = PROMPT_ECHO_CHARS
+    said = "".join(ch for ch in text if ch.isalnum())
+    hint = "".join(ch for ch in (prompt or "") if ch.isalnum())
+    grams = {hint[i:i + n] for i in range(len(hint) - n + 1)}
+    return any(said[i:i + n] in grams for i in range(len(said) - n + 1))
+
+
+def _speaker_seconds(diar_segments):
+    """화자마다 화자 구간의 길이를 더한 것(초)."""
+    seconds = {}
+    for start, end, spk in diar_segments:
+        seconds[spk] = seconds.get(spk, 0.0) + (end - start)
+    return dict(sorted(seconds.items()))
+
+
+def _lopsided_note(diar_segments, num_speakers):
+    """화자 수를 지정했는데 한 화자에 몰린 것으로 보이면 알릴 말을, 아니면 None 을 냅니다."""
+    if not num_speakers or num_speakers < 2 or not diar_segments:
+        return None
+    seconds = _speaker_seconds(diar_segments)
+    if len(seconds) < num_speakers:
+        return f"화자를 {num_speakers}명으로 지정했는데 {len(seconds)}명만 나왔습니다."
+    total = sum(seconds.values())
+    spk, least = min(seconds.items(), key=lambda item: item[1])
+    if total > 0 and least / total < LOPSIDED_SHARE:
+        return (f"화자{spk + 1} 의 구간이 전체의 {least / total:.0%}뿐입니다. "
+                "그 사람이 실제로 거의 말하지 않은 녹음이 아니라면 화자가 한쪽에 몰린 것일 수 있습니다.")
+    return None
+
+
 def transcribe_one(model, audio_path, out_dir, language, use_vad, condition,
                    diarize=False, num_speakers=0, cluster_threshold=0.8,
                    initial_prompt=None, base=None, options=None):
@@ -347,7 +392,15 @@ def transcribe_one(model, audio_path, out_dir, language, use_vad, condition,
                 audio_path, num_speakers=num_speakers, cluster_threshold=cluster_threshold
             )
             n_spk = len({spk for _, _, spk in diar_segments})
-            _log(f"  [화자 분리] 완료 — 화자 {n_spk}명, 구간 {len(diar_segments)}개")
+            # 화자마다 말한 시간을 함께 찍는다. 구간 수만으로는 한 화자에 몰렸는지 알 수 없다.
+            seconds = list(_speaker_seconds(diar_segments).items())
+            shares = ", ".join(f"화자{spk + 1} {sec:.0f}초" for spk, sec in seconds[:6])
+            if len(seconds) > 6:
+                shares += f" 외 {len(seconds) - 6}명"
+            _log(f"  [화자 분리] 완료 — 화자 {n_spk}명, 구간 {len(diar_segments)}개 ({shares})")
+            note = _lopsided_note(diar_segments, num_speakers)
+            if note:
+                _log(f"  [주의] {note}")
         except Exception as exc:  # noqa: BLE001 — 화자분리 실패 시 일반 전사로 진행
             _log(f"  [화자 분리 실패] {exc}")
             _log("  → 화자 표시 없이 일반 전사로 진행합니다.")
@@ -402,6 +455,8 @@ def transcribe_one(model, audio_path, out_dir, language, use_vad, condition,
     # 전사가 끝난 뒤 단어를 화자 구간에 배정해 이 파일을 다시 씁니다.
     seg_list = []
     words = []
+    word_segments = []   # 단어마다 그 단어가 나온 세그먼트의 번호(seg_list 의 자리)
+    echoed = 0
     # 전사본을 새로 쓰기 시작하면 예전 .녹취.json 은 짝이 맞지 않는다. 이번 실행이 끊기면
     # 전사본과 .부분.jsonl 만 남아 '끝나지 않은 결과'로 보이도록 먼저 지운다.
     try:
@@ -430,6 +485,9 @@ def transcribe_one(model, audio_path, out_dir, language, use_vad, condition,
                 "no_speech_prob": round(nsp, 4) if nsp is not None else None,
             }
             reasons = _review_flag(alp, nsp)
+            if initial_prompt and _echoes_prompt(text, initial_prompt):
+                reasons.append("인식 힌트 문장이 그대로 나옴(실제 발언이 아닐 수 있음)")
+                echoed += 1
             if reasons:
                 rec["review"] = reasons
             seg_list.append(rec)
@@ -439,6 +497,7 @@ def transcribe_one(model, audio_path, out_dir, language, use_vad, condition,
                     wt = (w.word or "").strip()
                     if wt:
                         words.append((float(w.start), float(w.end), wt))
+                        word_segments.append(len(seg_list) - 1)
 
             mark = " ※확인" if reasons else ""
             txt_f.write(f"[{_hhmmss(start)}] {text}{mark}\n")
@@ -454,7 +513,7 @@ def transcribe_one(model, audio_path, out_dir, language, use_vad, condition,
     turn_list = []
     if diar_segments and words:
         import diarize as diar_mod
-        turns = diar_mod.assign_words_to_speakers(words, diar_segments)
+        turns = diar_mod.assign_words_to_speakers(words, diar_segments, segment_ids=word_segments)
         flagged_segs = [s for s in seg_list if s.get("review")]
         lines = []
         for start, end, spk, text in turns:
@@ -487,6 +546,9 @@ def transcribe_one(model, audio_path, out_dir, language, use_vad, condition,
                 f.write(f"[{_hhmmss(s['start'])}] {s['text']}\n")
                 f.write(f"    사유: {'; '.join(s['review'])}\n")
     _log(f"  [확인 필요 구간] {len(review)}곳")
+    if echoed:
+        _log(f"  [주의] 인식 힌트 문장이 그대로 나온 구간이 {echoed}곳 있습니다. 그 구간의 실제 말은 "
+             "전사되지 않았습니다. --no-initial-prompt 를 붙여 다시 돌려 보십시오.")
 
     meta = {
         "source_file": os.path.basename(audio_path),
@@ -507,6 +569,7 @@ def transcribe_one(model, audio_path, out_dir, language, use_vad, condition,
         "review_criteria": {
             "avg_logprob_below": REVIEW_AVG_LOGPROB,
             "no_speech_prob_above": REVIEW_NO_SPEECH,
+            "prompt_echo_chars": PROMPT_ECHO_CHARS,
         },
     }
     with open(json_path, "w", encoding="utf-8") as f:
