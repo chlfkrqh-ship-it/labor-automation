@@ -12,18 +12,39 @@ docx_normalize.py — 서면 docx 마무리 점검·정리 도구
 (2026. 9. 7. 이케아 사건 변호사 지적: 원문자가 본문과 다른 글꼴로 찍히는 문제)
 판정은 run 에 적힌 속성이 아니라 실제로 적용되는 글꼴로 한다. run 속성 → 문자 스타일 → 문단 스타일(basedOn 사슬)
 → docDefaults 순으로 따라가 본문 한글 글꼴과 다를 때만 비정합으로 센다(기준은 run_ok).
-⑯~⑳ 은 바탕체·맑은 고딕에 글리프가 없어 어떻게 지정해도 본문 글꼴로 찍히지 않는다(바탕체로 지정해도 Word 는
-Cambria Math 로 찍었다). 이 점검은 그것을 잡지 못한다.
+
+보는 자리(2026. 10. 8. 넓힘. 자리마다 Word 가 찍는 글꼴이 본문 직계 run 과 같음을 확인했다)
+  - 본문·각주·미주·머리글·바닥글의 모든 문단. 표 칸(표 안의 표 포함)·글상자·누름틀 안의 문단도 본다.
+  - 문단 안에서는 하이퍼링크(목차 항목 포함)·변경 추적 삽입 표시(w:ins)·누름틀·스마트 태그·필드 안에 든 run 까지 본다.
+    삽입 표시 안의 글은 수락하면 본문이 되므로 세고 고친다(2026. 10. 8. 담당자 결정). 고치는 것은 글꼴 지정뿐이고
+    삽입 표시와 작성자·일시는 그대로이며, 이 글꼴 변경은 변경 내용으로 따로 남지 않는다.
+  - 삭제 표시(w:del·w:moveFrom) 안의 글, 글상자를 옛 형식으로 한 번 더 적어 둔 사본(mc:Fallback), 메모는 제출본에
+    찍히지 않으므로 세지도 고치지도 않는다.
+
+⑯~⑳ 은 바탕체·맑은 고딕·굴림·HY견고딕에 글리프가 없어 어떻게 지정해도 본문 글꼴로 찍히지 않는다(넷 다 바탕체로
+지정하고 hint 를 붙여도 Word 는 Cambria Math 로 찍었다). 그래서 ⑯~⑳ 이 든 run 은 글꼴 지정이 맞아도 비정합으로 세고
+따로 알린다(2026. 10. 8. 담당자 결정). 정리로는 없어지지 않으므로 정리 모드도 이것이 남으면 종료 코드 1을 낸다.
+글을 ⑮ 이하로 고쳐야 한다(skills/노동서면작성/references/표기-어휘.md).
+
 run 은 원문자 조각과 나머지 조각으로만 나누고, 탭·줄바꿈 등 글자 아닌 자식은 원래 자리에 한 번만 둔다.
-정리 전후 문단 글자(탭·줄바꿈 포함)가 다르면 저장하지 않고 멈춘다.
+정리 전후 문단 글자(탭·줄바꿈 포함)가 다르면 어느 자리에서든 저장하지 않고 멈춘다.
 """
 import sys, re, copy
 from docx import Document
+from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
+from docx.text.paragraph import Paragraph
+from docx.text.run import Run
+from lxml import etree
 
 CIRC = re.compile(r"[①-⑳]")
 CIRC_RUN = re.compile(r"[①-⑳]+")
+NO_GLYPH = re.compile(r"[⑯-⑳]")
+# 본문 밖에서 글이 찍히는 파트. 메모(comments)는 제출본에 찍히지 않아 보지 않는다.
+STORIES = {RT.FOOTNOTES: '각주', RT.ENDNOTES: '미주', RT.HEADER: '머리글', RT.FOOTER: '바닥글'}
+# 찍히지 않는 글: 삭제 표시 안의 글(옮기기 전 자리 포함), 글상자를 옛 형식으로 한 번 더 적어 둔 사본
+_UNPRINTED = (qn('w:del'), qn('w:moveFrom'), '{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback')
 
 
 def body_font(doc):
@@ -105,14 +126,44 @@ def run_ok(r, p, font, index):
     return font_of('hAnsi') == font
 
 
-def iter_paragraphs(doc):
-    for p in doc.paragraphs:
-        yield p
-    for t in doc.tables:
-        for row in t.rows:
-            for c in row.cells:
-                for p in c.paragraphs:
-                    yield p
+def stories(doc):
+    """[(자리 이름, 루트 요소, 파트)] — 본문과, 본문에 딸린 각주·미주·머리글·바닥글.
+    python-docx 가 요소로 들고 있는 파트(본문·머리글·바닥글)는 그 요소를 고치면 저장된다. 각주·미주는 바이트로만 들고
+    있으므로 docx_footnotes.py 처럼 읽어서 고치고 저장하기 전에 다시 써 넣는다(파트가 None 이 아니면 그 대상이다)."""
+    out, seen = [('본문', doc.element, None)], set()
+    for rel in doc.part.rels.values():
+        if rel.is_external or rel.reltype not in STORIES or id(rel.target_part) in seen:
+            continue
+        part = rel.target_part
+        seen.add(id(part))
+        if hasattr(part, 'element'):
+            out.append((STORIES[rel.reltype], part.element, None))
+        else:
+            out.append((STORIES[rel.reltype], etree.fromstring(part.blob), part))
+    return out
+
+
+def paragraphs(root):
+    """루트 아래의 모든 문단. 표 칸(표 안의 표 포함)·글상자·누름틀 안의 문단도 문단이고, 병합한 칸도 한 번만 나온다."""
+    return [p for p in root.iter(qn('w:p')) if not any(a.tag in _UNPRINTED for a in p.iterancestors())]
+
+
+def own_runs(p_el):
+    """문단의 run 을 문서 순서대로. 하이퍼링크·변경 추적 삽입 표시(w:ins)·누름틀·스마트 태그·필드 안에 든 run 도 넣는다.
+    찍히지 않는 글(_UNPRINTED) 안의 run 은 빼고, 문단에 걸린 글상자 안 문단의 run 은 그 문단에서 본다."""
+    out = []
+    for r in p_el.iter(qn('w:r')):
+        a = r.getparent()
+        while a is not p_el and a.tag != qn('w:p') and a.tag not in _UNPRINTED:
+            a = a.getparent()
+        if a is p_el:
+            out.append(r)
+    return out
+
+
+def run_text(r_el):
+    """run 바로 아래 w:t 의 글자. 지운 글(w:delText)과 run 에 걸린 글상자 안의 글은 들어가지 않는다."""
+    return ''.join(ch.text or '' for ch in r_el if ch.tag == qn('w:t'))
 
 
 def _visible(p_el):
@@ -175,28 +226,61 @@ def _split_run(r_el, font):
     r_el.getparent().remove(r_el)
 
 
-def normalize(path, check_only=False):
+def normalize(path, check_only=False, detail=None):
+    """원문자가 본문 글꼴로 찍히지 않는 run 을 세고, check_only 가 아니면 글꼴을 맞춰 같은 파일에 저장한다.
+    (본문 한글 글꼴, 비정합 run 수)를 돌려준다. detail 에 dict 를 넘기면 자리별 건수(places), 글꼴 지정이 맞지 않은
+    run 수(wrong), ⑯~⑳ 이 들어 글꼴 지정으로는 고칠 수 없는 run 수(no_glyph)를 채운다. 한 run 이 둘 다일 수 있다."""
     doc = Document(path)
     font = body_font(doc)
     index = style_index(doc)
-    bad = 0
-    for p in iter_paragraphs(doc):
-        before = None
-        for r in list(p.runs):
-            if not CIRC.search(r.text) or run_ok(r, p, font, index):
-                continue
-            bad += 1
-            if check_only:
-                continue
-            if before is None:
-                before = _visible(p._p)
-            _split_run(r._r, font)
-        if before is not None and _visible(p._p) != before:
-            raise SystemExit("원문자 정리 중 문단 글자가 달라져 저장하지 않았습니다(원문 보존). 문단 앞부분: "
-                             + repr(before[:60]))
-    if not check_only and bad:
+    places, wrong, no_glyph, rewrite = {}, 0, 0, []
+    for place, root, part in stories(doc):
+        touched = False
+        for p_el in paragraphs(root):
+            p, before = Paragraph(p_el, None), None
+            for r_el in own_runs(p_el):
+                text = run_text(r_el)
+                if not CIRC.search(text):
+                    continue
+                ok, glyph = run_ok(Run(r_el, p), p, font, index), bool(NO_GLYPH.search(text))
+                if ok and not glyph:
+                    continue
+                places[place] = places.get(place, 0) + 1
+                wrong += not ok
+                no_glyph += glyph
+                if ok or check_only:
+                    continue
+                if before is None:
+                    before = _visible(p_el)
+                _split_run(r_el, font)
+                touched = True
+            if before is not None and _visible(p_el) != before:
+                raise SystemExit(f"원문자 정리 중 {place} 문단 글자가 달라져 저장하지 않았습니다(원문 보존). 문단 앞부분: "
+                                 + repr(before[:60]))
+        if touched and part is not None:
+            rewrite.append((part, root))
+    if not check_only and wrong:
+        for part, root in rewrite:
+            part._blob = etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
         doc.save(path)
-    return font, bad
+    if detail is not None:
+        detail.update(places=places, wrong=wrong, no_glyph=no_glyph)
+    return font, sum(places.values())
+
+
+def count_text(bad, detail):
+    """'7건(본문 3건, 각주 4건)'. 모두 본문이면 건수만 적는다."""
+    places = detail['places']
+    if not set(places) - {'본문'}:
+        return f"{bad}건"
+    order = ['본문'] + list(STORIES.values())
+    return f"{bad}건(" + ", ".join(f"{k} {places[k]}건" for k in order if k in places) + ")"
+
+
+def glyph_note(detail):
+    """⑯~⑳ 이 든 run 이 있을 때 덧붙이는 안내 한 줄"""
+    return (f"  ⑯~⑳ 이 든 run {detail['no_glyph']}건은 본문 글꼴에 그 글자가 없어 글꼴을 지정해도 다른 글꼴로 찍힙니다. "
+            "정리로는 고쳐지지 않으므로 ⑮ 이하로 글을 고칩니다.")
 
 
 if __name__ == '__main__':
@@ -213,6 +297,11 @@ if __name__ == '__main__':
         print("금지 낱말 검사는 style_check.py 로 합니다: python 4_서면작성/scripts/style_check.py " + path)
         sys.exit(2)
     check = '--check' in sys.argv
-    font, bad = normalize(path, check_only=check)
-    print(f"본문 한글 글꼴: {font} / 원문자 run 비정합 {bad}건" + ("" if check else " → 정리 완료" if bad else ""))
-    sys.exit(1 if (check and bad) else 0)
+    detail = {}
+    font, bad = normalize(path, check_only=check, detail=detail)
+    fixed, left = (0 if check else detail['wrong']), detail['no_glyph']
+    print(f"본문 한글 글꼴: {font} / 원문자 run 비정합 {count_text(bad, detail)}"
+          + ("" if not fixed else f" → 글꼴 지정 {fixed}건 정리" if left else " → 정리 완료"))
+    if left:
+        print(glyph_note(detail))
+    sys.exit(1 if (bad if check else left) else 0)

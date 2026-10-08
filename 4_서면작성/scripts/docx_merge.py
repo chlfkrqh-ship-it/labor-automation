@@ -38,6 +38,7 @@ docx_merge.py — 서면초안.md 를 서면_프레임.docx 의 "다음" 이후�
   3. docx_footnotes: [[각주: …]] 표시를 실제 각주로
   4. docx_normalize: 원문자 글꼴 통일
   5. 세 점검(--check)을 다시 돌려 출력하고, 남은 것이 있으면 종료 코드 1을 낸다.
+     초안에 ⑯~⑳ 이 있으면 본문 글꼴에 그 글자가 없어 4 로 고쳐지지 않고 원문자 점검에 남는다.
   1~5 는 출력 폴더의 임시 파일에서 하고, 모두 끝난 뒤에만 출력 파일 자리로 옮긴다. 중간에 실패하면
   출력 파일은 그대로 두고 임시 파일을 지운다.
   출력 파일이 이미 있으면 <출력>.bak_merge_<연월일_시분초>.docx 로 보관한 뒤 바꾼다. 같은 이름의
@@ -195,8 +196,11 @@ def _final_check(path):
     print("점검:")
     left = docx_restyle.main(path, check=True)
     left += docx_footnotes.convert(path, check_only=True)
-    font, bad = docx_normalize.normalize(path, check_only=True)
-    print(f"원문자 글꼴 비정합 {bad}건")
+    detail = {}
+    font, bad = docx_normalize.normalize(path, check_only=True, detail=detail)
+    print("원문자 글꼴 비정합 " + docx_normalize.count_text(bad, detail))
+    if detail['no_glyph']:
+        print(docx_normalize.glyph_note(detail))
     return left + (1 if bad else 0)
 
 

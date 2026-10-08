@@ -14,15 +14,18 @@ import sys
 import tempfile
 import types
 import unittest
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
 import docx
 from docx.enum.style import WD_STYLE_TYPE
+from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from docx.oxml import parse_xml
 from docx.oxml.ns import nsdecls, qn
 from docx.text.paragraph import Paragraph
+from lxml import etree
 from PIL import Image
 
 ROOT = Path(__file__).parents[2]
@@ -552,6 +555,93 @@ def circled(d, text='①', rpr=None, style=None, mark=None, cell=None):
     return p, r
 
 
+XMLNS = (nsdecls('w') + ' xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"'
+         ' xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"'
+         ' xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+         ' xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"'
+         ' xmlns:v="urn:schemas-microsoft-com:vml"')
+# Word 는 글상자를 새 형식(mc:Choice)으로 적고 옛 형식 사본(mc:Fallback)을 한 번 더 적는다
+NEW_BOX = ('<w:drawing><wp:inline><wp:extent cx="3600000" cy="432000"/><wp:docPr id="1" name="TextBox 1"/><a:graphic>'
+           '<a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp>'
+           '<wps:cNvSpPr txBox="1"/><wps:spPr/><wps:txbx><w:txbxContent>%s</w:txbxContent></wps:txbx><wps:bodyPr/>'
+           '</wps:wsp></a:graphicData></a:graphic></wp:inline></w:drawing>')
+OLD_BOX = ('<w:pict><v:rect style="width:283.5pt;height:34pt"><v:textbox><w:txbxContent>%s</w:txbxContent></v:textbox>'
+           '</v:rect></w:pict>')
+
+
+def wx(xml):
+    """XML 조각 하나를 요소로 만든다(글상자에 쓰는 네임스페이스까지 선언한다)."""
+    return parse_xml('<w:body %s>%s</w:body>' % (XMLNS, xml))[0]
+
+
+def wr(text, rpr=''):
+    """run 의 XML. rpr 은 w:rPr 안쪽 XML 이다."""
+    return '<w:r>%s<w:t xml:space="preserve">%s</w:t></w:r>' % ('<w:rPr>%s</w:rPr>' % rpr if rpr else '', text)
+
+
+def put(d, where, inner, style=None):
+    """where 자리에 문단을 하나 만들어 inner(문단 안쪽 XML)를 넣는다. style 은 문단 스타일 ID 이다."""
+    para = '<w:p>%s%s</w:p>' % ('<w:pPr><w:pStyle w:val="%s"/></w:pPr>' % style if style else '', inner)
+    if where in ('각주', '미주'):
+        tag, reltype = ('footnote', RT.FOOTNOTES) if where == '각주' else ('endnote', RT.ENDNOTES)
+        part = next(rel.target_part for rel in d.part.rels.values() if rel.reltype == reltype)
+        root = etree.fromstring(part.blob)                 # docx_footnotes.py 처럼 blob 을 읽어 고치고 다시 쓴다
+        number = max(int(note.get(qn('w:id'))) for note in root) + 1
+        root.append(etree.fromstring('<w:%s %s w:id="%d">%s</w:%s>' % (tag, XMLNS, number, para, tag)))
+        part._blob = etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
+        d.add_paragraph()._p.append(wx('<w:r><w:%sReference w:id="%d"/></w:r>' % (tag, number)))
+        return
+    if where == '글상자':
+        para = ('<w:p><w:r><mc:AlternateContent><mc:Choice Requires="wps">%s</mc:Choice><mc:Fallback>%s</mc:Fallback>'
+                '</mc:AlternateContent></w:r></w:p>' % (NEW_BOX % para, OLD_BOX % para))
+    elif where == '옛 글상자':
+        para = '<w:p><w:r>%s</w:r></w:p>' % (OLD_BOX % para)
+    elif where == '누름틀 문단':
+        para = '<w:sdt><w:sdtPr/><w:sdtContent>%s</w:sdtContent></w:sdt>' % para
+    new, section = wx(para), d.sections[0]
+    if where == '머리글':
+        section.header.is_linked_to_previous = False
+        section.header._element.append(new)
+    elif where == '바닥글':
+        section.footer._element.append(new)
+    elif where in ('표 칸', '표 안의 표', '병합한 칸'):
+        table = d.add_table(2, 2)
+        cell = (table.cell(0, 0).merge(table.cell(0, 1)) if where == '병합한 칸' else
+                table.cell(0, 0).add_table(1, 1).cell(0, 0) if where == '표 안의 표' else table.cell(0, 0))
+        cell.paragraphs[0]._p.addprevious(new)
+    else:
+        d.element.body.find(qn('w:sectPr')).addprevious(new)
+
+
+def parts_xml(path):
+    """[(파트 이름, 루트 요소)] — 본문·각주·미주·머리글·바닥글. 스크립트의 함수를 쓰지 않고 zip 에서 직접 읽는다."""
+    with zipfile.ZipFile(str(path)) as archive:
+        return [(name, etree.fromstring(archive.read(name))) for name in sorted(archive.namelist())
+                if name.startswith('word/') and name.count('/') == 1
+                and name[5:].startswith(('document', 'footnotes', 'endnotes', 'header', 'footer'))]
+
+
+def all_text(path):
+    """{파트 이름: 글자}. 지운 글(w:delText)도 넣는다."""
+    return {name: ''.join(t.text or '' for t in root.iter(qn('w:t'), qn('w:delText'))) for name, root in parts_xml(path)}
+
+
+def circled_runs(path):
+    """원문자가 든 run 을 [(문단 글자, 감싼 요소 이름들, w:rFonts 속성)] 으로 읽는다."""
+    found = []
+    for _, root in parts_xml(path):
+        for r in root.iter(qn('w:r')):
+            text = ''.join(t.text or '' for t in r if t.tag in (qn('w:t'), qn('w:delText')))
+            if not any('①' <= ch <= '⑳' for ch in text):
+                continue
+            p = next(r.iterancestors(qn('w:p')))
+            fonts = r.find('%s/%s' % (qn('w:rPr'), qn('w:rFonts')))
+            found.append((''.join(t.text or '' for t in p.iter(qn('w:t'), qn('w:delText'))),
+                          [etree.QName(a).localname for a in r.iterancestors()],
+                          {etree.QName(k).localname: v for k, v in fonts.attrib.items()} if fonts is not None else {}))
+    return found
+
+
 class NormalizeTests(unittest.TestCase):
     """원문자 글꼴은 run 에 적힌 속성이 아니라 Word 가 실제로 찍는 글꼴로 판정한다."""
 
@@ -683,6 +773,200 @@ class NormalizeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn('금지 낱말 검사는 style_check.py', result.stdout)
         self.assertEqual(self.path.read_bytes(), before)
+
+    def test_every_place_is_judged_like_a_run_in_the_body(self):
+        """2026. 10. 8. 표준양식에 아래 자리마다 다섯 변형을 넣어 Word 16 으로 PDF 를 내보내고 원문자가 찍힌 글꼴을 읽었다.
+        목차 문단을 뺀 어느 자리에서나 본문 문단 바로 아래의 run 과 같은 글꼴로 찍혔고, 글상자의 옛 형식 사본(mc:Fallback)은
+        찍히지 않았다. 정리한 뒤에는 모든 자리에서 바탕체로 찍혔다. 예전 점검은 본문 문단과 최상위 표 칸의 직계 run 만 보았고,
+        병합한 칸은 여러 번 돌아 두 번씩 세었다(GGM 소장 청구원인의 표 안 목차 하이퍼링크 ①②③, 현수막 사건 서면의 각주 ①~④)."""
+        B, CM = '바탕체', 'Cambria Math'
+        SIGN = dict(ascii=B, hAnsi=B, eastAsia=B, cs=B, hint='eastAsia')
+        plain = [   # (Word 가 찍은 글꼴, 정상으로 보는가, run 의 w:rFonts 속성)
+            ('CambriaMath', False, {}),
+            ('BatangChe', True, dict(hint='eastAsia')),
+            ('CambriaMath', False, dict(ascii=CM, hAnsi=CM, cs=CM)),               # Word 가 대신 쓴 글꼴을 적어 둔 run
+            ('BatangChe', True, SIGN),
+            ('BatangChe', True, dict(hAnsi=B)),
+        ]
+        # 목차 문단('toc 1')은 스타일이 테마 글꼴(맑은 고딕)이다. 끝 변형은 바탕체로 찍히지만 엄격한 쪽으로 본다
+        toc = [('MalgunGothic', False), ('MalgunGothic', False), ('CambriaMath', False), ('BatangChe', True),
+               ('BatangChe', False)]
+        for printed, ok, *_ in plain + toc:
+            self.assertTrue(printed == 'BatangChe' or not ok)
+        d = docx.Document(str(TEMPLATE))
+        ids = {s.find(qn('w:name')).get(qn('w:val')): s.get(qn('w:styleId')) for s in d.styles.element.findall(qn('w:style'))}
+        link = '<w:hyperlink w:anchor="_Toc1" w:history="1">%s</w:hyperlink>'
+        wraps = {   # 문단 안에서 run 을 감싸는 요소: (틀, run 의 w:rPr 앞머리)
+            '하이퍼링크': (link, ''),
+            '하이퍼링크(문자 스타일)': (link, rstyle(ids['Hyperlink'])),
+            '삽입 표시': ('<w:ins w:id="901" w:author="변호사" w:date="2026-10-08T00:00:00Z">%s</w:ins>', ''),
+            '누름틀': ('<w:sdt><w:sdtPr/><w:sdtContent>%s</w:sdtContent></w:sdt>', ''),
+            '스마트 태그': ('<w:smartTag w:uri="urn:schemas-microsoft-com:office:smarttags" w:element="place">%s</w:smartTag>', ''),
+            '필드': ('<w:fldSimple w:instr=" QUOTE x ">%s</w:fldSimple>', ''),
+        }
+        homes = ('본문', '표 칸', '표 안의 표', '병합한 칸', '누름틀 문단', '글상자', '옛 글상자', '각주', '미주', '머리글', '바닥글')
+        styles = {'각주': ids['footnote text'], '머리글': ids['header'], '바닥글': ids['footer']}
+        cases = []      # (표지, 자리, 문단이 놓인 곳, 정상으로 보는가, w:rFonts 속성)
+
+        def add(where, home, ok, fonts, frame='%s', head='', style=None):
+            label = 'K%02d ' % len(cases)
+            put(d, home, wr(label) + frame % wr('①', head + (rfonts(**fonts) if fonts else '')), style or styles.get(home))
+            cases.append((label, where, home, ok, fonts))
+
+        for home in homes:
+            for _, ok, fonts in plain:
+                add(home, home, ok, fonts)
+        for where, (frame, head) in wraps.items():
+            for _, ok, fonts in plain:
+                add(where, '본문', ok, fonts, frame, head)
+        for (_, ok), (_, _, fonts) in zip(toc, plain):
+            add('목차 문단의 하이퍼링크', '본문', ok, fonts, link, style=ids['toc 1'])
+        d.save(str(self.path))
+        want = {}
+        for _, _, home, ok, _ in cases:
+            if not ok:
+                story = home if home in ('각주', '미주', '머리글', '바닥글') else '본문'
+                want[story] = want.get(story, 0) + 1
+        bad, detail = sum(want.values()), {}
+        self.assertEqual(docx_normalize.normalize(str(self.path), check_only=True, detail=detail), (B, bad))
+        self.assertEqual(detail, dict(places=want, wrong=bad, no_glyph=0))
+        text = all_text(self.path)
+        self.assertEqual(docx_normalize.normalize(str(self.path)), (B, bad))
+        self.assertEqual(all_text(self.path), text)
+        self.assertEqual(docx_normalize.normalize(str(self.path), check_only=True), (B, 0))
+        after = circled_runs(self.path)
+        for label, where, home, ok, fonts in cases:
+            mine = [(inside, got) for para, inside, got in after if para.startswith(label)]
+            with self.subTest(label=label, where=where):
+                # 비정합이던 run 만 본문 글꼴로 고친다. 정상이던 run 과 찍히지 않는 사본은 그대로 둔다
+                self.assertEqual([got for inside, got in mine if 'Fallback' not in inside], [fonts if ok else SIGN])
+                self.assertEqual([got for inside, got in mine if 'Fallback' in inside], [fonts] if home == '글상자' else [])
+
+    def test_inserted_text_is_fixed_and_deleted_text_is_left_alone(self):
+        """변경 추적의 삽입 표시 안에 든 글은 수락하면 본문이 되므로 세고 고친다(2026. 10. 8. 담당자 결정). 삽입 표시와 작성자·
+        일시는 그대로다. 삭제 표시와 옮기기 전 자리(w:moveFrom)의 글은 Word PDF 에 찍히지 않았으므로 세지도 고치지도 않는다.
+        옮긴 자리(w:moveTo)의 글은 삽입한 글처럼 찍혔다."""
+        who = 'w:author="변호사" w:date="2026-09-20T00:00:00Z"'
+        d = docx.Document()
+        p = d.add_paragraph()._p
+        for child in wx('<w:p>%s<w:ins w:id="1" %s>%s</w:ins><w:del w:id="2" %s><w:r><w:delText>③ 지운 글</w:delText></w:r></w:del>'
+                        '<w:moveFrom w:id="3" %s>%s</w:moveFrom><w:moveTo w:id="4" %s>%s</w:moveTo>%s</w:p>'
+                        % (wr('원고는 '), who, wr('① 근로자이고 ② 조합원이며'), who, who, wr('④ 옮기기 전 글'),
+                           who, wr('⑤ 옮긴 글'), wr(' 끝.'))):
+            p.append(child)
+        d.save(str(self.path))
+        text = all_text(self.path)
+        self.assertEqual(docx_normalize.normalize(str(self.path), check_only=True), ('바탕체', 2))
+        self.assertEqual(docx_normalize.normalize(str(self.path)), ('바탕체', 2))
+        self.assertEqual(all_text(self.path), text)
+        self.assertEqual(docx_normalize.normalize(str(self.path), check_only=True), ('바탕체', 0))
+        p = docx.Document(str(self.path)).paragraphs[0]._p
+        ins = p.find(qn('w:ins'))
+        self.assertEqual((ins.get(qn('w:author')), ins.get(qn('w:date'))), ('변호사', '2026-09-20T00:00:00Z'))
+        self.assertEqual([''.join(t.text for t in r.iter(qn('w:t'))) for r in ins],          # 조각이 삽입 표시 밖으로 나가지 않는다
+                         ['①', ' 근로자이고 ', '②', ' 조합원이며'])
+        self.assertEqual([k.tag for k in p if k.tag != qn('w:pPr')],
+                         [qn('w:r'), qn('w:ins'), qn('w:del'), qn('w:moveFrom'), qn('w:moveTo'), qn('w:r')])
+        self.assertEqual([(inside[0], fonts.get('hint')) for _, inside, fonts in circled_runs(self.path)],
+                         [('ins', 'eastAsia'), ('ins', 'eastAsia'), ('del', None), ('moveFrom', None), ('moveTo', 'eastAsia')])
+
+    def test_footnote_edited_in_word_is_fixed_in_its_own_part(self):
+        """docx_footnotes.py 가 만든 각주는 글꼴을 맞춰 넣으므로 정상이다. 담당자가 Word 에서 고치거나 붙여 넣은 각주에는 글꼴
+        지정이 없어 Cambria Math 로 찍힌다(2026. 10. 8. GGM 현수막 사건 서면의 각주 ①~④, 예전 점검은 0건). 각주 파트는
+        docx_footnotes.py 처럼 blob 으로 읽어 고치고, 고치지 않은 파트는 다시 쓰지 않는다."""
+        d = docx.Document(str(TEMPLATE))
+        d.add_paragraph('대법원 판결[[각주: ① 사유, ② 절차를 본다.]]은 그러합니다.')
+        d.save(str(self.path))
+        self.assertEqual(run(docx_footnotes.convert, str(self.path))[0], 0)
+        self.assertEqual(docx_normalize.normalize(str(self.path), check_only=True), ('바탕체', 0))
+        d = docx.Document(str(self.path))                  # Word 에서 붙여 넣은 각주처럼 글꼴 지정을 지운다
+        part = next(rel.target_part for rel in d.part.rels.values() if rel.reltype == RT.FOOTNOTES)
+        root = etree.fromstring(part.blob)
+        for fonts in list(root.iter(qn('w:rFonts'))):
+            fonts.getparent().remove(fonts)
+        part._blob = etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True)
+        d.save(str(self.path))
+        detail = {}
+        self.assertEqual(docx_normalize.normalize(str(self.path), check_only=True, detail=detail), ('바탕체', 2))
+        self.assertEqual(detail['places'], {'각주': 2})
+        result = subprocess.run([sys.executable, '-B', str(SCRIPTS / 'docx_normalize.py'), str(self.path), '--check'],
+                                capture_output=True, text=True, encoding='utf-8', env=CP949)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('원문자 run 비정합 2건(각주 2건)', result.stdout)
+        notes, text = run(docx_footnotes.convert, str(self.path), list_only=True)[1], all_text(self.path)
+        with zipfile.ZipFile(str(self.path)) as archive:
+            endnotes = archive.read('word/endnotes.xml')
+        result = subprocess.run([sys.executable, '-B', str(SCRIPTS / 'docx_normalize.py'), str(self.path)],
+                                capture_output=True, text=True, encoding='utf-8', env=CP949)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('원문자 run 비정합 2건(각주 2건) → 정리 완료', result.stdout)
+        self.assertEqual(docx_normalize.normalize(str(self.path), check_only=True), ('바탕체', 0))
+        self.assertEqual(run(docx_footnotes.convert, str(self.path), list_only=True)[1], notes)
+        self.assertEqual(all_text(self.path), text)
+        with zipfile.ZipFile(str(self.path)) as archive:
+            self.assertEqual(archive.read('word/endnotes.xml'), endnotes)
+
+    def test_changed_text_is_not_saved_in_any_place(self):
+        """정리하다 문단 글자가 달라지면 저장하지 않는 보호 장치는 각주와 하이퍼링크 안에도 걸린다."""
+        for where, inner in (('각주', wr('① 각주에 붙여 넣은 글')),
+                             ('본문', '<w:hyperlink w:anchor="_Toc1">%s</w:hyperlink>' % wr('① 휴게공간'))):
+            d = docx.Document(str(TEMPLATE))
+            put(d, where, inner)
+            d.save(str(self.path))
+            before = self.path.read_bytes()
+            with self.subTest(where=where), mock.patch.object(docx_normalize, '_split_run',
+                                                              side_effect=lambda r, font: r.getparent().remove(r)):
+                with self.assertRaises(SystemExit) as cm:
+                    docx_normalize.normalize(str(self.path))
+                self.assertIn(where + ' 문단 글자가 달라져 저장하지 않았습니다', str(cm.exception.code))
+                self.assertEqual(self.path.read_bytes(), before)
+
+    def test_circled_numbers_above_fifteen_stay_counted(self):
+        """⑯~⑳ 은 바탕체·맑은 고딕·굴림·HY견고딕에 글리프가 없다(2026. 10. 8. PyMuPDF Font.has_glyph). 넷 다 바탕체로 지정하고
+        hint 를 붙여도 Word 16 은 ⑯·⑰·⑳ 을 Cambria Math 로 찍었고, 같은 지정의 ⑮ 는 바탕체로 찍었다. 글꼴 지정으로 고칠 수
+        없으므로 건수에 넣고 따로 알린다(2026. 10. 8. 담당자 결정)."""
+        B = '바탕체'
+        cli = [sys.executable, '-B', str(SCRIPTS / 'docx_normalize.py'), str(self.path)]
+        d = docx.Document()
+        circled(d, '⑯', rfonts(ascii=B, hAnsi=B, eastAsia=B, cs=B, hint='eastAsia'))      # 글꼴 지정은 맞다
+        d.save(str(self.path))
+        before, detail = self.path.read_bytes(), {}
+        self.assertEqual(docx_normalize.normalize(str(self.path), check_only=True, detail=detail), (B, 1))
+        self.assertEqual(detail, dict(places={'본문': 1}, wrong=0, no_glyph=1))
+        for mode in (['--check'], []):                 # 정리로는 없어지지 않으므로 정리 모드도 종료 코드 1이다
+            result = subprocess.run(cli + mode, capture_output=True, text=True, encoding='utf-8', env=CP949)
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn('원문자 run 비정합 1건', result.stdout)
+            self.assertIn('⑯~⑳ 이 든 run 1건', result.stdout)
+            self.assertNotIn('정리', result.stdout.splitlines()[0])
+            self.assertEqual(self.path.read_bytes(), before)
+        circled(d, '⑮ 가 ⑯ 나')                         # 글꼴 지정도 없다: ⑮ 는 고쳐지고 ⑯ 은 남는다
+        d.save(str(self.path))
+        result = subprocess.run(cli, capture_output=True, text=True, encoding='utf-8', env=CP949)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('원문자 run 비정합 2건 → 글꼴 지정 1건 정리', result.stdout)
+        self.assertIn('⑯~⑳ 이 든 run 2건', result.stdout)
+        self.assertEqual(docx_normalize.normalize(str(self.path), check_only=True, detail=detail), (B, 2))
+        self.assertEqual(detail, dict(places={'본문': 2}, wrong=0, no_glyph=2))
+        self.assertEqual(visible(docx.Document(str(self.path)).paragraphs[1]), '⑮ 가 ⑯ 나')
+
+    def test_merge_reports_circled_number_above_fifteen(self):
+        # 건수에 넣었으므로 ⑯ 이상이 든 초안을 병합하면 종료 코드 1이 된다. 파일은 저장되고 점검 줄에 사유가 나온다
+        folder = Path(self.tmp.name) / '출력'
+        folder.mkdir()
+        frame, md, out = folder / '서면_프레임.docx', folder / '서면초안.md', folder / '(테스트) 준비서면_초안.docx'
+        make_frame(frame)
+        md.write_text('1. 이 사건의 경위\n\n피고는 ⑮ 원고를 징계하였고, ⑯ 해고하였습니다.\n\n'
+                      '2. 결론\n\n원고의 청구는 기각되어야 합니다.\n' + EVIDENCE, encoding='utf-8')
+        code, log = run(docx_merge.merge, str(frame), str(md), str(out))
+        self.assertEqual(code, 1, log)
+        self.assertIn('원문자 글꼴 비정합 1건', log)
+        self.assertIn('⑯~⑳ 이 든 run 1건', log)
+        self.assertTrue(out.exists())
+        md.write_text(md.read_text(encoding='utf-8').replace('⑯', '⑭'), encoding='utf-8')
+        code, log = run(docx_merge.merge, str(frame), str(md), str(out))
+        self.assertEqual(code, 0, log)
+        self.assertIn('원문자 글꼴 비정합 0건', log)
 
 
 if __name__ == '__main__':

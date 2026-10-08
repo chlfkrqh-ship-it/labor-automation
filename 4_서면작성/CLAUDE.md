@@ -144,7 +144,7 @@ python 4_서면작성/scripts/docx_merge.py "<출력>/서면_프레임.docx" "<�
 | 점검 | 명령 |
 |---|---|
 | 본문 문단이 제목 계층에 맞는 '내용' 스타일인지 | `python 4_서면작성/scripts/docx_restyle.py <파일> --check` |
-| 원문자(①~⑳) 글꼴이 본문과 같은지 | `python 4_서면작성/scripts/docx_normalize.py <파일> --check` |
+| 원문자(①~⑳) 글꼴이 본문과 같은지(각주·머리글·바닥글, 하이퍼링크·변경 추적 삽입 안까지 본다. ⑯~⑳ 은 본문 글꼴에 글자가 없어 항상 남는다) | `python 4_서면작성/scripts/docx_normalize.py <파일> --check` |
 | 본문에 `[[각주:` 표시가 남지 않았는지 | `python 4_서면작성/scripts/docx_footnotes.py <파일> --check` |
 | 금지 낱말·접속부사 쉼표·대괄호 메모·문체 실측치 | `python 4_서면작성/scripts/style_check.py <파일>` |
 | 인용한 호증이 목록에 있는지, 판례기록이 있는지 | `python 4_서면작성/scripts/citation_check.py <파일>` |
