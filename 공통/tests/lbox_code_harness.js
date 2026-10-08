@@ -352,6 +352,22 @@ const 시험들 = {
     const 정렬 = 환경.요청.map(x => x.body.paging.sort + ' ' + x.body.paging.page + ' ' + x.body.query);
     return 환경.요청.length === 3 && 정렬.every(s => s.startsWith('SCORE:DESC') && s.endsWith('"가"')) || JSON.stringify(정렬);
   },
+  // LBOX 목록의 판례 선고일은 한국 자정을 UTC 로 적은 값이라 앞 10자만 자르면 하루 이르다(2026. 10. 8. 본문 머리·법제처와 8건 대조)
+  async 목록의선고일은한국날짜로옮긴다() {
+    const {ctx} = 새환경(입력);
+    const 판례 = d => ctx.lboxRow({mainTitle: '가', textSubInfo: {id: '대법원-2020다1', announce_date: d}}).선고일;
+    const 결정 = sub => ctx.lboxRow({documentId: 'd1', documentPageType: 'LABOR_COMMISSION', mainTitle: '가', textSubInfo: sub}).선고일;
+    const 온 = [
+      판례('2016-12-08T15:00:00Z'), 판례('2025-12-10T15:00:00Z'),            // 서울행정법원 2015구합82051(본문 2016. 12. 9.), 대법원 2025도3844(법제처 2025. 12. 11.)
+      판례('2017-12-31T15:00:00.000Z'), 판례('2016-12-09T00:00:00+09:00'),   // 해가 넘어가는 날, 한국 시각으로 적힌 값
+      판례('1987-07-13T15:00:00Z'), 판례('1987-07-13T14:00:00Z'),            // 서머타임이 있던 해. 자정이 한 시간 이르게 적혀 있어도 같은 날이다
+      판례('2016-12-09'), 판례(undefined), 판례(null),                        // 날짜만 온 값, 날짜가 없는 줄
+      결정({decisionDate: '2023-08-10T00:00:00'}), 결정({responseDate: '2008-04-07T00:00:00'}), 결정({}),   // 결정례·유권해석은 시간대 표시 없이 온다. 옮기지 않는다
+    ];
+    const 기대 = ['2016-12-09', '2025-12-11', '2018-01-01', '2016-12-09', '1987-07-14', '1987-07-14', '2016-12-09', '', '', '2023-08-10', '2008-04-07', ''];
+    const 줄 = ctx.lboxLines([ctx.lboxRow({mainTitle: '임금', textSubInfo: {id: '대법원-2020다1', courtType: '대법원', announce_date: '2021-03-03T15:00:00Z'}})]);
+    return JSON.stringify(온) === JSON.stringify(기대) && 줄.startsWith('1 | 대법원 | 21-03-04 | 대법원-2020다1 | 임금') || JSON.stringify({온, 줄});
+  },
   async 읽기줄은한줄로줄여준다() {
     const {ctx} = 새환경(입력);
     const rows = [
