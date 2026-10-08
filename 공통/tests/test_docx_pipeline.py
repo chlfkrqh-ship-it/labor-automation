@@ -19,6 +19,7 @@ from pathlib import Path
 from unittest import mock
 
 import docx
+from docx.enum.style import WD_STYLE_TYPE
 from docx.oxml import parse_xml
 from docx.oxml.ns import nsdecls, qn
 from docx.text.paragraph import Paragraph
@@ -517,13 +518,148 @@ class FootnoteTests(unittest.TestCase):
         self.assertIn('남은 [[각주:]] 표시 1건', log)
 
 
+def rfonts(**attrs):
+    """w:rFonts 요소. rfonts(hAnsi='바탕체', hint='eastAsia')"""
+    return '<w:rFonts %s/>' % ' '.join('w:%s="%s"' % kv for kv in attrs.items())
+
+
+def rstyle(style_id):
+    return '<w:rStyle w:val="%s"/>' % style_id
+
+
+def font_style(d, name, kind, fonts=None, based=None):
+    """글꼴만 지정한 스타일을 만들고 스타일 ID 를 돌려준다. based 를 주지 않으면 기반 스타일이 없다."""
+    el = d.styles.add_style(name, kind).element
+    if based:
+        el.find(qn('w:name')).addnext(parse_xml('<w:basedOn %s w:val="%s"/>' % (nsdecls('w'), based)))
+    if fonts:
+        el.append(parse_xml('<w:rPr %s>%s</w:rPr>' % (nsdecls('w'), fonts)))
+    return el.get(qn('w:styleId'))
+
+
+def circled(d, text='①', rpr=None, style=None, mark=None, cell=None):
+    """원문자가 든 run 하나짜리 문단을 붙이고 (문단, run) 을 돌려준다. rpr·mark 는 run·문단표식의 w:rPr 안쪽 XML,
+    style 은 문단 스타일 ID 이고, cell 을 주면 그 표 칸의 첫 문단에 넣는다."""
+    p = cell.paragraphs[0] if cell is not None else d.add_paragraph()
+    ppr = p._p.get_or_add_pPr()
+    if style:
+        ppr.insert(0, parse_xml('<w:pStyle %s w:val="%s"/>' % (nsdecls('w'), style)))
+    if mark:
+        ppr.append(parse_xml('<w:rPr %s>%s</w:rPr>' % (nsdecls('w'), mark)))
+    r = p.add_run(text)
+    if rpr:
+        r._r.insert(0, parse_xml('<w:rPr %s>%s</w:rPr>' % (nsdecls('w'), rpr)))
+    return p, r
+
+
 class NormalizeTests(unittest.TestCase):
+    """원문자 글꼴은 run 에 적힌 속성이 아니라 Word 가 실제로 찍는 글꼴로 판정한다."""
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.path = Path(self.tmp.name) / '수정안.docx'
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def test_font_inherited_from_style_is_not_counted(self):
+        # Word 는 저장할 때 스타일과 같은 값인 w:eastAsia 를 run 에서 지운다. 2026. 10. 7. 담당자가 그림 크기만 고쳐
+        # 저장한 답변서에서 11건이 비정합으로 잡혔지만, Word 로 낸 PDF 에서는 모두 바탕체로 찍혀 있었다.
+        B = '바탕체'
+        d = docx.Document()
+        normal = d.styles['Normal']                    # 프레임처럼 ascii·hAnsi=Times New Roman, eastAsia=바탕체
+        normal.font.name = 'Times New Roman'
+        normal.element.rPr.rFonts.set(qn('w:eastAsia'), B)
+        outer = font_style(d, '1.번호매기기_내용', WD_STYLE_TYPE.PARAGRAPH, based=normal.style_id)
+        inner = font_style(d, '(1)번호매기기_내용', WD_STYLE_TYPE.PARAGRAPH, based=outer)
+        circled(d, '①', rfonts(ascii=B, hAnsi=B, eastAsia=B, cs=B, hint='eastAsia'))               # (a) run 에 직접 있다
+        circled(d, '②', rfonts(ascii=B, hAnsi=B, cs=B, hint='eastAsia'), style=inner)              # (b) Word 가 지웠다
+        d.save(str(self.path))
+        self.assertEqual(docx_normalize.normalize(str(self.path), check_only=True), (B, 0))
+        circled(d, '③', rfonts(ascii=B, hAnsi=B, eastAsia='맑은 고딕', cs=B, hint='eastAsia'))      # (c) 다른 글꼴
+        d.save(str(self.path))
+        before = self.path.read_bytes()
+        result = subprocess.run([sys.executable, '-B', str(SCRIPTS / 'docx_normalize.py'), str(self.path), '--check'],
+                                capture_output=True, text=True, encoding='utf-8', env=CP949)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('본문 한글 글꼴: 바탕체 / 원문자 run 비정합 1건', result.stdout)
+        self.assertEqual(self.path.read_bytes(), before)
+        # 정리 모드도 (c) 만 고친다. 상속으로 맞는 (b) 에 eastAsia 를 다시 써 넣지 않는다
+        self.assertEqual(docx_normalize.normalize(str(self.path)), (B, 1))
+        east = [p.runs[0]._r.find(qn('w:rPr')).find(qn('w:rFonts')).get(qn('w:eastAsia'))
+                for p in docx.Document(str(self.path)).paragraphs]
+        self.assertEqual(east, [B, None, B])
+        self.assertEqual(docx_normalize.normalize(str(self.path), check_only=True), (B, 0))
+
+    def test_judgment_follows_the_font_word_prints(self):
+        """2026. 10. 8. 표준양식에 아래 변형을 넣어 Word 16 으로 PDF 를 내보내고 원문자가 찍힌 글꼴을 읽었다.
+        정상으로 보는 run 은 Word 가 바탕체로 찍은 것뿐이어야 한다. ⑯~⑳ 은 바탕체에 글리프가 없어 쓰지 않았다."""
+        B, M, D, CM = '바탕체', '맑은 고딕', '돋움체', 'Cambria Math'
+        P, C = WD_STYLE_TYPE.PARAGRAPH, WD_STYLE_TYPE.CHARACTER
+        d = docx.Document(str(TEMPLATE))      # Normal: ascii·hAnsi=Times New Roman, eastAsia=바탕체. docDefaults: 테마 글꼴
+        ids = {name: d.styles[name].style_id for name in
+               ('Normal', 'Heading 1', '1.번호매기기', '본문_중제목 Char', '1.번호매기기_내용 Char')}
+        hint, all_b = rfonts(hint='eastAsia'), dict(ascii=B, hAnsi=B, eastAsia=B, cs=B)
+        p_b = font_style(d, 'P_B', P, based=font_style(d, 'P_A', P, rfonts(eastAsia=D), based=ids['Normal']))
+        p_bbb = font_style(d, 'P_BBB', P, rfonts(ascii=B, hAnsi=B, eastAsia=B))
+        p_mmm = font_style(d, 'P_MMM', P, rfonts(ascii=M, hAnsi=M, eastAsia=M))
+        p_empty = font_style(d, 'P_EMPTY', P)
+        p_hint = font_style(d, 'P_HINT', P, hint, based=ids['Normal'])
+        c_b = font_style(d, 'C_B', C, based=font_style(d, 'C_A', C, rfonts(eastAsia=D)))
+        c_hint = font_style(d, 'C_HINT', C, hint)
+        table = d.add_table(rows=1, cols=1)
+        table._tbl.tblPr.insert(0, parse_xml('<w:tblStyle %s w:val="%s"/>' % (
+            nsdecls('w'), font_style(d, 'T_D', WD_STYLE_TYPE.TABLE, rfonts(eastAsia=D)))))
+        cases = [   # (Word 가 찍은 글꼴, 정상으로 보는가, circled() 인자)
+            # run 에 hint 가 있다 → eastAsia 글꼴로 찍힌다
+            ('BatangChe', True, dict(rpr=rfonts(hint='eastAsia', **all_b))),
+            ('BatangChe', True, dict(rpr=rfonts(ascii=B, hAnsi=B, cs=B, hint='eastAsia'))),      # Word 가 eastAsia 를 지운 run
+            ('BatangChe', True, dict(rpr=hint)),
+            ('BatangChe', True, dict(rpr=hint, text='① 원고는 abc')),
+            ('BatangChe', True, dict(rpr=rfonts(ascii=M, hAnsi=M, hint='eastAsia'))),
+            ('BatangChe', True, dict(rpr=rfonts(ascii=CM, hAnsi=CM, cs=CM, hint='eastAsia'))),
+            ('MalgunGothic', False, dict(rpr=rfonts(ascii=B, hAnsi=B, eastAsia=M, cs=B, hint='eastAsia'))),
+            ('H2gtrE', False, dict(rpr=hint, style=ids['1.번호매기기'])),                        # 문단 스타일이 HY견고딕
+            ('DotumChe', False, dict(rpr=hint, style=p_b)),                                      # basedOn 사슬 위의 돋움체
+            ('DotumChe', False, dict(rpr=rstyle(ids['본문_중제목 Char']) + hint)),               # 문자 스타일이 돋움체
+            ('DotumChe', False, dict(rpr=rstyle(c_b) + hint)),
+            ('MalgunGothic', False, dict(rpr=rfonts(eastAsia=B, eastAsiaTheme='minorEastAsia', hint='eastAsia'))),
+            ('MalgunGothic', False, dict(rpr=hint, style=ids['Heading 1'])),                     # 스타일의 테마 글꼴
+            ('BatangChe', True, dict(rpr=rfonts(eastAsia=B, hint='eastAsia'), style=ids['Heading 1'])),
+            ('BatangChe', True, dict(rpr=rstyle(ids['1.번호매기기_내용 Char']) + hint, style=ids['Heading 1'])),
+            ('MalgunGothic', False, dict(rpr=hint, style=p_empty)),                              # docDefaults 의 테마 글꼴
+            ('BatangChe', True, dict(rpr=hint, style='NoSuchStyle')),                            # 없는 스타일 → 기본 문단 스타일
+            ('BatangChe', True, dict(rpr=hint, cell=table.cell(0, 0))),                          # 표 스타일(돋움체)은 Normal 을 못 덮는다
+            # run 에 hint 가 없다 → hAnsi 글꼴로 찍힌다(Times New Roman 에는 원문자가 없어 Cambria Math 가 된다)
+            ('CambriaMath', False, dict()),
+            ('CambriaMath', False, dict(text='① 원고는 abc')),
+            ('CambriaMath', False, dict(rpr=rfonts(ascii=CM, hAnsi=CM, cs=CM))),                 # Word 가 대신 쓴 글꼴을 적어 둔 run
+            ('BatangChe', True, dict(rpr=rfonts(hAnsi=B))),
+            ('CambriaMath', False, dict(rpr=rfonts(ascii=B))),
+            ('BatangChe', True, dict(rpr=rfonts(ascii=M, hAnsi=B))),
+            ('MalgunGothic', False, dict(rpr=rfonts(ascii=B, hAnsi=M))),
+            ('MalgunGothic', False, dict(rpr=rfonts(ascii=B, hAnsi=B, hAnsiTheme='minorHAnsi'))),
+            ('BatangChe', True, dict(rpr=rfonts(**all_b))),
+            ('BatangChe', True, dict(style=p_bbb)),
+            ('MalgunGothic', False, dict(style=p_mmm)),
+            ('CambriaMath', False, dict(rpr=rfonts(hint='default'))),
+            ('CambriaMath', False, dict(mark=rfonts(hint='eastAsia', **all_b))),                 # 문단표식의 글꼴은 run 에 미치지 않는다
+            ('CambriaMath', False, dict(rpr=rstyle(c_hint))),                                    # 문자 스타일의 hint 는 통하지 않는다
+            # Word 는 바탕체로 찍지만 비정합으로 본다(엄격한 쪽)
+            ('BatangChe', False, dict(rpr=rfonts(ascii=B, hAnsi=B, eastAsia=M))),                # hint 가 붙으면 맑은 고딕이 된다
+            ('BatangChe', False, dict(style=p_hint)),                                            # 문단 스타일에만 있는 hint
+        ]
+        font, index = docx_normalize.body_font(d), docx_normalize.style_index(d)
+        for i, (printed, ok, how) in enumerate(cases, 1):
+            p, r = circled(d, **how)
+            with self.subTest(case=i, printed=printed, **how):
+                self.assertEqual(docx_normalize.run_ok(r, p, font, index), ok)
+                self.assertTrue(printed == 'BatangChe' or not ok)
+        bad = sum(not ok for _, ok, _ in cases)
+        d.save(str(self.path))
+        self.assertEqual(docx_normalize.normalize(str(self.path), check_only=True), (B, bad))
+        self.assertEqual(docx_normalize.normalize(str(self.path)), (B, bad))
+        self.assertEqual(docx_normalize.normalize(str(self.path), check_only=True), (B, 0))
 
     def test_tabs_and_breaks_are_not_copied(self):
         d = docx.Document()
