@@ -474,11 +474,23 @@ def test_추출은_이전_계산표를_자료로_읽지_않는다(tmp_path):
     wb.active["A1"] = "을2 별지 계산표"
     wb.save(folder / "을2_별지계산표.xlsx")                              # 상대방 계산표는 자료다
     (folder / "급여명세서.txt").write_text("기본급 3,000,000원", encoding="utf-8")
+    (folder / "계산" / "확인표.md").write_text("확인 표 월급 8,888,888원", encoding="utf-8")   # 이름에 표시가 없어도 계산 폴더 아래는 읽지 않는다
+    (folder / "자체검토" / "원문").mkdir(parents=True)                    # 자체 검토 자료(공통/자체검토.md 2절)
+    (folder / "자체검토" / "사람확인.md").write_text("확인 답변 월급 9,999,999원", encoding="utf-8")
+    (folder / "자체검토" / "원문" / "판결.txt").write_text("판결 원문 전체", encoding="utf-8")
+    (folder / "작업" / "추출캐시").mkdir(parents=True)                    # 사건상태 기록과 추출 캐시(공통/사건상태.md)
+    (folder / "작업" / "사건상태.md").write_text("반영하지 않은 지적: 퇴직금 1,234,567원", encoding="utf-8")
+    (folder / "작업" / "자료목록.json").write_text("{}", encoding="utf-8")
+    (folder / "작업" / "추출캐시" / "abc.json").write_text("{}", encoding="utf-8")
 
     extract.main(str(folder))
     text = (folder / "_추출.txt").read_text(encoding="utf-8")
     head, _, body = text.partition("=" * 70)
-    assert "[계산 결과물 — 자료가 아니므로 읽지 않음]" in head and "노동금액계산표" in head
+    assert "[계산 결과물·자체 검토 자료 — 자료가 아니므로 읽지 않음]" in head and "노동금액계산표" in head
+    assert "1,234,567" not in text and "자료목록.json" not in text and "abc.json" not in text and "지원하지 않는 형식" not in text
+    assert "사람확인.md" in head and "판결.txt" in head
+    assert "확인표.md" in head and "8,888,888" not in body
+    assert "9,999,999" not in body and "판결 원문 전체" not in body
     assert "이전 계산" not in body and "노동금액계산표" not in body
     assert "기본급 3,000,000원" in body and "을2 별지 계산표" in body
 

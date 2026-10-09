@@ -187,9 +187,10 @@ class SystemTests(unittest.TestCase):
         self.assertIn('.claude/commands/판례검색.md', result['missing'])
         self.assertIn('공통/운영.md', result['missing'])
         for n in ('검토의견', '판례검색', '서면보강', '서면', '증거정리',
-                  '증거발췌', '문체검증', '녹취', '손배계산', '손배검산'):
+                  '증거발췌', '문체검증', '녹취', '손배계산', '손배검산', '자체검토'):
             self.put('.claude/commands/' + n + '.md', '---\ndescription: 절차\n---\n절차')
-        for f in ('공통/운영.md', '공통/사건상태.md', '공통/브라우저.md'):
+        self.assertIn('공통/자체검토.md', self.system.check()['missing'])      # 자체 검토 지침이 빠지면 알린다
+        for f in ('공통/운영.md', '공통/사건상태.md', '공통/브라우저.md', '공통/자체검토.md'):
             self.put(f, '지침')
         self.assertTrue(self.system.check()['ok'])
         # 폴더 이름과 name 이 다르면 Claude 가 스킬을 찾지 못한다
@@ -202,11 +203,11 @@ class SystemTests(unittest.TestCase):
         result = self.system.budget(only='판례검색')
         self.assertIn('.claude/commands/판례검색.md', result['missing'])
         self.assertFalse(result['ok'])          # 지침 파일이 없는 것만 실패다
-        for rel in ('2_판례검색/CLAUDE.md', '.claude/commands/판례검색.md', *module.LBOX):
+        for rel in ('공통/자체검토.md', '2_판례검색/CLAUDE.md', '.claude/commands/판례검색.md', *module.LBOX):
             self.put(rel, '다' * 10)
         result = self.system.budget(only='판례검색', record=True)
         self.assertEqual(result['missing'], [])
-        self.assertEqual(result['commands']['판례검색'], 70)   # 지침 7개 × 10자
+        self.assertEqual(result['commands']['판례검색'], 80)   # 지침 8개 × 10자(자체 검토 지침 포함)
         self.assertTrue(result['ok'])
         # 지침이 아무리 커져도 실패로 만들지 않는다. 증감만 보고한다.
         self.put('2_판례검색/CLAUDE.md', '마' * 500000)

@@ -428,7 +428,7 @@ const 시험들 = {
     return 뽑음.대목.length === 2 && 뽑음.곳 === 4 && 뽑음.남은대목 === 0 && 뽑음.대목[0].includes('명절상품권') && 뽑음.머리.startsWith('머리')
       || JSON.stringify({곳: 뽑음.곳, 대목수: 뽑음.대목.length, 남은: 뽑음.남은대목});
   },
-  // 아래 셋은 판결 전문 PDF 를 한꺼번에 받아 압축파일 하나로 내려받는 9항 코드이다(2026. 10. 2.)
+  // 아래 넷은 판결 전문 PDF 를 한꺼번에 받아 압축파일 하나로 내려받는 9항 코드이다(2026. 10. 2.)
   async 압축파일은표준형식이다() {
     const {ctx} = 새환경(입력);
     const 글 = s => new TextEncoder().encode(s);
@@ -459,6 +459,50 @@ const 시험들 = {
     return 받음.받은 === 0 && 받음.결과.length === 1 && 받음.결과[0][1] === '이용 확인 화면' && !!환경.저장['lbox중단'] && !!환경.저장['lbox경고']
       && 환경.요청.length === 1 && 환경.내려받기.length === 0
       || JSON.stringify({받음, 중단: 환경.저장['lbox중단'], 요청: 환경.요청.length});
+  },
+  async 오류상태가오면PDF받기를멈추고표시를남긴다() {   // 404 말고는 본문 수신과 같이 그 건에서 선다(2026. 10. 9.)
+    const 환경 = 새환경(입력);
+    환경.ctx.응답 = async u => ({url: u, ok: false, status: 429, arrayBuffer: async () => new ArrayBuffer(0)});
+    const 받음 = await 환경.ctx.lboxPdfZip([['대법원-2020다1', '가.pdf'], ['대법원-2020다2', '나.pdf'], ['대법원-2020다3', '다.pdf']]);
+    const 다른 = 새환경(입력);
+    다른.ctx.응답 = async u => ({url: u, ok: false, status: 500, arrayBuffer: async () => new ArrayBuffer(0)});
+    const 받음2 = await 다른.ctx.lboxPdfZip([['대법원-2020다1', '가.pdf'], ['대법원-2020다2', '나.pdf']]);
+    const 셋째 = 새환경(입력);                                                           // 403 도 429 와 같이 경고를 남긴다
+    셋째.ctx.응답 = async u => ({url: u, ok: false, status: 403, arrayBuffer: async () => new ArrayBuffer(0)});
+    await 셋째.ctx.lboxPdfZip([['대법원-2020다1', '가.pdf'], ['대법원-2020다2', '나.pdf']]);
+    const 넷째 = 새환경(입력);                                                           // 받는 사이 다른 세션이 남긴 멈춤 사유는 덮어쓰지 않는다
+    넷째.ctx.응답 = async u => { 넷째.ctx.localStorage.setItem('lbox중단', '다른 세션의 사유'); return {url: u, ok: false, status: 429, arrayBuffer: async () => new ArrayBuffer(0)}; };
+    await 넷째.ctx.lboxPdfZip([['대법원-2020다1', '가.pdf'], ['대법원-2020다2', '나.pdf']]);
+    return 받음.받은 === 0 && 받음.결과.length === 1 && 받음.결과[0][1] === 'status 429' && 환경.요청.length === 1
+      && (환경.저장['lbox중단'] || '').includes('status 429') && !!환경.저장['lbox경고'] && 환경.내려받기.length === 0
+      && 받음2.결과.length === 1 && 다른.요청.length === 1 && (다른.저장['lbox중단'] || '').includes('status 500') && !다른.저장['lbox경고']
+      && 셋째.요청.length === 1 && !!셋째.저장['lbox경고'] && 넷째.요청.length === 1 && 넷째.저장['lbox중단'] === '다른 세션의 사유'
+      || JSON.stringify({받음, 받음2, 중단: 환경.저장['lbox중단'], 요청: 환경.요청.length, 요청2: 다른.요청.length});
+  },
+  // 보관함의 본문을 글자 묶음으로 내려받는 9항 코드이다(2026. 10. 9. 자체 검토에 넘길 원문). LBOX 에 요청하지 않아야 한다
+  async 보관함본문을요청없이글자묶음으로내려받는다() {
+    const 환경 = 새환경(입력);
+    const [가, 나, 다] = 주소(3);
+    환경.보관함.set(가, {text: 판결문, 받은: 환경.시각()});
+    환경.보관함.set(나, {text: '머리\n[이 판결은 LBOX 화면 글이 아니라 페이지 자료의 이유 문단에서 옮긴 것이다. 주문·당사자 표시는 빠져 있다]\n이유', 받은: 환경.시각()});
+    const [라] = ['https://lbox.kr/case/대법원/2020다9999'];
+    환경.보관함.set(라, {text: '판례 대법원 2020다9999 판결 상•하위 판결 확정', 받은: 환경.시각()});          // 머리 글자만 보관된 글
+    const 받음 = await 환경.ctx.lboxTextZip([[가, '각주01_가.txt'], [나, '각주02_나.txt'], [다, '각주03_다.txt'], [라, '각주04_라.txt']], '원문.zip');
+    let 겹침 = '';
+    try { await 환경.ctx.lboxTextZip([[가, '같은이름.txt'], [나, '같은이름.txt']]); } catch (e) { 겹침 = e.message; }
+    let 빈이름 = '';
+    try { await 환경.ctx.lboxTextZip([[가, '가.txt'], [나, '']]); } catch (e) { 빈이름 = e.message; }
+    const 빈목록 = await 환경.ctx.lboxTextZip([]);
+    const [밑, 위] = ['https://lbox.kr/case/대법원/2020다9998', 'https://lbox.kr/case/대법원/2020다9997'];
+    환경.보관함.set(밑, {text: '가'.repeat(299), 받은: 환경.시각()});          // 문턱은 300자이다
+    환경.보관함.set(위, {text: '나'.repeat(300), 받은: 환경.시각()});
+    const 문턱 = await 환경.ctx.lboxTextZip([[밑, '299자.txt'], [위, '300자.txt']], '문턱.zip');
+    return 받음.담은 === 3 && 받음.결과[0][1] === 'ok' && 받음.결과[0][2] === 판결문.length && 받음.결과[1][1].startsWith('이유 문단만')
+      && 받음.결과[2][1] === '보관함에 없음' && 받음.결과[3][1].startsWith('글자 수가 적음') && 환경.요청.length === 0 && 기록(환경).length === 0
+      && 환경.내려받기.length === 2 && 환경.내려받기[0].download === '원문.zip' && 겹침.includes('겹친다')
+      && 빈이름.includes('비었거나') && 빈목록.담은 === 0 && 빈목록.결과.length === 0
+      && 문턱.결과[0][1].startsWith('글자 수가 적음') && 문턱.결과[1][1] === 'ok' && 문턱.담은 === 2
+      || JSON.stringify({받음, 겹침, 빈이름, 빈목록, 문턱, 요청: 환경.요청.length, 기록: 기록(환경).length, 내려받기: 환경.내려받기});
   },
 };
 

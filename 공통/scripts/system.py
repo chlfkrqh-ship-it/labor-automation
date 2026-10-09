@@ -26,7 +26,7 @@ NS = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
 MC_FALLBACK = '{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback'
 
 # 명령어별로 읽는 지침 파일. 글자 수만 집계하며 토큰 수로 환산하지 않는다.
-COMMON = ['CLAUDE.md', '공통/운영.md']
+COMMON = ['CLAUDE.md', '공통/운영.md', '공통/자체검토.md']      # 자체 검토는 모든 명령어가 산출물을 넘기기 전에 읽는다
 LBOX = ['.claude/skills/lbox-검색/SKILL.md', '.claude/skills/lbox-하이라이트/SKILL.md', '.claude/skills/법제처-검색/SKILL.md']
 STYLE = '4_서면작성/skills/노동서면작성/'
 REFERENCES = [STYLE + 'references/' + n for n in
@@ -52,6 +52,7 @@ GUIDE_SETS = {
     '녹취': COMMON + ['5_녹취록/CLAUDE.md', '5_녹취록/녹취서-작성-가이드.md', '.claude/commands/녹취.md'],
     '손배계산': COMMON + ['6_손해배상계산/CLAUDE.md', '.claude/commands/손배계산.md', '6_손해배상계산/노동금액-계산기준.md'],
     '손배검산': COMMON + ['6_손해배상계산/CLAUDE.md', '.claude/commands/손배검산.md', '6_손해배상계산/노동금액-계산기준.md'],
+    '자체검토': COMMON + ['.claude/commands/자체검토.md'],
 }
 # 사건번호와 호증번호의 단일 원본. 4_서면작성/scripts/citation_check.py·style_check.py 와
 # 공통/scripts/lawgo.py 가 가져다 쓴다. 두 벌로 갈리면 한쪽만 고치게 된다.
@@ -239,11 +240,11 @@ class System:
 
     def check(self):
         """필수 지침과 명령어가 있고 스킬 머리말이 바른지 본다."""
-        missing = [f for f in ('CLAUDE.md', '공통/운영.md', '공통/사건상태.md', '공통/브라우저.md')
+        missing = [f for f in ('CLAUDE.md', '공통/운영.md', '공통/사건상태.md', '공통/브라우저.md', '공통/자체검토.md')
                    if not self.path(f).is_file()]
         commands = {p.stem for p in self.path('.claude/commands').glob('*.md')}
         required = {'검토의견', '판례검색', '서면보강', '서면',
-                    '증거정리', '증거발췌', '문체검증', '녹취', '손배계산', '손배검산'}
+                    '증거정리', '증거발췌', '문체검증', '녹취', '손배계산', '손배검산', '자체검토'}
         missing.extend('.claude/commands/' + n + '.md' for n in sorted(required - commands))
         skill_errors = []
         for p in self.path('.claude/skills').glob('*/SKILL.md'):

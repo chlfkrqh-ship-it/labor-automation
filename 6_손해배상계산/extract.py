@@ -6,8 +6,10 @@
 PDF·docx·xlsx·csv·txt·md 를 읽어 `<폴더>/_추출.txt` 로 쓴다.
 한글(.hwp)은 지원하지 않는다. PDF 나 docx 로 저장해서 넣어야 한다.
 
-엔진이 만든 계산 결과물(계산 폴더 `계산/` 아래 파일, `*_노동금액계산표*.xlsx`)은 자료가
-아니므로 읽지 않고 머리에 이름만 적는다. 다시 계산할 때 이전 계산값이 자료로 섞이지 않게 한다.
+엔진이 만든 계산 결과물(계산 폴더 `계산/` 아래 파일, `*_노동금액계산표*.xlsx`)과 자체 검토 자료
+(`자체검토/` 아래 파일, 공통/자체검토.md 2절)는 자료가 아니므로 읽지 않고 머리에 이름만 적는다.
+다시 계산할 때 이전 계산값과 검토 기록이 자료로 섞이지 않게 한다. 사건상태 기록(`사건상태.md`·`자료목록.json`)과
+추출 캐시(`추출캐시/`)도 읽지 않는다.
 상대방·법원의 별지 계산표는 자료이므로 이름에 '계산표'가 있다는 것만으로 거르지 않는다.
 
 추출 결과는 사건 자료이므로 저장소에 커밋하지 않는다(.gitignore 로 막혀 있다).
@@ -19,13 +21,14 @@ import sys
 from pathlib import Path
 
 SUPPORTED = {".pdf", ".docx", ".xlsx", ".xlsm", ".csv", ".txt", ".md"}
-SKIP_NAMES = {"_추출.txt", "사건.yaml"}
-OUTPUT_DIRS = {"계산"}                 # 손배계산.md 0절의 계산 폴더
+SKIP_NAMES = {"_추출.txt", "사건.yaml", "사건상태.md", "자료목록.json"}   # 뒤의 둘은 공통/사건상태.md 의 작성 메모와 기준 목록
+SKIP_DIRS = {"추출캐시"}               # 공통/scripts/system.py extract 가 남기는 캐시
+OUTPUT_DIRS = {"계산", "자체검토"}      # 손배계산.md 0절의 계산 폴더, 자체 검토 자료(공통/자체검토.md 2절)
 OUTPUT_MARK = "_노동금액계산표"         # cli.py·watch.py 의 노동 금액 계산표 이름
 
 
 def is_engine_output(rel: Path) -> bool:
-    """엔진이 만든 계산 결과물인지. rel 은 사건 폴더 기준 상대경로."""
+    """엔진이 만든 계산 결과물이나 자체 검토 자료인지. rel 은 사건 폴더 기준 상대경로."""
     if any(part in OUTPUT_DIRS for part in rel.parts[:-1]):
         return True
     return rel.suffix.lower() in (".xlsx", ".xlsm") and OUTPUT_MARK in rel.stem
@@ -92,6 +95,8 @@ def main(folder: str) -> None:
     for path in sorted(root.rglob("*")):
         if not path.is_file() or path.name in SKIP_NAMES or path.name.startswith("~$"):
             continue
+        if SKIP_DIRS & set(path.relative_to(root).parts[:-1]):
+            continue
         if is_engine_output(path.relative_to(root)):
             outputs.append(path.relative_to(root))
             continue
@@ -108,7 +113,7 @@ def main(folder: str) -> None:
     out = root / "_추출.txt"
     header = f"사건 폴더: {root}\n파일 {len(parts)}건"
     if outputs:
-        header += "\n\n[계산 결과물 — 자료가 아니므로 읽지 않음]\n"
+        header += "\n\n[계산 결과물·자체 검토 자료 — 자료가 아니므로 읽지 않음]\n"
         header += "\n".join(f"  {s}" for s in outputs)
         for s in outputs:
             print(f"  제외   {s}")

@@ -7,6 +7,7 @@
 - 공통 규칙: 루트 `CLAUDE.md`. 업무별 규칙: 각 폴더 `CLAUDE.md`.
 - 명령어: `.claude/commands/`. 스킬: `.claude/skills/`. 파일마다 원본 하나이고 사본이 없다.
 - 사건 상태·변경분·추출 캐시: `공통/사건상태.md`.
+- 산출물을 넘기기 전의 자체 검토: `공통/자체검토.md`. 모든 명령어에 적용한다. 한 라운드를 돌리는 워크플로는 `.claude/workflows/자체검토.js`.
 - `python 공통/scripts/system.py check`로 명령어·스킬이 제자리에 있는지 확인한다.
 
 필요한 로컬 실행 환경과 LBOX 브라우저 연결은 PC마다 따로 확인한다.
@@ -43,7 +44,7 @@
 ```
 %OneDrive%\노동사건자동화\
 ├─ CLAUDE.md  README.md  시작하기.md  .gitignore  백업.ps1  현황.bat
-├─ .claude\  (skills, commands, settings.json)
+├─ .claude\  (skills, commands, workflows, settings.json)
 ├─ 1_검토의견  2_판례검색  3_서면보강  4_서면작성  5_녹취록  6_손해배상계산
 ├─ 공통\  (운영 규칙·공통 스크립트·판례기록)
 ```
