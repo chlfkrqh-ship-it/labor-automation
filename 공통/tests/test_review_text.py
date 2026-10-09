@@ -25,13 +25,15 @@ def note(i, text, kind=''):
 
 
 class ReviewTextTests(unittest.TestCase):
-    def make(self, body, footnotes):
+    def make(self, body, footnotes, extra=None):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         path = Path(self.tmp.name) / '검토.docx'
         with zipfile.ZipFile(path, 'w') as z:
             z.writestr('word/document.xml', f'<w:document {NS}><w:body>{body}</w:body></w:document>')
             z.writestr('word/footnotes.xml', f'<w:footnotes {NS}>{footnotes}</w:footnotes>')
+            for name, xml in (extra or {}).items():
+                z.writestr(name, xml)
         return path
 
     def test_marks_follow_reference_order_not_ids(self):
@@ -89,6 +91,26 @@ class ReviewTextTests(unittest.TestCase):
         self.assertTrue(any('각주 3 의 글을 찾지 못하였다' in w for w in summary['경고']))
         self.assertFalse(any('참조하지 않는' in w for w in summary['경고']))      # 지운 각주는 남은 각주로 세지 않는다
         self.assertEqual(len([w for w in summary['경고'] if '변경 추적' in w]), 2)      # 삭제만 있는 문서도 변경 추적을 알린다(본문과 각주)
+
+    def test_word_comments_are_warned_not_extracted(self):
+        """Word 메모의 글은 뽑지 않는다. 메모가 있으면 건수를 경고하여 따로 읽게 한다."""
+        def memo(i, text):
+            return '<w:comment w:id="%d" w:author="담당자"><w:p>%s</w:p></w:comment>' % (i, run(text))
+
+        body = ('<w:p><w:commentRangeStart w:id="0"/>' + run('메모가 달린 문장.') + '<w:commentRangeEnd w:id="0"/>'
+                '<w:r><w:commentReference w:id="0"/></w:r></w:p>')
+        path = self.make(body, '', {'word/comments.xml': f'<w:comments {NS}>' + memo(0, '이 문장은 빼 주세요.') + memo(1, '답글.') + '</w:comments>'})
+        text, summary = module.review_text(path)
+        self.assertIn('메모가 달린 문장.', text.splitlines())
+        self.assertNotIn('빼 주세요', text)
+        self.assertEqual([w for w in summary['경고'] if '메모' in w], ['Word 메모 2건이 있다(word/comments.xml). 메모의 글은 이 글에 들어 있지 않다'])
+        emptied = self.make(body, '', {'word/comments.xml': f'<w:comments {NS}></w:comments>'})      # 메모를 모두 지운 문서에 빈 파일만 남은 경우
+        self.assertFalse(any('메모' in w for w in module.review_text(emptied)[1]['경고']))
+        self.assertFalse(any('메모' in w for w in module.review_text(self.make(body, ''))[1]['경고']))
+        for broken in ('', '<w:comments'):      # 비었거나 깨진 메모 파일이 있어도 본문은 뽑고, 읽지 못하였다고 알린다
+            text, summary = module.review_text(self.make(body, '', {'word/comments.xml': broken}))
+            self.assertIn('메모가 달린 문장.', text.splitlines())
+            self.assertEqual([w for w in summary['경고'] if '메모' in w], ['word/comments.xml 을 읽지 못하였다. Word 메모가 있는지 Word 에서 따로 확인한다'])
 
 
 class ReviewResultTests(unittest.TestCase):

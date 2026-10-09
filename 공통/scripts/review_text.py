@@ -6,7 +6,7 @@
 
     python -B 공통/scripts/review_text.py "1_검토의견/사건/…/(…) … 관련 검토.docx" --out "1_검토의견/사건/…/작업/자체검토/검토대상.md"
 
-면수·서식·그림은 나오지 않는다. 렌더 확인은 따로 한다.
+면수·서식·그림은 나오지 않는다. 렌더 확인은 따로 한다. Word 메모(word/comments.xml)의 글도 뽑지 않고, 메모가 있으면 건수만 경고한다.
 """
 import argparse
 import sys
@@ -98,6 +98,15 @@ def review_text(path):
         for part in ('word/document.xml', 'word/footnotes.xml', 'word/endnotes.xml'):
             if part in z.namelist() and any(ET.fromstring(z.read(part)).find('.//' + W + t) is not None for t in TRACKED):
                 warnings.append('변경 추적이 있다(' + part + '). 삽입·옮겨 온 글은 들어 있고 삭제·옮기기 전 글은 빠져 있다')
+        # 메모의 글은 본문이 아니어서 뽑지 않는다. 담당자가 메모로 남긴 말을 모르고 지나가지 않게 건수를 알린다
+        if 'word/comments.xml' in z.namelist():
+            try:
+                memos = len(list(ET.fromstring(z.read('word/comments.xml')).iter(W + 'comment')))
+            except ET.ParseError:      # 비었거나 깨진 메모 파일 때문에 본문까지 뽑지 못하는 일이 없게 한다
+                memos = 0
+                warnings.append('word/comments.xml 을 읽지 못하였다. Word 메모가 있는지 Word 에서 따로 확인한다')
+            if memos:
+                warnings.append(f'Word 메모 {memos}건이 있다(word/comments.xml). 메모의 글은 이 글에 들어 있지 않다')
         lines = [t for t in paragraphs(body, mark) if t.strip()]
         if not lines:
             warnings.append('본문에 글자가 없다. 그림만 든 문서이거나 추출에 실패한 것이다')

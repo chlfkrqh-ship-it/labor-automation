@@ -479,6 +479,30 @@ const 시험들 = {
       && 셋째.요청.length === 1 && !!셋째.저장['lbox경고'] && 넷째.요청.length === 1 && 넷째.저장['lbox중단'] === '다른 세션의 사유'
       || JSON.stringify({받음, 받음2, 중단: 환경.저장['lbox중단'], 요청: 환경.요청.length, 요청2: 다른.요청.length});
   },
+  // 아래 둘은 멈춤 표시 없이 다음 건으로 넘어가는 경우이다(9항). 결과에 그 건이 남아야 다시 부르지 않고 사용자에게 알릴 수 있다
+  async PDF가아닌응답은멈춤표시없이다음건으로넘어간다() {
+    const 환경 = 새환경(입력);
+    const pdf = new TextEncoder().encode('%PDF-1.7 가짜 판결문 %%EOF'), 화면 = new TextEncoder().encode('<html>로그인이 필요합니다</html>');
+    환경.ctx.응답 = async u => ({url: u, ok: true, status: 200,
+      arrayBuffer: async () => (u.includes(encodeURIComponent('대법원-2020다2')) ? 화면 : pdf).buffer.slice(0)});
+    const 받음 = await 환경.ctx.lboxPdfZip([['대법원-2020다1', '가.pdf'], ['대법원-2020다2', '나.pdf'], ['대법원-2020다3', '다.pdf']]);
+    return 받음.끝 === true && 받음.받은 === 2 && 받음.결과.length === 3 && 받음.결과[0][1] === 'ok' && 받음.결과[2][1] === 'ok'
+      && 받음.결과[1][1] === 'PDF 가 아님(' + 화면.length + '바이트)' && 환경.요청.length === 3 && 기록(환경).length === 3
+      && !환경.저장['lbox중단'] && !환경.저장['lbox경고'] && 환경.내려받기.length === 1
+      || JSON.stringify({받음, 중단: 환경.저장['lbox중단'], 경고: 환경.저장['lbox경고'], 요청: 환경.요청.length, 내려받기: 환경.내려받기.length});
+  },
+  async 연결이실패한건은멈춤표시없이다음건으로넘어간다() {
+    const 환경 = 새환경(입력);
+    const pdf = new TextEncoder().encode('%PDF-1.7 가짜 판결문 %%EOF');
+    환경.ctx.응답 = async u => {
+      if (u.includes(encodeURIComponent('대법원-2020다1'))) throw new TypeError('Failed to fetch');
+      return {url: u, ok: true, status: 200, arrayBuffer: async () => pdf.buffer.slice(0)};
+    };
+    const 받음 = await 환경.ctx.lboxPdfZip([['대법원-2020다1', '가.pdf'], ['대법원-2020다2', '나.pdf']]);
+    return 받음.끝 === true && 받음.받은 === 1 && 받음.결과.length === 2 && 받음.결과[0][1] === '오류 Failed to fetch' && 받음.결과[1][1] === 'ok'
+      && 환경.요청.length === 2 && 기록(환경).length === 2 && !환경.저장['lbox중단'] && !환경.저장['lbox경고'] && 환경.내려받기.length === 1
+      || JSON.stringify({받음, 중단: 환경.저장['lbox중단'], 경고: 환경.저장['lbox경고'], 요청: 환경.요청.length, 내려받기: 환경.내려받기.length});
+  },
   // 보관함의 본문을 글자 묶음으로 내려받는 9항 코드이다(2026. 10. 9. 자체 검토에 넘길 원문). LBOX 에 요청하지 않아야 한다
   async 보관함본문을요청없이글자묶음으로내려받는다() {
     const 환경 = 새환경(입력);
