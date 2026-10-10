@@ -289,19 +289,22 @@ class ReviewTextTests(unittest.TestCase):
             + '<w:p><w:moveFrom w:id="95">' + run('여섯째 문단. ') + start(3) + run('여섯째 문단의 걸친 앞.') + '</w:moveFrom></w:p>'
             + '<w:p>' + run('일곱째 문단의 걸친 뒤.') + end(3) + run(' 일곱째 문단 끝.') + '</w:p>'
             # 메모 4: 범위 없이 메모 표시만 옮기기 전 글 안에 있다
-            + '<w:p>' + run('메모 표시만 남은 문단. ') + '<w:moveFrom w:id="96">' + run('옮기기 전 낱말') + '<w:r><w:commentReference w:id="4"/></w:r></w:moveFrom></w:p>')
+            + '<w:p>' + run('메모 표시만 남은 문단. ') + '<w:moveFrom w:id="96">' + run('옮기기 전 낱말') + '<w:r><w:commentReference w:id="4"/></w:r></w:moveFrom></w:p>'
+            # 메모 5: 범위 안의 옮기기 전 글이 공백뿐이다. 표시를 세우지 않는다
+            + '<w:p>' + start(5) + run('공백만 옮긴 문단') + '<w:moveFrom w:id="97">' + run(' ') + '</w:moveFrom>' + end(5) + '</w:p>')
         cx = f'<w:comments {NS}>' + memo(0, '옮긴 글의 메모') + memo(1, '옮긴 글의 메모') + memo(2, '끝이 걸친 메모') + memo(3, '시작이 걸친 메모') \
-            + memo(4, '표시만 있는 메모') + '</w:comments>'
+            + memo(4, '표시만 있는 메모') + memo(5, '공백만 옮긴 메모') + '</w:comments>'
         path = self.make(body, '', {'word/comments.xml': cx})
 
         found = module.memo_notes(path)
-        self.assertEqual([m['붙은 구절'] for m in found], ['', '메모가 붙은 구절', '걸친 메모의 앞.', '일곱째 문단의 걸친 뒤.', ''])
-        self.assertEqual([m['범위'] for m in found], [True] * 4 + [False])
-        self.assertEqual([m['끝 표시 없음'] for m in found], [False] * 5)
-        self.assertEqual([m['옮기기 전 글'] for m in found], [True, False, True, True, False])      # 옮긴 자리에 적힌 것(body 의 메모 1)의 범위에는 옮기기 전 글이 없다
-        self.assertEqual([m['문단'] for m in found], ['', '옮긴 문단. 메모가 붙은 구절 옮긴 문단 끝.', '넷째 문단 걸친 메모의 앞.', '', '메모 표시만 남은 문단.'])
-        self.assertEqual([m['문단 없음'] for m in found], [False] * 5)
-        self.assertEqual([m['자리'] for m in found], ['본문'] * 5)
+        self.assertEqual([m['붙은 구절'] for m in found], ['', '메모가 붙은 구절', '걸친 메모의 앞.', '일곱째 문단의 걸친 뒤.', '', '공백만 옮긴 문단'])
+        self.assertEqual([m['범위'] for m in found], [True] * 4 + [False, True])
+        self.assertEqual([m['끝 표시 없음'] for m in found], [False] * 6)
+        self.assertEqual([m['옮기기 전 글'] for m in found], [True, False, True, True, False, False])      # 옮긴 자리에 적힌 것(body 의 메모 1)의 범위에는 옮기기 전 글이 없다
+        self.assertEqual([m['문단'] for m in found], ['', '옮긴 문단. 메모가 붙은 구절 옮긴 문단 끝.', '넷째 문단 걸친 메모의 앞.', '', '메모 표시만 남은 문단.',
+                                                    '공백만 옮긴 문단'])
+        self.assertEqual([m['문단 없음'] for m in found], [False] * 6)
+        self.assertEqual([m['자리'] for m in found], ['본문'] * 6)
         text = module.review_text(path)[0]      # 검토 대상 글은 종전대로 옮기기 전 글을 빼고 옮긴 자리의 글만 싣는다
         self.assertEqual(text.count('메모가 붙은 구절'), 1)
         self.assertNotIn('다섯째', text)
