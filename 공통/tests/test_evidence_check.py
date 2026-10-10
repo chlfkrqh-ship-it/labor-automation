@@ -297,8 +297,8 @@ class GitignoreTests(unittest.TestCase):
             '5_녹취록/녹취록 환경설치.bat', '4_서면작성/requirements.txt',
             '4_서면작성/scripts/evidence_check.py', '공통/tests/test_evidence_check.py',
             '.claude/settings.json', '.claude/commands/서면.md', 'CLAUDE.md', '.gitattributes',
-            # 이름이 '자체검토' 인 파일은 **/자체검토/ (폴더)에 걸리지 않는다
-            '공통/자체검토.md', '.claude/commands/자체검토.md', '.claude/workflows/자체검토.js',
+            # 이름에 '자체검토' 가 든 추적 파일 셋과 이름이 꼭 '자체검토' 인 파일 자리. **/자체검토/ 는 폴더만 걸므로 넷 다 걸리지 않는다
+            '공통/자체검토.md', '.claude/commands/자체검토.md', '.claude/workflows/자체검토.js', '공통/자체검토',
         ]
         self.assertEqual(sorted(self.ignored(paths)), [])
 

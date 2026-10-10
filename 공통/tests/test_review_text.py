@@ -265,7 +265,7 @@ class ReviewTextTests(unittest.TestCase):
 
     def test_memo_marks_inside_moved_from_text(self):
         """Word 는 메모가 붙은 글을 변경 추적으로 옮기면 범위 표시와 메모 표시를 옮기기 전 자리의 글(w:moveFrom) 안에도 쓴다(2026. 10. 10. Word 16 저장본의 꼴).
-        옮기기 전 글은 빼되 그 안의 표시는 읽는다."""
+        옮기기 전 글은 빼되 그 안의 표시는 읽는다. 범위의 일부만 옮긴 글에 걸친 메모(아래 body 의 메모 2·3)는 옮긴 자리에 따로 적히지 않으므로 그 메모 칸에 알린다."""
         def memo(i, text):
             return '<w:comment w:id="%d" w:author="담당자"><w:p>%s</w:p></w:comment>' % (i, run(text))
 
@@ -287,30 +287,40 @@ class ReviewTextTests(unittest.TestCase):
             + '<w:p><w:moveFrom w:id="94">' + run('다섯째 문단 걸친 메모의 뒤.') + end(2) + run(' 다섯째 문단 끝.') + '</w:moveFrom></w:p>'
             # 메모 3: 범위의 시작이 옮기기 전 글 안에 있다. 시작 표시만 그 안에 있다
             + '<w:p><w:moveFrom w:id="95">' + run('여섯째 문단. ') + start(3) + run('여섯째 문단의 걸친 앞.') + '</w:moveFrom></w:p>'
-            + '<w:p>' + run('일곱째 문단의 걸친 뒤.') + end(3) + run(' 일곱째 문단 끝.') + '</w:p>')
-        cx = f'<w:comments {NS}>' + memo(0, '옮긴 글의 메모') + memo(1, '옮긴 글의 메모') + memo(2, '끝이 걸친 메모') + memo(3, '시작이 걸친 메모') + '</w:comments>'
+            + '<w:p>' + run('일곱째 문단의 걸친 뒤.') + end(3) + run(' 일곱째 문단 끝.') + '</w:p>'
+            # 메모 4: 범위 없이 메모 표시만 옮기기 전 글 안에 있다
+            + '<w:p>' + run('메모 표시만 남은 문단. ') + '<w:moveFrom w:id="96">' + run('옮기기 전 낱말') + '<w:r><w:commentReference w:id="4"/></w:r></w:moveFrom></w:p>')
+        cx = f'<w:comments {NS}>' + memo(0, '옮긴 글의 메모') + memo(1, '옮긴 글의 메모') + memo(2, '끝이 걸친 메모') + memo(3, '시작이 걸친 메모') \
+            + memo(4, '표시만 있는 메모') + '</w:comments>'
         path = self.make(body, '', {'word/comments.xml': cx})
 
         found = module.memo_notes(path)
-        self.assertEqual([m['붙은 구절'] for m in found], ['', '메모가 붙은 구절', '걸친 메모의 앞.', '일곱째 문단의 걸친 뒤.'])
-        self.assertEqual([m['범위'] for m in found], [True] * 4)
-        self.assertEqual([m['끝 표시 없음'] for m in found], [False] * 4)
-        self.assertEqual([m['문단'] for m in found], ['', '옮긴 문단. 메모가 붙은 구절 옮긴 문단 끝.', '넷째 문단 걸친 메모의 앞.', ''])
-        self.assertEqual([m['문단 없음'] for m in found], [False] * 4)
-        self.assertEqual([m['자리'] for m in found], ['본문'] * 4)
+        self.assertEqual([m['붙은 구절'] for m in found], ['', '메모가 붙은 구절', '걸친 메모의 앞.', '일곱째 문단의 걸친 뒤.', ''])
+        self.assertEqual([m['범위'] for m in found], [True] * 4 + [False])
+        self.assertEqual([m['끝 표시 없음'] for m in found], [False] * 5)
+        self.assertEqual([m['옮기기 전 글'] for m in found], [True, False, True, True, False])      # 옮긴 자리에 적힌 것(body 의 메모 1)의 범위에는 옮기기 전 글이 없다
+        self.assertEqual([m['문단'] for m in found], ['', '옮긴 문단. 메모가 붙은 구절 옮긴 문단 끝.', '넷째 문단 걸친 메모의 앞.', '', '메모 표시만 남은 문단.'])
+        self.assertEqual([m['문단 없음'] for m in found], [False] * 5)
+        self.assertEqual([m['자리'] for m in found], ['본문'] * 5)
         text = module.review_text(path)[0]      # 검토 대상 글은 종전대로 옮기기 전 글을 빼고 옮긴 자리의 글만 싣는다
         self.assertEqual(text.count('메모가 붙은 구절'), 1)
         self.assertNotIn('다섯째', text)
         self.assertNotIn('여섯째', text)
+        self.assertNotIn('옮기기 전 낱말', text)
 
         written = module.memo_text(path.name, found)
+        notice = ('이 메모의 범위에는 옮기기 전 글도 들어 있었으나 위 구절에는 적지 않았다. 그 글이 옮겨 간 자리에는 이 메모가 따로 적혀 있지 않을 수 있으므로, '
+                  '메모가 옮긴 글의 어느 대목에 걸려 있었는지는 Word 에서 따로 확인한다.')
         self.assertIn('옮긴 글 안에 단 메모는 Word 가 옮기기 전 자리와 옮긴 자리에 따로 적으므로 글이 같은 메모가 두 건으로 나올 수 있다', written)
         self.assertIn('## 메모 1 — 담당자\n\n붙은 구절(본문):\n> (범위는 있으나 그 안에 글로 뽑힌 것이 없다. 변경 추적으로 지운 글·옮기기 전 글, ', written)
         self.assertIn('## 메모 2 — 담당자\n\n붙은 구절(본문):\n> 메모가 붙은 구절\n\n메모가 달린 문단:\n> 옮긴 문단. 메모가 붙은 구절 옮긴 문단 끝.\n\n메모의 글:\n> 옮긴 글의 메모\n', written)
-        self.assertIn('## 메모 3 — 담당자\n\n붙은 구절(본문):\n> 걸친 메모의 앞.\n\n메모가 달린 문단:\n> 넷째 문단 걸친 메모의 앞.\n', written)
-        self.assertIn('## 메모 4 — 담당자\n\n붙은 구절(본문):\n> 일곱째 문단의 걸친 뒤.\n\n메모가 달린 문단:\n> (달린 문단에 글로 뽑힌 것이 없다. ', written)
+        self.assertIn('## 메모 3 — 담당자\n\n붙은 구절(본문):\n> 걸친 메모의 앞.\n\n' + notice + '\n\n메모가 달린 문단:\n> 넷째 문단 걸친 메모의 앞.\n', written)
+        self.assertIn('## 메모 4 — 담당자\n\n붙은 구절(본문):\n> 일곱째 문단의 걸친 뒤.\n\n' + notice + '\n\n메모가 달린 문단:\n> (달린 문단에 글로 뽑힌 것이 없다. ', written)
+        self.assertEqual(written.count(notice), 2)      # 구절이 빈 것(body 의 메모 0)과 옮긴 자리에 적힌 것(body 의 메모 1)에는 붙이지 않는다
+        self.assertIn('## 메모 5 — 담당자\n\n붙은 구절(본문):\n> (범위 없이 메모 표시만 있다)\n\n메모가 달린 문단:\n> 메모 표시만 남은 문단.\n', written)
         self.assertNotIn('다섯째', written)      # 옮기기 전 글의 글자는 메모 파일에도 나오지 않는다
         self.assertNotIn('여섯째', written)
+        self.assertNotIn('옮기기 전 낱말', written)
 
 
 class ReviewResultTests(unittest.TestCase):
