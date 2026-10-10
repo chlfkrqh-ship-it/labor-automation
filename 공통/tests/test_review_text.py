@@ -290,7 +290,7 @@ class ReviewTextTests(unittest.TestCase):
             + '<w:p>' + run('일곱째 문단의 걸친 뒤.') + end(3) + run(' 일곱째 문단 끝.') + '</w:p>'
             # 메모 4: 범위 없이 메모 표시만 옮기기 전 글 안에 있다
             + '<w:p>' + run('메모 표시만 남은 문단. ') + '<w:moveFrom w:id="96">' + run('옮기기 전 낱말') + '<w:r><w:commentReference w:id="4"/></w:r></w:moveFrom></w:p>'
-            # 메모 5: 범위 안의 옮기기 전 글이 공백뿐이다. 표시를 세우지 않는다
+            # 메모 5: 범위 안의 옮기기 전 글이 공백뿐이다. 범위에 옮기기 전 글이 들었다고 적지 않는다('옮기기 전 글' 이 False 이고 알림 문단도 붙지 않는다)
             + '<w:p>' + start(5) + run('공백만 옮긴 문단') + '<w:moveFrom w:id="97">' + run(' ') + '</w:moveFrom>' + end(5) + '</w:p>')
         cx = f'<w:comments {NS}>' + memo(0, '옮긴 글의 메모') + memo(1, '옮긴 글의 메모') + memo(2, '끝이 걸친 메모') + memo(3, '시작이 걸친 메모') \
             + memo(4, '표시만 있는 메모') + memo(5, '공백만 옮긴 메모') + '</w:comments>'
