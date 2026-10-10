@@ -275,6 +275,8 @@ class GitignoreTests(unittest.TestCase):
             '6_손해배상계산/검산_연장수당.py', '검산_퇴직금.py',
             # docx 에서 뽑은 Word 메모(review_text.py --memos)
             'Word메모.md', '1_검토의견/Word메모_검토의견서.md',
+            # 자체 검토 폴더(공통/자체검토.md 2절)가 사건/ 밖에 생긴 경우
+            '5_녹취록/자체검토/검토지침.md', '1_검토의견/첨부/자체검토/담당자수정.md',
             # 의뢰인이 보낸 자료
             '진단서.hwp', '징계통보서.pdf', '의뢰인메일.msg', '의뢰인메일.eml', '사진묶음.zip',
             '임금대장.csv', '임금대장.xlsx', '2_판례검색/양식/리서치.docx',
@@ -295,6 +297,8 @@ class GitignoreTests(unittest.TestCase):
             '5_녹취록/녹취록 환경설치.bat', '4_서면작성/requirements.txt',
             '4_서면작성/scripts/evidence_check.py', '공통/tests/test_evidence_check.py',
             '.claude/settings.json', '.claude/commands/서면.md', 'CLAUDE.md', '.gitattributes',
+            # 이름이 '자체검토' 인 파일은 **/자체검토/ (폴더)에 걸리지 않는다
+            '공통/자체검토.md', '.claude/commands/자체검토.md', '.claude/workflows/자체검토.js',
         ]
         self.assertEqual(sorted(self.ignored(paths)), [])
 

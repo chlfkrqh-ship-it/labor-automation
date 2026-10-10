@@ -512,7 +512,7 @@ def test_추출은_자료_옆에_놓인_계산표와_검산_파일을_자료로_
     for name in ("검산_사건.yaml", "검산_사건_대안.yaml", "검산_연장수당.py"):
         (folder / name).write_text("kind: labor  # 7,777,777", encoding="utf-8")
     # 이름에 '계산표'·'검산표'가 있어도 `{폴더 이름}_계산표`·`_검산표` 와 글자 그대로 같지 않고 `{폴더 이름}_대안계산표` 로 시작하지도 않는 것,
-    # 하위 폴더에 든 것은 상대방·법원의 자료다
+    # `계산/`·`자체검토/` 가 아닌 하위 폴더에 든 것은 상대방·법원의 자료다(이름에 `_노동금액계산표` 가 든 것은 어디에 있든 거른다. 아래와 앞 시험)
     theirs = {"을3_계산표.xlsx": "을3 계산", "별지_검산표.xlsx": "별지 검산", "홍길동_계산표.xlsx": "프로그램 저장",
               "홍길동 손해배상_계산표(피고).xlsx": "피고 계산", "받은자료/홍길동 손해배상_계산표.xlsx": "받은 계산",
               "피고_홍길동 손해배상_대안계산표.xlsx": "피고 대안", "받은자료/홍길동 손해배상_대안계산표2.xlsx": "받은 대안"}
@@ -536,6 +536,7 @@ def test_추출은_자료_옆에_놓인_계산표와_검산_파일을_자료로_
     assert extract.is_engine_output(Path("홍길동 손해배상_계산표.xlsx"), "홍길동 손해배상")
     assert extract.is_engine_output(Path("홍길동 손해배상_검산표.xlsm"), "홍길동 손해배상")
     assert extract.is_engine_output(Path("받은자료/검산_사건.yml")) and extract.is_engine_output(Path("검산_사건.YAML"))   # 검산_ 은 어느 깊이든, .yml 도
+    assert extract.is_engine_output(Path("받은자료/2025가단0000(홍길동)_노동금액계산표.xlsm"))   # _노동금액계산표 가 든 이름은 어느 깊이든, .xlsm 도
 
     monkeypatch.chdir(folder)
     extract.main(".")                                                      # 그 폴더 안에서 . 로 불러도 사건 폴더 이름을 안다

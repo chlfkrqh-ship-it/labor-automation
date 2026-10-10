@@ -24,6 +24,8 @@ MC_FALLBACK = '{http://schemas.openxmlformats.org/markup-compatibility/2006}Fall
 # 변경 추적에서 옮기기 전 자리의 글(w:moveFrom. 옮긴 자리 w:moveTo 에 같은 글이 있다)과 지운 글(w:del. 지운 각주 참조와
 # 탭·줄바꿈도 그 안에 있다). 변경 추적이 있는 문서는 모두 수락한 모습으로 뽑는다
 SKIP = {MC_FALLBACK, W + 'pPr', W + 'rPr', W + 'moveFrom', W + 'del'}
+# 메모의 자리를 찾을 때에는 지운 글과 옮기기 전 자리의 글 안도 본다. Word 는 그 안에도 메모의 범위 표시와 메모 표시를 쓴다(memo_anchors)
+GONE = {W + 'del', W + 'moveFrom'}
 TRACKED = ('ins', 'del', 'moveFrom', 'moveTo')
 
 
@@ -97,11 +99,12 @@ def comments(z):
 
 def memo_anchors(root):
     """메모 id -> (붙은 구절, 메모가 달린 문단, 끝 표시가 없는지). 붙은 구절은 w:commentRangeStart 와 w:commentRangeEnd 사이의 글이고
-    문단이 바뀌는 자리는 줄바꿈으로 남긴다. 지운 글은 본문과 같이 뺀다. 다만 Word 는 지운 글(w:del) 안에도 범위 표시와 메모 표시를 쓰므로
-    (메모가 붙은 문장을 변경 추적으로 지운 문서. 2026. 10. 10. Word 16 저장본으로 확인) 그 안의 표시는 읽는다. 범위 없이 메모 표시
-    (w:commentReference)만 있으면 붙은 구절은 None 이고, 범위는 있는데 그 안에 글로 뽑힌 것이 없으면(지운 글·그림·공백·각주 번호뿐인 범위,
-    빈 범위 등) 빈 글이다. 끝 표시를 만나지 못한 범위는 그 파트의 끝까지 글이 모이므로 구절을 빈 글로 돌려주고 끝 표시가 없다고 알린다.
-    달린 문단을 찾지 못하면 문단은 None 이다."""
+    문단이 바뀌는 자리는 줄바꿈으로 남긴다. 지운 글과 옮기기 전 자리의 글은 본문과 같이 뺀다. 다만 Word 는 지운 글(w:del)과 옮기기 전
+    자리의 글(w:moveFrom) 안에도 범위 표시와 메모 표시를 쓰므로(메모가 붙은 문장을 변경 추적으로 지우거나 옮긴 문서. 2026. 10. 10. Word 16
+    저장본으로 확인) 그 안의 표시는 읽는다. 범위가 옮긴 글 안에만 든 메모는 Word 가 옮기기 전 자리와 옮긴 자리(w:moveTo)에 id 가 다른 메모
+    두 건으로 적는다(같은 저장본). 범위 없이 메모 표시(w:commentReference)만 있으면 붙은 구절은 None 이고, 범위는 있는데 그 안에 글로 뽑힌
+    것이 없으면(지운 글·옮기기 전 글·그림·공백·각주 번호뿐인 범위, 빈 범위 등) 빈 글이다. 끝 표시를 만나지 못한 범위는 그 파트의 끝까지
+    글이 모이므로 구절을 빈 글로 돌려주고 끝 표시가 없다고 알린다. 달린 문단을 찾지 못하면 문단은 None 이다."""
     spans, where, opened = {}, {}, []
 
     def add(text):
@@ -110,7 +113,7 @@ def memo_anchors(root):
 
     def walk(node, para, live):
         for child in node:
-            if child.tag in SKIP and child.tag != W + 'del':
+            if child.tag in SKIP and child.tag not in GONE:
                 continue
             if child.tag in (W + 'commentRangeStart', W + 'commentReference'):
                 i = child.get(W + 'id')
@@ -122,7 +125,7 @@ def memo_anchors(root):
             elif child.tag == W + 'commentRangeEnd':
                 if child.get(W + 'id') in opened:
                     opened.remove(child.get(W + 'id'))
-            elif child.tag == W + 'del' or not live:      # 지운 글: 글자는 모으지 않고 그 안의 범위 표시·메모 표시만 읽는다
+            elif child.tag in GONE or not live:      # 지운 글·옮기기 전 글: 글자는 모으지 않고 그 안의 범위 표시·메모 표시만 읽는다
                 walk(child, para, False)
             elif child.tag == W + 't':
                 add(child.text or '')
@@ -152,6 +155,8 @@ def memo_notes(path):
         if not found:
             return found
         anchors = {}
+        # Word 16 은 각주·미주 글 안의 구절에 메모를 달려고 하면 '메모, 미주, 각주는 본문에서만 사용할 수 있습니다' 라며 받지 않는다
+        # (2026. 10. 10. 자동화로 확인). 각주·미주 파트도 보는 것은 다른 프로그램이 저장한 문서에 대비한 것이다
         for part, label in (('word/document.xml', '본문'), ('word/footnotes.xml', '각주'), ('word/endnotes.xml', '미주')):
             if part in z.namelist():
                 for i, (span, para, unclosed) in memo_anchors(ET.fromstring(z.read(part))).items():
@@ -173,7 +178,8 @@ def memo_text(name, found):
 
     out = ['# Word 메모: ' + name, '',
            f'메모 {len(found)}건(답글도 한 건으로 센다). 붙은 구절은 그 메모의 범위에 든 글이고, 달린 문단은 메모가 달린 자리의 문단이다. '
-           '변경 추적으로 지운 글은 빠져 있고, 해결 표시는 가리지 않았다.']
+           '변경 추적으로 지운 글과 옮기기 전 글은 빠져 있고, 해결 표시는 가리지 않았다. 옮긴 글 안에 단 메모는 Word 가 옮기기 전 자리와 옮긴 자리에 '
+           '따로 적으므로 글이 같은 메모가 두 건으로 나올 수 있다(옮기기 전 자리의 것은 붙은 구절이 비어 있다).']
     for n, m in enumerate(found, 1):
         who = ', '.join(x for x in (m['작성자'], m['날짜']) if x)
         out += ['', f'## 메모 {n}' + (' — ' + who if who else ''), '']
@@ -183,13 +189,14 @@ def memo_text(name, found):
             if m['끝 표시 없음']:
                 empty = '범위의 끝 표시(w:commentRangeEnd)를 찾지 못하여 구절을 적지 않았다. 무엇에 단 메모인지는 Word 에서 따로 확인한다'
             elif m['범위']:
-                empty = ('범위는 있으나 그 안에 글로 뽑힌 것이 없다. 변경 추적으로 지운 글, 그림·공백, 각주·미주 번호만 든 범위이거나 빈 범위일 수 있다. '
-                         '무엇에 단 메모인지는 Word 에서 따로 확인한다')
+                empty = ('범위는 있으나 그 안에 글로 뽑힌 것이 없다. 변경 추적으로 지운 글·옮기기 전 글, 그림·공백, 각주·미주 번호만 든 범위이거나 '
+                         '빈 범위일 수 있다. 무엇에 단 메모인지는 Word 에서 따로 확인한다')
             else:
                 empty = '범위 없이 메모 표시만 있다'
             out += [f"붙은 구절({m['자리']}):"] + quote(m['붙은 구절'], empty)
             out += ['', '메모가 달린 문단:'] + quote(m['문단'], '문단을 찾지 못하였다' if m['문단 없음']
-                                              else '달린 문단에 글로 뽑힌 것이 없다. 지운 글이나 그림만 든 문단일 수 있다')
+                                              else '달린 문단에 글로 뽑힌 것이 없다. 변경 추적으로 지운 글·옮기기 전 글, 그림·글상자·공백, '
+                                                   '각주·미주 번호만 든 문단이거나 빈 문단일 수 있다')
         out += ['', '메모의 글:'] + quote(m['글'], '글 없음')
     return '\n'.join(out) + '\n'
 
