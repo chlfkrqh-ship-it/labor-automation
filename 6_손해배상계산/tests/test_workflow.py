@@ -486,13 +486,60 @@ def test_추출은_이전_계산표를_자료로_읽지_않는다(tmp_path):
     extract.main(str(folder))
     text = (folder / "_추출.txt").read_text(encoding="utf-8")
     head, _, body = text.partition("=" * 70)
-    assert "[계산 결과물·자체 검토 자료 — 자료가 아니므로 읽지 않음]" in head and "노동금액계산표" in head
+    assert "[계산 결과물·검산용 입력·자체 검토 자료 — 자료가 아니므로 읽지 않음]" in head and "노동금액계산표" in head
     assert "1,234,567" not in text and "자료목록.json" not in text and "abc.json" not in text and "지원하지 않는 형식" not in text
     assert "사람확인.md" in head and "판결.txt" in head
     assert "확인표.md" in head and "8,888,888" not in body
     assert "9,999,999" not in body and "판결 원문 전체" not in body
     assert "이전 계산" not in body and "노동금액계산표" not in body
     assert "기본급 3,000,000원" in body and "을2 별지 계산표" in body
+
+
+def test_추출은_자료_옆에_놓인_계산표와_검산_파일을_자료로_읽지_않는다(tmp_path, monkeypatch):
+    """계산 폴더가 자료 폴더와 같은 사건(사건/{사건명}/)에서 /손배계산·/손배검산 이 만든 파일(손배계산.md 5절, 손배검산.md)."""
+    folder = tmp_path / "홍길동 손해배상"
+
+    def book(path, text):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        wb = openpyxl.Workbook()
+        wb.active["A1"] = text
+        wb.save(path)
+
+    ours = ["홍길동 손해배상_계산표.xlsx", "홍길동 손해배상_검산표.xlsx", "홍길동 손해배상_대안계산표.xlsx",
+            "홍길동 손해배상_대안계산표2.xlsx"]                                # 옵션을 여럿 바꾸어 돌린 둘째 대안계산표
+    for i, name in enumerate(ours, 1):
+        book(folder / name, f"우리 계산 {i},111,111 원")
+    for name in ("검산_사건.yaml", "검산_사건_대안.yaml", "검산_연장수당.py"):
+        (folder / name).write_text("kind: labor  # 7,777,777", encoding="utf-8")
+    # 이름에 '계산표'·'검산표'가 있어도 지침이 정한 이름과 다르거나 하위 폴더에 든 것은 상대방·법원의 자료다
+    theirs = {"을3_계산표.xlsx": "을3 계산", "별지_검산표.xlsx": "별지 검산", "홍길동_계산표.xlsx": "프로그램 저장",
+              "홍길동 손해배상_계산표(피고).xlsx": "피고 계산", "받은자료/홍길동 손해배상_계산표.xlsx": "받은 계산",
+              "피고_홍길동 손해배상_대안계산표.xlsx": "피고 대안", "받은자료/홍길동 손해배상_대안계산표2.xlsx": "받은 대안"}
+    for name, text in theirs.items():
+        book(folder / name, text)
+    (folder / "검산_의견.txt").write_text("의뢰인이 보낸 검산 의견", encoding="utf-8")   # 검산_ 으로 시작해도 입력·스크립트 형식이 아니면 자료다
+
+    extract.main(str(folder))
+    text = (folder / "_추출.txt").read_text(encoding="utf-8")
+    head, _, body = text.partition("=" * 70)
+    listed = head.partition("자료가 아니므로 읽지 않음]")[2]
+    for name in ours + ["검산_사건.yaml", "검산_사건_대안.yaml", "검산_연장수당.py"]:
+        assert f"  {name}\n" in listed + "\n"
+    assert "111,111" not in body and "7,777,777" not in text and "지원하지 않는 형식" not in text
+    for name, shown in theirs.items():
+        assert f"■ {Path(name)}\n" in body and shown in body and f"  {Path(name)}\n" not in listed + "\n"
+    assert "의뢰인이 보낸 검산 의견" in body
+
+    # 사건 폴더 이름을 모르면(case 를 주지 않으면) 이름만으로는 거르지 않는다
+    assert not extract.is_engine_output(Path("홍길동 손해배상_계산표.xlsx"))
+    assert extract.is_engine_output(Path("홍길동 손해배상_계산표.xlsx"), "홍길동 손해배상")
+    assert extract.is_engine_output(Path("홍길동 손해배상_검산표.xlsm"), "홍길동 손해배상")
+    assert extract.is_engine_output(Path("받은자료/검산_사건.yml")) and extract.is_engine_output(Path("검산_사건.YAML"))   # 검산_ 은 어느 깊이든, .yml 도
+
+    monkeypatch.chdir(folder)
+    extract.main(".")                                                      # 그 폴더 안에서 . 로 불러도 사건 폴더 이름을 안다
+    head = (folder / "_추출.txt").read_text(encoding="utf-8").partition("=" * 70)[0]
+    assert "  홍길동 손해배상_계산표.xlsx\n" in head + "\n"
 
 
 def test_cp949_파이프에서도_요약이_끝까지_나온다(tmp_path):

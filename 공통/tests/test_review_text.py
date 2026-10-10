@@ -107,10 +107,95 @@ class ReviewTextTests(unittest.TestCase):
         emptied = self.make(body, '', {'word/comments.xml': f'<w:comments {NS}></w:comments>'})      # 메모를 모두 지운 문서에 빈 파일만 남은 경우
         self.assertFalse(any('메모' in w for w in module.review_text(emptied)[1]['경고']))
         self.assertFalse(any('메모' in w for w in module.review_text(self.make(body, ''))[1]['경고']))
-        for broken in ('', '<w:comments'):      # 비었거나 깨진 메모 파일이 있어도 본문은 뽑고, 읽지 못하였다고 알린다
-            text, summary = module.review_text(self.make(body, '', {'word/comments.xml': broken}))
+        # 비었거나 깨진 메모 파일이 있어도 본문은 뽑고, 읽지 못하였다고 알린다. 뒤의 둘은 XML 선언의 인코딩을 파이썬이 읽지 못하는
+        # 경우로 ParseError 가 아니다(모르는 이름은 LookupError, euc-kr 같은 다바이트 인코딩은 ValueError)
+        declared = '<?xml version="1.0" encoding="%s"?>' + f'<w:comments {NS}></w:comments>'
+        for broken in ('', '<w:comments', declared % 'x-none-such', declared % 'euc-kr'):
+            path = self.make(body, '', {'word/comments.xml': broken})
+            text, summary = module.review_text(path)
             self.assertIn('메모가 달린 문장.', text.splitlines())
             self.assertEqual([w for w in summary['경고'] if '메모' in w], ['word/comments.xml 을 읽지 못하였다. Word 메모가 있는지 Word 에서 따로 확인한다'])
+            self.assertIsNone(module.memo_notes(path))
+
+    def test_memos_come_with_the_passage_they_are_attached_to(self):
+        """--memos: 메모의 글만으로는 어느 문장에 단 메모인지 알 수 없다. 붙은 구절과 달린 문단을 함께 뽑는다."""
+        import contextlib, io, sys
+        from unittest import mock
+
+        def memo(i, *texts):
+            return '<w:comment w:id="%d" w:author="담당자" w:date="2026-10-09T10:00:00Z">%s</w:comment>' % (i, ''.join('<w:p>%s</w:p>' % run(t) for t in texts))
+
+        def start(i):
+            return '<w:commentRangeStart w:id="%d"/>' % i
+
+        def end(i):
+            return '<w:commentRangeEnd w:id="%d"/><w:r><w:commentReference w:id="%d"/></w:r>' % (i, i)
+
+        body = (
+            # 메모 0 과 그 답글 1: 한 문단 안의 두 런에 걸친 범위. 범위 안의 지운 글은 본문과 같이 뺀다
+            '<w:p>' + run('앞 문장. ') + start(0) + start(1) + run('빼 달라는 ') + '<w:del><w:r><w:delText>삭제된낱말 </w:delText></w:r></w:del>'
+            + run('문장.') + end(0) + end(1) + run(' 뒤 문장.') + ref(5) + '</w:p>'
+            # 메모 2: 문단 사이에서 시작하여 두 문단에 걸친 범위
+            + start(2) + '<w:p>' + run('둘째 문단 전체.') + '</w:p><w:p>' + run('셋째 문단 앞') + end(2) + run(' 셋째 문단 뒤.') + '</w:p>'
+            # 메모 3: 범위 없이 메모 표시만 있다
+            + '<w:p>' + run('표시만 달린 문단.') + '<w:r><w:commentReference w:id="3"/></w:r></w:p>'
+            # 메모 5: 범위는 있으나 그 안의 글이 모두 변경 추적으로 지운 글이다
+            + '<w:p>' + run('지운 자리 앞.') + start(5) + '<w:del><w:r><w:delText>삭제된낱말</w:delText></w:r></w:del>' + end(5) + run(' 지운 자리 뒤.')
+            + '<w:r><w:endnoteReference w:id="1"/></w:r></w:p>')
+        foot = '<w:footnote w:id="5"><w:p><w:r><w:footnoteRef/></w:r>' + run('각주 앞 ') + start(4) + run('각주에 단 구절') + end(4) + '</w:p></w:footnote>'
+        # 메모 6: 미주 안의 메모. 범위에 탭과 줄바꿈이 들어 있다
+        endnotes = f'<w:endnotes {NS}><w:endnote w:id="1"><w:p>' + start(6) + run('미주 구절') + '<w:r><w:tab/><w:t>탭 뒤</w:t><w:br/><w:t>줄 뒤</w:t></w:r>' \
+            + end(6) + '</w:p></w:endnote></w:endnotes>'
+        cx = f'<w:comments {NS}>' + memo(0, '이 문장은 빼 주세요.', '근거가 없습니다.') + memo(1, '답글.') + memo(2, '두 문단을 합쳐 주세요.') \
+            + memo(3, '표시만.') + memo(4, '각주 메모.') + memo(5, '이 문장은 뺐습니다.') + memo(6, '미주 메모.') + memo(9, '자리가 없는 메모.') + '</w:comments>'
+        path = self.make(body, foot, {'word/comments.xml': cx, 'word/endnotes.xml': endnotes})
+
+        found = module.memo_notes(path)
+        self.assertEqual([m['글'] for m in found], ['이 문장은 빼 주세요.\n근거가 없습니다.', '답글.', '두 문단을 합쳐 주세요.', '표시만.', '각주 메모.',
+                                                   '이 문장은 뺐습니다.', '미주 메모.', '자리가 없는 메모.'])
+        self.assertEqual([m['붙은 구절'] for m in found], ['빼 달라는 문장.', '빼 달라는 문장.', '둘째 문단 전체.\n셋째 문단 앞', '', '각주에 단 구절',
+                                                        '', '미주 구절\t탭 뒤\n줄 뒤', ''])
+        self.assertEqual([m['범위'] for m in found], [True, True, True, False, True, True, True, False])
+        self.assertEqual([m['문단'] for m in found], ['앞 문장. 빼 달라는 문장. 뒤 문장.', '앞 문장. 빼 달라는 문장. 뒤 문장.', '둘째 문단 전체.',
+                                                    '표시만 달린 문단.', '각주 앞 각주에 단 구절', '지운 자리 앞. 지운 자리 뒤.', '미주 구절\t탭 뒤\n줄 뒤', ''])
+        self.assertEqual([m['자리'] for m in found], ['본문', '본문', '본문', '본문', '각주', '본문', '미주', ''])
+        self.assertEqual((found[0]['작성자'], found[0]['날짜']), ('담당자', '2026-10-09T10:00:00Z'))
+
+        def call(*argv):
+            screen = io.StringIO()
+            with mock.patch.object(sys, 'argv', ['review_text.py', *map(str, argv)]), contextlib.redirect_stdout(screen), contextlib.redirect_stderr(screen):
+                module.main()
+            return screen.getvalue()
+
+        out, memos = Path(self.tmp.name) / '자체검토' / '검토대상.md', Path(self.tmp.name) / '자체검토' / 'Word메모.md'
+        self.assertIn('--memos', call(path, '--out', out))      # 메모가 있는데 --memos 를 주지 않으면 따로 뽑으라고 알린다
+        self.assertFalse(memos.exists())
+        self.assertIn('Word 메모 8건 ->', call(path, '--out', out, '--memos', memos))
+        self.assertNotIn('빼 주세요', out.read_text(encoding='utf-8'))      # 메모의 글은 검토 대상 글에 넣지 않는다
+        shown, said = io.StringIO(), io.StringIO()      # 글을 화면에 낼 때에는 알림이 글에 섞이지 않는다
+        with mock.patch.object(sys, 'argv', ['review_text.py', str(path)]), contextlib.redirect_stdout(shown), contextlib.redirect_stderr(said):
+            module.main()
+        self.assertEqual(shown.getvalue(), out.read_text(encoding='utf-8'))
+        self.assertIn('--memos', said.getvalue())
+        written = memos.read_text(encoding='utf-8')
+        self.assertIn('## 메모 1 — 담당자, 2026-10-09T10:00:00Z\n\n붙은 구절(본문):\n> 빼 달라는 문장.\n\n메모가 달린 문단:\n> 앞 문장. 빼 달라는 문장. 뒤 문장.\n\n'
+                      '메모의 글:\n> 이 문장은 빼 주세요.\n> 근거가 없습니다.\n', written)
+        self.assertIn('붙은 구절(본문):\n> 둘째 문단 전체.\n> 셋째 문단 앞\n', written)
+        self.assertIn('붙은 구절(본문):\n> (범위 없이 메모 표시만 있다)\n\n메모가 달린 문단:\n> 표시만 달린 문단.\n', written)
+        self.assertIn('붙은 구절(각주):\n> 각주에 단 구절\n', written)
+        self.assertIn('붙은 구절(본문):\n> (범위는 있으나 그 안에 글로 뽑힌 것이 없다. 변경 추적으로 지운 글, 그림·공백, 각주·미주 번호만 든 범위이거나 빈 범위일 수 있다. '
+                      '무엇에 단 메모인지는 Word 에서 따로 확인한다)\n\n메모가 달린 문단:\n> 지운 자리 앞. 지운 자리 뒤.\n', written)
+        self.assertIn('붙은 구절(미주):\n> 미주 구절\t탭 뒤\n> 줄 뒤\n', written)
+        self.assertIn('## 메모 8 — 담당자, 2026-10-09T10:00:00Z\n\n붙은 구절:\n> (본문·각주·미주에서 이 메모의 자리를 찾지 못하였다. Word 에서 따로 확인한다)\n\n메모의 글:\n> 자리가 없는 메모.\n', written)
+        self.assertNotIn('삭제된낱말', written)
+        with self.assertRaises(SystemExit):      # 검토 대상 글과 같은 파일에 쓰지 않는다
+            call(path, '--out', out, '--memos', out)
+
+        plain = self.make('<w:p>' + run('메모 없는 문서.') + '</w:p>', '')      # 메모가 없으면 파일을 만들지 않는다
+        self.assertEqual(module.memo_notes(plain), [])
+        none = Path(self.tmp.name) / '자체검토' / '없음.md'
+        self.assertIn('메모가 없다', call(plain, '--out', Path(self.tmp.name) / '자체검토' / '검토대상2.md', '--memos', none))
+        self.assertFalse(none.exists())
 
 
 class ReviewResultTests(unittest.TestCase):
