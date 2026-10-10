@@ -177,6 +177,11 @@ class ReviewTextTests(unittest.TestCase):
             module.main()
         self.assertEqual(shown.getvalue(), out.read_text(encoding='utf-8'))
         self.assertIn('--memos', said.getvalue())
+        shown, said = io.StringIO(), io.StringIO()      # --out 없이 --memos 만 준 때의 알림도 글에 섞이지 않는다
+        with mock.patch.object(sys, 'argv', ['review_text.py', str(path), '--memos', str(memos)]), contextlib.redirect_stdout(shown), contextlib.redirect_stderr(said):
+            module.main()
+        self.assertEqual(shown.getvalue(), out.read_text(encoding='utf-8'))
+        self.assertIn('Word 메모 8건 ->', said.getvalue())
         written = memos.read_text(encoding='utf-8')
         self.assertIn('## 메모 1 — 담당자, 2026-10-09T10:00:00Z\n\n붙은 구절(본문):\n> 빼 달라는 문장.\n\n메모가 달린 문단:\n> 앞 문장. 빼 달라는 문장. 뒤 문장.\n\n'
                       '메모의 글:\n> 이 문장은 빼 주세요.\n> 근거가 없습니다.\n', written)
@@ -196,6 +201,59 @@ class ReviewTextTests(unittest.TestCase):
         none = Path(self.tmp.name) / '자체검토' / '없음.md'
         self.assertIn('메모가 없다', call(plain, '--out', Path(self.tmp.name) / '자체검토' / '검토대상2.md', '--memos', none))
         self.assertFalse(none.exists())
+
+    def test_memo_marks_inside_deleted_text_and_unclosed_ranges(self):
+        """Word 는 메모가 붙은 글을 변경 추적으로 지우면 범위 표시와 메모 표시를 지운 글(w:del) 안에 쓴다(2026. 10. 10. Word 16 저장본의 꼴).
+        지운 글은 빼되 그 안의 표시는 읽는다. 끝 표시를 만나지 못한 범위는 그 뒤의 글을 구절로 적지 않는다."""
+        def memo(i):
+            return '<w:comment w:id="%d" w:author="담당자"><w:p>%s</w:p></w:comment>' % (i, run('메모 %d' % i))
+
+        def start(i):
+            return '<w:commentRangeStart w:id="%d"/>' % i
+
+        def end(i):
+            return '<w:commentRangeEnd w:id="%d"/><w:r><w:commentReference w:id="%d"/></w:r>' % (i, i)
+
+        def gone(text, before=''):
+            return '<w:r>%s<w:delText xml:space="preserve">%s</w:delText></w:r>' % (before, text)
+
+        body = (
+            # 메모 0: 범위의 끝을 걸쳐 지웠다. 끝 표시와 메모 표시가 지운 글 안에 있다. 범위 가운데의 지운 글에 든 탭·줄바꿈도 뺀다
+            '<w:p>' + run('첫 문장. ') + start(0) + run('둘째 ') + '<w:del>' + gone('지운낱말', '<w:tab/><w:br/>') + '</w:del>' + run('문장')
+            + '<w:del>' + gone('입니다.') + end(0) + gone(' 셋째') + '</w:del>' + run(' 문장.') + '</w:p>'
+            # 메모 1: 범위 전체와 그 앞뒤를 지웠다. 시작·끝 표시와 메모 표시가 모두 지운 글 안에 있다
+            + '<w:p>' + run('넷째 문단 ') + '<w:del>' + gone('머리. ') + start(1) + gone('다섯째.') + end(1) + gone(' 여섯째 ') + '</w:del>' + run('문장.') + '</w:p>'
+            # 메모 2: 범위의 시작을 걸쳐 지웠다. 시작 표시만 지운 글 안에 있다
+            + '<w:p>' + run('여덟째 ') + '<w:del>' + gone('하나. ') + start(2) + gone('여덟째 ') + '</w:del>' + run('둘.') + end(2) + run(' 셋.') + '</w:p>'
+            # 메모 3: 범위와 같은 글을 지웠다. 문단에 남은 글이 없다
+            + '<w:p>' + start(3) + '<w:del>' + gone('통째로 지운 문장.') + end(3) + '</w:del></w:p>'
+            # 메모 4: 끝 표시가 없다(깨진 문서). 메모 5: 그 뒤의 메모
+            + '<w:p>' + run('끝 표시가 없는 문단 앞. ') + start(4) + run('시작 표시 뒤의 글.') + '<w:r><w:commentReference w:id="4"/></w:r></w:p>'
+            + '<w:p>' + start(5) + run('뒤 메모의 구절') + end(5) + run(' 그 뒤.') + '</w:p>'
+            # 메모 6: 문단 밖에 범위만 있고 뒤따르는 문단이 없다
+            + start(6) + '<w:commentRangeEnd w:id="6"/>')
+        path = self.make(body, '', {'word/comments.xml': f'<w:comments {NS}>' + ''.join(memo(i) for i in range(7)) + '</w:comments>'})
+
+        found = module.memo_notes(path)
+        self.assertEqual([m['붙은 구절'] for m in found], ['둘째 문장', '', '둘.', '', '', '뒤 메모의 구절', ''])
+        self.assertEqual([m['범위'] for m in found], [True] * 7)
+        self.assertEqual([m['끝 표시 없음'] for m in found], [False, False, False, False, True, False, False])
+        self.assertEqual([m['문단'] for m in found], ['첫 문장. 둘째 문장 문장.', '넷째 문단 문장.', '여덟째 둘. 셋.', '',
+                                                    '끝 표시가 없는 문단 앞. 시작 표시 뒤의 글.', '뒤 메모의 구절 그 뒤.', ''])
+        self.assertEqual([m['문단 없음'] for m in found], [False, False, False, False, False, False, True])
+        self.assertEqual([m['자리'] for m in found], ['본문'] * 7)
+        self.assertNotIn('지운', module.review_text(path)[0])      # 검토 대상 글은 종전대로 지운 글을 뺀다
+
+        written = module.memo_text(path.name, found)
+        self.assertIn('## 메모 1 — 담당자\n\n붙은 구절(본문):\n> 둘째 문장\n\n메모가 달린 문단:\n> 첫 문장. 둘째 문장 문장.\n', written)
+        self.assertIn('## 메모 4 — 담당자\n\n붙은 구절(본문):\n> (범위는 있으나 그 안에 글로 뽑힌 것이 없다. 변경 추적으로 지운 글, 그림·공백, 각주·미주 번호만 든 범위이거나 '
+                      '빈 범위일 수 있다. 무엇에 단 메모인지는 Word 에서 따로 확인한다)\n\n메모가 달린 문단:\n'
+                      '> (달린 문단에 글로 뽑힌 것이 없다. 지운 글이나 그림만 든 문단일 수 있다)\n', written)
+        self.assertIn('## 메모 5 — 담당자\n\n붙은 구절(본문):\n> (범위의 끝 표시(w:commentRangeEnd)를 찾지 못하여 구절을 적지 않았다. 무엇에 단 메모인지는 Word 에서 따로 확인한다)\n\n'
+                      '메모가 달린 문단:\n> 끝 표시가 없는 문단 앞. 시작 표시 뒤의 글.\n', written)
+        self.assertIn('## 메모 7 — 담당자\n\n붙은 구절(본문):\n> (범위는 있으나', written)
+        self.assertIn('메모가 달린 문단:\n> (문단을 찾지 못하였다)\n\n메모의 글:\n> 메모 6\n', written)
+        self.assertNotIn('지운', written.replace('지운 글', ''))      # 지운 글의 글자는 메모 파일에도 나오지 않는다
 
 
 class ReviewResultTests(unittest.TestCase):

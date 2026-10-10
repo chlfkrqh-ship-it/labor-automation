@@ -271,6 +271,8 @@ class GitignoreTests(unittest.TestCase):
             # 검산 입력과 계산표
             '6_손해배상계산/검산.yaml', '사건.yaml', '검산_사건.yaml', '공통/검산_사건_대안.yaml',
             '6_손해배상계산/2025나1234(김철수)_노동금액계산표.xlsx',
+            # 남겨 둔 검산 스크립트(손배검산.md 의 검산_{항목}.py)를 계산 폴더가 아닌 자리에 만든 경우
+            '6_손해배상계산/검산_연장수당.py', '검산_퇴직금.py',
             # docx 에서 뽑은 Word 메모(review_text.py --memos)
             'Word메모.md', '1_검토의견/Word메모_검토의견서.md',
             # 의뢰인이 보낸 자료

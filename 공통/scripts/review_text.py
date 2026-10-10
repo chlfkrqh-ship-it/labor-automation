@@ -96,18 +96,21 @@ def comments(z):
 
 
 def memo_anchors(root):
-    """메모 id -> (붙은 구절, 메모가 달린 문단). 붙은 구절은 w:commentRangeStart 와 w:commentRangeEnd 사이의 글이고 문단이 바뀌는
-    자리는 줄바꿈으로 남긴다. 지운 글은 본문과 같이 뺀다. 범위 없이 메모 표시(w:commentReference)만 있으면 붙은 구절은 None 이고,
-    범위는 있는데 그 안에 글로 뽑힌 것이 없으면(지운 글·그림·공백·각주 번호뿐인 범위, 빈 범위 등) 빈 글이다."""
+    """메모 id -> (붙은 구절, 메모가 달린 문단, 끝 표시가 없는지). 붙은 구절은 w:commentRangeStart 와 w:commentRangeEnd 사이의 글이고
+    문단이 바뀌는 자리는 줄바꿈으로 남긴다. 지운 글은 본문과 같이 뺀다. 다만 Word 는 지운 글(w:del) 안에도 범위 표시와 메모 표시를 쓰므로
+    (메모가 붙은 문장을 변경 추적으로 지운 문서. 2026. 10. 10. Word 16 저장본으로 확인) 그 안의 표시는 읽는다. 범위 없이 메모 표시
+    (w:commentReference)만 있으면 붙은 구절은 None 이고, 범위는 있는데 그 안에 글로 뽑힌 것이 없으면(지운 글·그림·공백·각주 번호뿐인 범위,
+    빈 범위 등) 빈 글이다. 끝 표시를 만나지 못한 범위는 그 파트의 끝까지 글이 모이므로 구절을 빈 글로 돌려주고 끝 표시가 없다고 알린다.
+    달린 문단을 찾지 못하면 문단은 None 이다."""
     spans, where, opened = {}, {}, []
 
     def add(text):
         for i in opened:
             spans[i].append(text)
 
-    def walk(node, para):
+    def walk(node, para, live):
         for child in node:
-            if child.tag in SKIP:
+            if child.tag in SKIP and child.tag != W + 'del':
                 continue
             if child.tag in (W + 'commentRangeStart', W + 'commentReference'):
                 i = child.get(W + 'id')
@@ -119,6 +122,8 @@ def memo_anchors(root):
             elif child.tag == W + 'commentRangeEnd':
                 if child.get(W + 'id') in opened:
                     opened.remove(child.get(W + 'id'))
+            elif child.tag == W + 'del' or not live:      # 지운 글: 글자는 모으지 않고 그 안의 범위 표시·메모 표시만 읽는다
+                walk(child, para, False)
             elif child.tag == W + 't':
                 add(child.text or '')
             elif child.tag == W + 'tab':
@@ -128,19 +133,20 @@ def memo_anchors(root):
             elif child.tag == W + 'p':
                 for i in opened:      # 범위가 문단 사이에서 시작한 메모는 범위에 든 첫 문단을 달린 문단으로 적는다
                     where.setdefault(i, child)
-                walk(child, child)
+                walk(child, child, True)
                 add('\n')
             else:
-                walk(child, para)
+                walk(child, para, True)
 
-    walk(root, None)
-    return {i: (''.join(spans[i]).strip() if i in spans else None, paragraphs([where[i]], lambda kind, n: '')[0].strip() if i in where else '')
+    walk(root, None, True)
+    return {i: ('' if i in opened else ''.join(spans[i]).strip() if i in spans else None,
+                paragraphs([where[i]], lambda kind, n: '')[0].strip() if i in where else None, i in opened)
             for i in set(spans) | set(where)}
 
 
 def memo_notes(path):
-    """Word 메모마다 작성자·날짜·글과 붙은 구절·범위가 있는지·달린 문단·자리(본문·각주·미주)를 메모 파일에 적힌 순서로 돌려준다.
-    메모가 없으면 빈 목록, 메모 파일을 읽지 못하면 None."""
+    """Word 메모마다 작성자·날짜·글과 붙은 구절·범위가 있는지·범위의 끝 표시가 없는지·달린 문단·달린 문단을 찾지 못하였는지·자리(본문·각주·미주)를
+    메모 파일에 적힌 순서로 돌려준다. 메모가 없으면 빈 목록, 메모 파일을 읽지 못하면 None."""
     with zipfile.ZipFile(path) as z:
         found = comments(z)
         if not found:
@@ -148,14 +154,15 @@ def memo_notes(path):
         anchors = {}
         for part, label in (('word/document.xml', '본문'), ('word/footnotes.xml', '각주'), ('word/endnotes.xml', '미주')):
             if part in z.namelist():
-                for i, (span, para) in memo_anchors(ET.fromstring(z.read(part))).items():
-                    anchors.setdefault(i, (span, para, label))
+                for i, (span, para, unclosed) in memo_anchors(ET.fromstring(z.read(part))).items():
+                    anchors.setdefault(i, (span, para, unclosed, label))
     out = []
     for c in found:
-        span, para, label = anchors.get(c.get(W + 'id'), (None, '', ''))
+        span, para, unclosed, label = anchors.get(c.get(W + 'id'), (None, None, False, ''))
         out.append({'작성자': c.get(W + 'author') or '', '날짜': c.get(W + 'date') or '',
                     '글': '\n'.join(t for t in paragraphs(c, lambda kind, i: '') if t.strip()),
-                    '붙은 구절': span or '', '범위': span is not None, '문단': para, '자리': label})
+                    '붙은 구절': span or '', '범위': span is not None, '끝 표시 없음': unclosed,
+                    '문단': para or '', '문단 없음': para is None, '자리': label})
     return out
 
 
@@ -173,10 +180,16 @@ def memo_text(name, found):
         if not m['자리']:
             out += ['붙은 구절:', '> (본문·각주·미주에서 이 메모의 자리를 찾지 못하였다. Word 에서 따로 확인한다)']
         else:
-            empty = ('범위는 있으나 그 안에 글로 뽑힌 것이 없다. 변경 추적으로 지운 글, 그림·공백, 각주·미주 번호만 든 범위이거나 빈 범위일 수 있다. '
-                     '무엇에 단 메모인지는 Word 에서 따로 확인한다') if m['범위'] else '범위 없이 메모 표시만 있다'
+            if m['끝 표시 없음']:
+                empty = '범위의 끝 표시(w:commentRangeEnd)를 찾지 못하여 구절을 적지 않았다. 무엇에 단 메모인지는 Word 에서 따로 확인한다'
+            elif m['범위']:
+                empty = ('범위는 있으나 그 안에 글로 뽑힌 것이 없다. 변경 추적으로 지운 글, 그림·공백, 각주·미주 번호만 든 범위이거나 빈 범위일 수 있다. '
+                         '무엇에 단 메모인지는 Word 에서 따로 확인한다')
+            else:
+                empty = '범위 없이 메모 표시만 있다'
             out += [f"붙은 구절({m['자리']}):"] + quote(m['붙은 구절'], empty)
-            out += ['', '메모가 달린 문단:'] + quote(m['문단'], '문단을 찾지 못하였다')
+            out += ['', '메모가 달린 문단:'] + quote(m['문단'], '문단을 찾지 못하였다' if m['문단 없음']
+                                              else '달린 문단에 글로 뽑힌 것이 없다. 지운 글이나 그림만 든 문단일 수 있다')
         out += ['', '메모의 글:'] + quote(m['글'], '글 없음')
     return '\n'.join(out) + '\n'
 
