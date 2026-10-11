@@ -14,6 +14,8 @@ export const meta = {
 //   대상: '…/작업/자체검토/검토대상.md',      검토 대상 글
 //   맡김: [{이름: '각주 3 대법원 96누5087', 지시: '맡은 것과 볼 것'}, …]   검증자 하나에 하나
 //   재검증: [앞 실행의 결과 serious 에서 미검증으로 남은 지적 객체 그대로, …]   반대 검증만 다시 돌린다(맡김 없이 넘겨도 된다. 하나여도 배열로 넘긴다)
+//   반대검증: false      등급 나(공통/자체검토.md 2·7절: 리서치 문서, 이메일 회신 초안, 판례를 나열한 답변)에만 준다. 맡김의 오류·오해소지 지적을
+//                        반대 검증 없이 그대로 돌려주고(serious 의 반대검증없음: true), 작성 세션이 원문의 그 대목을 직접 열어 확인한다. 주지 않으면 반대 검증을 한다
 // }
 // 돌려주는 것: {checked, serious(반대 검증의 표와 채택·미검증 여부), minor(경미·보완제안), counts}
 // counts.보고없음 이나 counts.미검증 이 0이 아니면 그 라운드는 끝난 것이 아니다. 빠진 맡김은 그 맡김만 넣어 다시 부르고,
@@ -24,6 +26,10 @@ if ((A.맡김 != null && !Array.isArray(A.맡김)) || (A.재검증 != null && !A
   throw new Error('맡김과 재검증은 배열로 넘긴다(하나여도 [ ] 로 싼다. 문자열이나 객체 하나로 넘기지 않는다)')
 const 맡김 = A.맡김 || []
 const 재검증 = A.재검증 || []
+// 'false' 같은 문자열을 참으로 읽으면 등급 나에 반대 검증자가 지적마다 셋씩 뜬다
+if (A.반대검증 != null && typeof A.반대검증 !== 'boolean')
+  throw new Error('반대검증은 true 나 false 로 넘긴다(문자열로 넘기지 않는다)')
+const 반대검증 = A.반대검증 !== false
 if (!A.지침 || !A.대상 || (!맡김.length && !재검증.length))
   throw new Error('args 에 지침·대상과 맡김(또는 재검증)이 있어야 한다(.claude/workflows/자체검토.js 머리의 설명)')
 if (맡김.some(m => !m || typeof m !== 'object' || !(m.이름 || m.지시)))
@@ -119,9 +125,14 @@ const results = await pipeline(
     const fs = (r.findings || []).map((f, i) => ({ ...f, id: 새id(it.key + '-' + (i + 1)), 검증자: it.이름 }))
     const serious = fs.filter(f => f.severity === '오류' || f.severity === '오해소지')
     const minor = fs.filter(f => f.severity === '경미' || f.severity === '보완제안')
-    const verified = await parallel(serious.map(f => () => judge(f)))
+    // 반대검증: false 이면 지적을 판정 없이 돌려준다. 채택도 기각도 미검증도 아니고, 작성 세션이 원문으로 확인할 지적이다
+    const verified = 반대검증
+      ? await parallel(serious.map(f => () => judge(f)))
+      : serious.map(f => ({ ...f, votes: [], upheldVotes: 0, voters: 0, upheld: false, 미검증: false, 반대검증없음: true }))
     const kept = verified.filter(Boolean)
-    log(`${it.이름}: 지적 ${fs.length}건(오류·오해소지 ${serious.length}건 가운데 채택 ${kept.filter(v => v.upheld).length}건)`)
+    log(반대검증
+      ? `${it.이름}: 지적 ${fs.length}건(오류·오해소지 ${serious.length}건 가운데 채택 ${kept.filter(v => v.upheld).length}건)`
+      : `${it.이름}: 지적 ${fs.length}건(오류·오해소지 ${serious.length}건 — 반대 검증 없이 돌려준다. 작성 세션이 원문으로 확인한다)`)
     return { key: it.key, 이름: it.이름, result: r, verified: kept, minor }
   }
 )
@@ -151,5 +162,6 @@ return {
     채택: serious.filter(v => v.upheld).length,
     미검증: pending.length,
     재검증: 재검증.length,
+    반대검증없음: serious.filter(v => v.반대검증없음).length,
   },
 }

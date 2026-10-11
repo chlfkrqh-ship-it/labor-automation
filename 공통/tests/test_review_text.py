@@ -372,6 +372,12 @@ class ReviewResultTests(unittest.TestCase):
         text = result.render(low, '제목')
         self.assertIn('- 반대 검증 2: 기각(지적은 맞다고 보았으나 정도가 낮아 기각표로 셈) / 경미 — 가볍다', text)
         self.assertIn('- 반대 검증 3: 기각 / 문제없음 — 틀렸다', text)
+        # 등급 나(반대검증: false)로 돌린 결과의 지적은 채택·기각·미검증으로 적지 않는다. 작성 세션이 원문으로 확인할 지적이다
+        bare = dict(data, serious=[dict(data['serious'][0], upheld=False, upheldVotes=0, voters=0, votes=[], 반대검증없음=True)])
+        text = result.render(bare, '제목')
+        self.assertIn('### v1-1 [오해소지 → 반대 검증 없음(작성 세션이 원문으로 확인)] 2항', text)
+        self.assertNotIn('기각', text.split('## 2.')[0])
+        self.assertNotIn('0/0', text)
 
     def test_main_does_not_overwrite_a_record(self):
         """이미 있는 라운드 기록은 덮어쓰지 않는다(끝에 적은 처리 기록이 사라진다). --force 를 붙여야 덮어쓴다."""

@@ -6,7 +6,8 @@
 결과 파일은 Workflow 도구가 알려 준 출력 파일(JSON)이다. 채택된 지적, 기각된 지적과 반대 검증의 판정 이유,
 경미·보완제안, 검증자마다 읽은 범위를 그대로 옮긴다. 반영 여부는 이 파일 끝에 작성 세션이 따로 적는다.
 화면에는 건수, 보고가 비어 있는 검증자, 채택된 지적과 미검증 지적을 찍는다. 이미 있는 기록은 덮어쓰지 않는다(빠진 맡김·반대 검증만 다시 돌린
-결과는 결과_N차_보충.md 로 따로 옮긴다).
+결과는 결과_N차_보충.md 로 따로 옮긴다). 워크플로를 반대검증: false 로 부른 결과(등급 나)의 오류·오해소지 지적은 채택·기각으로 적지 않고
+'반대 검증 없음'으로 적으며, 화면에 '확인할 지적'으로 찍는다.
 """
 import argparse
 import json
@@ -26,8 +27,13 @@ def render(d, title):
     lines = ['# ' + title, '', '워크플로가 돌려준 것을 그대로 정리한 것이다. 반영 여부와 이유는 맨 끝 `처리` 에 적는다.', '',
              '건수: ' + json.dumps(d.get('counts', {}), ensure_ascii=False), '', '## 1. 오류·오해소지 지적과 반대 검증']
     for f in d.get('serious', []):
-        state = '채택' if f.get('upheld') else '미검증' if f.get('미검증') else '기각'
-        lines += [f"### {f.get('id')} [{f.get('severity')} → {state} {f.get('upheldVotes')}/{f.get('voters')}] {f.get('where')}",
+        if f.get('반대검증없음'):
+            # 등급 나(공통/자체검토.md 2·7절): 반대 검증 없이 돌아온 지적이다. 채택도 기각도 아니고, 작성 세션이 원문으로 확인해 `처리` 에 적는다
+            head = f"### {f.get('id')} [{f.get('severity')} → 반대 검증 없음(작성 세션이 원문으로 확인)] {f.get('where')}"
+        else:
+            state = '채택' if f.get('upheld') else '미검증' if f.get('미검증') else '기각'
+            head = f"### {f.get('id')} [{f.get('severity')} → {state} {f.get('upheldVotes')}/{f.get('voters')}] {f.get('where')}"
+        lines += [head,
                   f"- 검증자: {f.get('검증자', '')}", f"- 산출물 문장: {f.get('text', '')}", f"- 지적이 든 원자료: {f.get('source_quote', '')}",
                   f"- 문제: {f.get('problem', '')}", f"- 제안한 수정: {f.get('fix', '')}"]
         for k, v in enumerate(f.get('votes') or [], 1):
@@ -77,6 +83,8 @@ def main():
             print(f"채택 {f.get('id')} [{f.get('severity')} {f.get('upheldVotes')}/{f.get('voters')}] {f.get('where')}")
         elif f.get('미검증'):
             print(f"미검증(반대 검증을 다시 돌린다) {f.get('id')} [{f.get('severity')} 보고 {f.get('voters')}건] {f.get('where')}")
+        elif f.get('반대검증없음'):
+            print(f"확인할 지적(반대 검증 없음. 원문의 그 대목을 열어 확인한다) {f.get('id')} [{f.get('severity')}] {f.get('where')}")
 
 
 if __name__ == '__main__':
