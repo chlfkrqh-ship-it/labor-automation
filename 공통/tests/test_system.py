@@ -189,7 +189,7 @@ class SystemTests(unittest.TestCase):
         for n in ('검토의견', '판례검색', '서면보강', '서면', '증거정리',
                   '증거발췌', '문체검증', '녹취', '손배계산', '손배검산', '자체검토'):
             self.put('.claude/commands/' + n + '.md', '---\ndescription: 절차\n---\n절차')
-        self.assertIn('공통/자체검토.md', self.system.check()['missing'])      # 자체 검토 지침이 빠지면 알린다
+        self.assertIn('공통/자체검토.md', self.system.check()['missing'])      # 인용 대조 지침(공통/자체검토.md)이 빠지면 알린다
         for f in ('공통/운영.md', '공통/사건상태.md', '공통/브라우저.md', '공통/자체검토.md'):
             self.put(f, '지침')
         self.assertTrue(self.system.check()['ok'])
@@ -207,7 +207,7 @@ class SystemTests(unittest.TestCase):
             self.put(rel, '다' * 10)
         result = self.system.budget(only='판례검색', record=True)
         self.assertEqual(result['missing'], [])
-        self.assertEqual(result['commands']['판례검색'], 80)   # 지침 8개 × 10자(자체 검토 지침 포함)
+        self.assertEqual(result['commands']['판례검색'], 80)   # 지침 8개 × 10자(인용 대조 지침 공통/자체검토.md 포함)
         self.assertTrue(result['ok'])
         # 지침이 아무리 커져도 실패로 만들지 않는다. 증감만 보고한다.
         self.put('2_판례검색/CLAUDE.md', '마' * 500000)
@@ -220,6 +220,12 @@ class SystemTests(unittest.TestCase):
         """문체검증은 소송 서면 기준으로 채점한다. 검토의견서용 문체가이드는 '생각건대'를 권하는 등 반대다."""
         self.assertNotIn('1_검토의견/문체가이드-서면.md', module.GUIDE_SETS['문체검증'])
         self.assertIn(module.STYLE + 'references/문체-용례.md', module.GUIDE_SETS['문체검증'])
+
+    def test_cite_guide_is_read_only_by_citing_commands(self):
+        """인용 대조 지침은 판례·결정례·행정해석을 인용하는 산출물의 명령어만 읽는다(공통/자체검토.md 2절)."""
+        citing = {'검토의견', '판례검색', '서면보강', '서면', '서면(반박 구성)', '서면(노동위 기록)', '자체검토'}
+        for name, paths in module.GUIDE_SETS.items():
+            self.assertEqual('공통/자체검토.md' in paths, name in citing, name)
 
     def test_budget_finds_duplicated_and_orphan_guides(self):
         line = '같은 규칙을 두 곳에 나누어 적으면 한쪽만 고치게 되므로 중복된 문장을 찾아 알린다.'

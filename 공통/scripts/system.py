@@ -26,7 +26,8 @@ NS = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
 MC_FALLBACK = '{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback'
 
 # 명령어별로 읽는 지침 파일. 글자 수만 집계하며 토큰 수로 환산하지 않는다.
-COMMON = ['CLAUDE.md', '공통/운영.md', '공통/자체검토.md']      # 자체 검토는 모든 명령어가 산출물을 넘기기 전에 읽는다
+COMMON = ['CLAUDE.md', '공통/운영.md']
+CITE = ['공통/자체검토.md']      # 판례·결정례·행정해석을 인용하는 산출물을 넘기기 전에 읽는다(인용 대조표와 스크립트 검사)
 LBOX = ['.claude/skills/lbox-검색/SKILL.md', '.claude/skills/lbox-하이라이트/SKILL.md', '.claude/skills/법제처-검색/SKILL.md']
 STYLE = '4_서면작성/skills/노동서면작성/'
 REFERENCES = [STYLE + 'references/' + n for n in
@@ -35,15 +36,15 @@ REFERENCES = [STYLE + 'references/' + n for n in
 # 초안 작성은 SKILL.md와 references 전부를 읽는다. 좁은 작업만 해당 조각을 읽는다.
 BRIEF = ['4_서면작성/CLAUDE.md', STYLE + 'SKILL.md'] + REFERENCES
 GUIDE_SETS = {
-    '검토의견': COMMON + ['1_검토의견/CLAUDE.md', '.claude/commands/검토의견.md', '공통/사건상태.md'] + LBOX,
-    '판례검색': COMMON + ['2_판례검색/CLAUDE.md', '.claude/commands/판례검색.md'] + LBOX,
-    '서면보강': COMMON + ['3_서면보강/CLAUDE.md', '.claude/commands/서면보강.md'] + LBOX,
+    '검토의견': COMMON + CITE + ['1_검토의견/CLAUDE.md', '.claude/commands/검토의견.md', '공통/사건상태.md'] + LBOX,
+    '판례검색': COMMON + CITE + ['2_판례검색/CLAUDE.md', '.claude/commands/판례검색.md'] + LBOX,
+    '서면보강': COMMON + CITE + ['3_서면보강/CLAUDE.md', '.claude/commands/서면보강.md'] + LBOX,
     # 서면 하나가 입구다. 반박 구성과 노동위 기록 추출은 자료에 따라 켜는 갈래이며
     # 해당할 때만 읽으므로 아래 분량에 더해질 수 있다.
-    '서면': COMMON + BRIEF + ['.claude/commands/서면.md', '공통/사건상태.md', '공통/문서변환.md'] + LBOX,
-    '서면(반박 구성)': COMMON + BRIEF + ['.claude/commands/서면.md', '공통/사건상태.md',
+    '서면': COMMON + CITE + BRIEF + ['.claude/commands/서면.md', '공통/사건상태.md', '공통/문서변환.md'] + LBOX,
+    '서면(반박 구성)': COMMON + CITE + BRIEF + ['.claude/commands/서면.md', '공통/사건상태.md',
                                    '공통/문서변환.md', '4_서면작성/절차/반박-구성.md'] + LBOX,
-    '서면(노동위 기록)': COMMON + BRIEF + ['.claude/commands/서면.md', '공통/사건상태.md',
+    '서면(노동위 기록)': COMMON + CITE + BRIEF + ['.claude/commands/서면.md', '공통/사건상태.md',
                                     '공통/문서변환.md', '4_서면작성/절차/노동위기록-추출.md'] + LBOX,
     '증거정리': COMMON + ['4_서면작성/CLAUDE.md', '.claude/commands/증거정리.md', '공통/사건상태.md'],
     '증거발췌': COMMON + ['4_서면작성/CLAUDE.md', STYLE + 'references/증거-인용.md', '.claude/commands/증거발췌.md'],
@@ -52,7 +53,7 @@ GUIDE_SETS = {
     '녹취': COMMON + ['5_녹취록/CLAUDE.md', '5_녹취록/녹취서-작성-가이드.md', '.claude/commands/녹취.md'],
     '손배계산': COMMON + ['6_손해배상계산/CLAUDE.md', '.claude/commands/손배계산.md', '6_손해배상계산/노동금액-계산기준.md'],
     '손배검산': COMMON + ['6_손해배상계산/CLAUDE.md', '.claude/commands/손배검산.md', '6_손해배상계산/노동금액-계산기준.md'],
-    '자체검토': COMMON + ['.claude/commands/자체검토.md'],
+    '자체검토': COMMON + CITE + ['.claude/commands/자체검토.md'],
 }
 # 사건번호와 호증번호의 단일 원본. 4_서면작성/scripts/citation_check.py·style_check.py 와
 # 공통/scripts/lawgo.py 가 가져다 쓴다. 두 벌로 갈리면 한쪽만 고치게 된다.

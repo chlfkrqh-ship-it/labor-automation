@@ -167,7 +167,7 @@ class ReviewTextTests(unittest.TestCase):
                 module.main()
             return screen.getvalue()
 
-        out, memos = Path(self.tmp.name) / '자체검토' / '검토대상.md', Path(self.tmp.name) / '자체검토' / 'Word메모.md'
+        out, memos = Path(self.tmp.name) / '작업' / '검토대상.md', Path(self.tmp.name) / '작업' / 'Word메모.md'
         self.assertIn('--memos', call(path, '--out', out))      # 메모가 있는데 --memos 를 주지 않으면 따로 뽑으라고 알린다
         self.assertFalse(memos.exists())
         self.assertIn('Word 메모 8건 ->', call(path, '--out', out, '--memos', memos))
@@ -198,8 +198,8 @@ class ReviewTextTests(unittest.TestCase):
 
         plain = self.make('<w:p>' + run('메모 없는 문서.') + '</w:p>', '')      # 메모가 없으면 파일을 만들지 않는다
         self.assertEqual(module.memo_notes(plain), [])
-        none = Path(self.tmp.name) / '자체검토' / '없음.md'
-        self.assertIn('메모가 없다', call(plain, '--out', Path(self.tmp.name) / '자체검토' / '검토대상2.md', '--memos', none))
+        none = Path(self.tmp.name) / '작업' / '없음.md'
+        self.assertIn('메모가 없다', call(plain, '--out', Path(self.tmp.name) / '작업' / '검토대상2.md', '--memos', none))
         self.assertFalse(none.exists())
         shown, said = io.StringIO(), io.StringIO()      # --out 없이 --memos 만 준 때에는 메모가 없어 쓰지 않았다는 알림도 글에 섞이지 않는다
         with mock.patch.object(sys, 'argv', ['review_text.py', str(plain), '--memos', str(none)]), contextlib.redirect_stdout(shown), contextlib.redirect_stderr(said):
@@ -324,91 +324,6 @@ class ReviewTextTests(unittest.TestCase):
         self.assertNotIn('다섯째', written)      # 옮기기 전 글의 글자는 메모 파일에도 나오지 않는다
         self.assertNotIn('여섯째', written)
         self.assertNotIn('옮기기 전 낱말', written)
-
-
-class ReviewResultTests(unittest.TestCase):
-    """워크플로 결과를 라운드 기록으로 옮기는 스크립트. 결과가 래퍼({result: …})에 싸여 와도 읽는다."""
-
-    def test_render_keeps_votes_and_empty_reports(self):
-        path = Path(__file__).parents[1] / 'scripts' / 'review_result.py'
-        spec2 = importlib.util.spec_from_file_location('review_result', path)
-        result = importlib.util.module_from_spec(spec2)
-        spec2.loader.exec_module(result)
-        data = {'checked': [{'이름': '각주 1', 'checked': [{'target': '사건 표시', 'verdict': '정확', 'basis': '머리와 같다'}], 'coverage': '끝까지'},
-                            {'이름': '각주 2', 'checked': None, 'coverage': '보고 없음'}],
-                'serious': [{'id': 'v1-1', 'severity': '오해소지', 'where': '2항', 'text': '문장', 'problem': '문제', 'fix': '수정', 'upheld': True,
-                             'upheldVotes': 2, 'voters': 3, 'votes': [{'upheld': True, 'severity': '오해소지', 'reason': '맞다'}]}],
-                'minor': [{'id': 'v1-2', 'severity': '경미', 'where': '3항', 'text': '문장', 'problem': '표현', 'fix': '다듬기'}],
-                'counts': {'검증자': 2, '채택': 1}}
-        with tempfile.TemporaryDirectory() as tmp:
-            wrapped = Path(tmp) / '결과.json'
-            wrapped.write_text(__import__('json').dumps({'summary': '…', 'result': data}, ensure_ascii=False), encoding='utf-8')
-            self.assertEqual(result.load(wrapped), data)
-        text = result.render(data, '제목')
-        self.assertIn('### v1-1 [오해소지 → 채택 2/3] 2항', text)
-        self.assertIn('- 반대 검증 1: 유지 / 오해소지 — 맞다', text)
-        self.assertIn('### v1-2 [경미] 3항', text)
-        self.assertIn('- [정확] 사건 표시 — 머리와 같다', text)
-        self.assertIn('- 읽은 범위: 보고 없음', text)
-        pending = dict(data, serious=[dict(data['serious'][0], upheld=False, 미검증=True, upheldVotes=1, voters=1)])
-        self.assertIn('### v1-1 [오해소지 → 미검증 1/1] 2항', result.render(pending, '제목'))
-        with tempfile.TemporaryDirectory() as tmp:
-            bad = Path(tmp) / '결과.json'
-            bad.write_text('{"result": null}', encoding='utf-8-sig')      # BOM 이 붙은 파일, 결과가 객체가 아닌 경우
-            with self.assertRaises(SystemExit):
-                result.load(bad)
-            for other in ('{}', '{"result": {}}', '{"status": "completed", "output": {"checked": []}}'):      # 워크플로 결과가 아닌 객체
-                bad.write_text(other, encoding='utf-8')
-                with self.assertRaises(SystemExit):
-                    result.load(bad)
-            for key in ('checked', 'serious', 'minor', 'counts'):      # 네 키 가운데 하나만 빠져도 받지 않는다
-                bad.write_text(__import__('json').dumps({k: v for k, v in data.items() if k != key}, ensure_ascii=False), encoding='utf-8')
-                with self.assertRaises(SystemExit):
-                    result.load(bad)
-        # 지적은 맞다고 보았으나 정도를 낮게 본 표는 워크플로가 기각표로 센다. 기록도 그렇게 적는다
-        low = dict(data, serious=[dict(data['serious'][0], upheld=False, upheldVotes=1, votes=[
-            {'upheld': True, 'severity': '오해소지', 'reason': '맞다'}, {'upheld': True, 'severity': '경미', 'reason': '가볍다'},
-            {'upheld': False, 'severity': '문제없음', 'reason': '틀렸다'}])])
-        text = result.render(low, '제목')
-        self.assertIn('- 반대 검증 2: 기각(지적은 맞다고 보았으나 정도가 낮아 기각표로 셈) / 경미 — 가볍다', text)
-        self.assertIn('- 반대 검증 3: 기각 / 문제없음 — 틀렸다', text)
-        # 등급 나(반대검증: false)로 돌린 결과의 지적은 채택·기각·미검증으로 적지 않는다. 작성 세션이 원문으로 확인할 지적이다
-        bare = dict(data, serious=[dict(data['serious'][0], upheld=False, upheldVotes=0, voters=0, votes=[], 반대검증없음=True)])
-        text = result.render(bare, '제목')
-        self.assertIn('### v1-1 [오해소지 → 반대 검증 없음(작성 세션이 원문으로 확인)] 2항', text)
-        self.assertNotIn('기각', text.split('## 2.')[0])
-        self.assertNotIn('0/0', text)
-
-    def test_main_does_not_overwrite_a_record(self):
-        """이미 있는 라운드 기록은 덮어쓰지 않는다(끝에 적은 처리 기록이 사라진다). --force 를 붙여야 덮어쓴다."""
-        import contextlib, io, json, sys
-        from unittest import mock
-        path = Path(__file__).parents[1] / 'scripts' / 'review_result.py'
-        spec2 = importlib.util.spec_from_file_location('review_result', path)
-        result = importlib.util.module_from_spec(spec2)
-        spec2.loader.exec_module(result)
-        with tempfile.TemporaryDirectory() as tmp:
-            src, out = Path(tmp) / '결과.json', Path(tmp) / '결과_1차.md'
-            pending = {'id': 'v2-1', 'severity': '오류', 'where': '3항', 'upheld': False, '미검증': True, 'upheldVotes': 1, 'voters': 1}
-            src.write_text(json.dumps({'checked': [{'이름': '각주 2', 'checked': None, 'coverage': '보고 없음'}], 'serious': [pending],
-                                       'minor': [], 'counts': {'채택': 0, '미검증': 1}}, ensure_ascii=False), encoding='utf-8')
-
-            def call(*extra):
-                argv = ['review_result.py', str(src), '--out', str(out), *extra]
-                screen = io.StringIO()
-                with mock.patch.object(sys, 'argv', argv), contextlib.redirect_stdout(screen), contextlib.redirect_stderr(io.StringIO()):
-                    result.main()
-                return screen.getvalue()
-
-            shown = call()      # 라운드가 끝나지 않았다는 두 줄을 화면에 알린다
-            self.assertIn('보고가 비어 있는 검증자(다시 맡긴다): 각주 2', shown)
-            self.assertIn('미검증(반대 검증을 다시 돌린다) v2-1', shown)
-            out.write_text(out.read_text(encoding='utf-8') + '처리: 반영함', encoding='utf-8')
-            with self.assertRaises(SystemExit):
-                call()
-            self.assertIn('처리: 반영함', out.read_text(encoding='utf-8'))
-            call('--force')
-            self.assertNotIn('처리: 반영함', out.read_text(encoding='utf-8'))
 
 
 if __name__ == '__main__':

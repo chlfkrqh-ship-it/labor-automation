@@ -475,7 +475,7 @@ def test_추출은_이전_계산표를_자료로_읽지_않는다(tmp_path):
     wb.save(folder / "을2_별지계산표.xlsx")                              # 상대방 계산표는 자료다
     (folder / "급여명세서.txt").write_text("기본급 3,000,000원", encoding="utf-8")
     (folder / "계산" / "확인표.md").write_text("확인 표 월급 8,888,888원", encoding="utf-8")   # 이름에 표시가 없어도 계산 폴더 아래는 읽지 않는다
-    (folder / "자체검토" / "원문").mkdir(parents=True)                    # 자체 검토 자료(공통/자체검토.md 2절)
+    (folder / "자체검토" / "원문").mkdir(parents=True)                    # 옛 자체 검토 폴더(2026. 10. 12. 폐기. 기존 사건 폴더에 남아 있어 계속 거른다)
     (folder / "자체검토" / "사람확인.md").write_text("확인 답변 월급 9,999,999원", encoding="utf-8")
     (folder / "자체검토" / "원문" / "판결.txt").write_text("판결 원문 전체", encoding="utf-8")
     (folder / "작업" / "추출캐시").mkdir(parents=True)                    # 사건상태 기록과 추출 캐시(공통/사건상태.md)

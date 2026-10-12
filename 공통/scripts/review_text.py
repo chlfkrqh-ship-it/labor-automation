@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""자체 검토에 넘길 검토 대상 글을 DOCX 에서 뽑는다(공통/자체검토.md 3절).
+"""DOCX 의 본문과 각주를 글자로 뽑는다. 담당자 저장본과 고친 판을 맞대거나 /자체검토 의 검증자에게 줄 글을 만들 때 쓴다(공통/자체검토.md 6·8절).
 
 본문과 각주를 뽑되 각주가 붙은 자리를 본문에 {{n}} 으로 남긴다. n 은 본문에 나오는 순서이고 Word 가 매기는
 각주 번호와 같다. system.py extract 는 본문과 각주를 따로 이어 붙여 어느 문장의 각주인지 보이지 않는다.
 
-    python -B 공통/scripts/review_text.py "1_검토의견/사건/…/(…) … 관련 검토.docx" --out "1_검토의견/사건/…/작업/자체검토/검토대상.md"
+    python -B 공통/scripts/review_text.py "1_검토의견/사건/…/(…) … 관련 검토.docx" --out "1_검토의견/사건/…/작업/검토대상.md"
 
 면수·서식·그림은 나오지 않는다. 렌더 확인은 따로 한다. Word 메모(word/comments.xml)의 글도 뽑지 않고, 메모가 있으면 건수만 경고한다.
 메모가 있으면 --memos 로 메모의 글과 그 메모가 붙은 본문 구절(w:commentRangeStart 와 w:commentRangeEnd 사이의 글), 메모가 달린 문단을
 다른 파일에 따로 뽑는다. 메모의 글만으로는 '이 문장은 빼 주세요'가 어느 문장인지 알 수 없다. 답글도 메모 한 건으로 적고, 해결 표시는 가리지 않는다.
 
-    python -B 공통/scripts/review_text.py "…/검토의견서.docx" --out "…/작업/자체검토/검토대상.md" --memos "…/작업/자체검토/Word메모.md"
+    python -B 공통/scripts/review_text.py "…/검토의견서.docx" --out "…/작업/검토대상.md" --memos "…/작업/Word메모.md"
 """
 import argparse
 import sys
@@ -175,7 +175,7 @@ def memo_notes(path):
 
 
 def memo_text(name, found):
-    """memo_notes 의 결과를 자체 검토 폴더에 둘 글로 적는다. 메모의 글과 붙은 구절은 받은 글 그대로 옮긴다."""
+    """memo_notes 의 결과를 메모 파일에 둘 글로 적는다. 메모의 글과 붙은 구절은 받은 글 그대로 옮긴다."""
     def quote(text, empty):
         return ['> ' + line for line in text.split('\n')] if text.strip() else ['> (' + empty + ')']
 
@@ -267,7 +267,7 @@ def main():
     parser.add_argument('--memos', help='Word 메모의 글과 메모가 붙은 본문 구절을 따로 쓸 파일. 메모가 없으면 쓰지 않는다')
     a = parser.parse_args()
     if Path(a.docx).suffix.lower() != '.docx':
-        parser.error('DOCX 만 받는다. MD 는 보완 메모 앞까지를 검토대상.md 로 옮긴다(공통/자체검토.md 3절)')
+        parser.error('DOCX 만 받는다. MD 는 뽑을 것 없이 그대로 읽는다')
     if a.memos and a.out and Path(a.memos).resolve() == Path(a.out).resolve():
         parser.error('--memos 는 --out 과 다른 파일로 준다(같은 파일이면 검토 대상 글이 덮어써진다)')
     text, summary = review_text(a.docx)
