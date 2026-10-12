@@ -11,6 +11,8 @@
   4) 산출물에 나오는 사건번호 가운데 대조표에 줄이 없는 것
 원문이 LBOX 보관함·화면에만 있어 파일이 없는 줄은 '원문' 칸에 '보관함 일치'나 '화면 확인'이라고 적혀 있으면 그렇게 세고,
 없으면 원문 미확인으로 알린다. 불일치가 하나라도 있으면 종료 코드 1, 원문 미확인만 있으면 0 이다(보고에 따로 적는다).
+번호 칸에 '참고(이 사건)'·'참고(대상 서면)'이라고 적고 원문 문장과 원문 칸을 비운 줄은 사건을 가리키기만 하는 줄이다(표지의 사건번호,
+대상 서면이 이미 인용한 판례). 4)에 걸리지 않게 두는 줄이고 인용이 아니므로 원문과 맞대지 않고, 원문 미확인이 아니라 '사건 표시만'으로 따로 센다.
 """
 import argparse
 import html
@@ -26,6 +28,7 @@ NOT_CODE = {"년", "월", "일", "면", "항", "조", "호", "건", "개", "명"
 NOT_FIRST = "조항년월일면쪽"      # '제60조제5항'·'10월31일'처럼 붙여 쓴 조문·날짜를 사건번호로 읽지 않는다(이 글자로 시작하는 사건부호는 없다)
 DATE = re.compile(r"((?:19|20)\d{2})\s*[.\-년]\s*(\d{1,2})\s*[.\-월]\s*(\d{1,2})")
 QUOTES = str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"', "「": "", "」": "", "『": "", "』": "", "​": "", "﻿": ""})
+POINTER = ("이 사건", "대상 서면")      # 번호 칸에 '참고'와 함께 이 말이 든 줄은 사건을 가리키기만 한다(공통/자체검토.md 3절)
 
 
 def norm(s):
@@ -105,14 +108,16 @@ def source_text(cell, table_path, key):
 
 def check(table_path, targets):
     rows = table_rows(table_path)
-    bad, unseen, lines = 0, 0, []
+    bad, unseen, only, lines = 0, 0, 0, []
     tgt = [(p, read_target(p)) for p in targets]
     for r in rows:
         mark = r.get("사건 표시", "")
         nums = sorted(cases(mark))
         key = norm(nums[0]) if nums else norm(mark.split(",")[0])
         day = dates(mark)
-        name = (r.get("번호", "") + " " + mark).strip()
+        no = r.get("번호", "")
+        pointer = "참고" in no and any(w in no for w in POINTER)      # 사건을 가리키기만 하는 줄(표지의 사건번호, 대상 서면이 이미 인용한 판례)
+        name = (no + " " + mark).strip()
         notes = []
         # 1)·2) 원문 파일
         cell = r.get("원문", "")
@@ -121,6 +126,9 @@ def check(table_path, targets):
         if src is None:
             if "보관함 일치" in cell or "화면 확인" in cell:
                 notes.append("원문: " + ("보관함 확인" if "보관함 일치" in cell else "화면 확인"))
+            elif pointer and not parts:      # 원문 문장을 적지 않은 가리킴 줄은 인용이 아니다. 원문 미확인으로 세지 않는다
+                only += 1
+                notes.append("사건 표시만(인용이 아니어서 대조하지 않음)")
             else:
                 unseen += 1
                 notes.append("원문 미확인(파일도 보관함 표시도 없음)")
@@ -155,7 +163,7 @@ def check(table_path, targets):
     for p, t in tgt:
         for c in sorted(cases(t) - known):
             bad += 1; lines.append("불일치: 산출물의 %s 가 대조표에 없다(%s)" % (c, os.path.basename(p)))
-    return {"줄": len(rows), "불일치": bad, "원문미확인": unseen, "내용": lines}
+    return {"줄": len(rows), "불일치": bad, "원문미확인": unseen, "사건표시만": only, "내용": lines}
 
 
 def main():
@@ -170,7 +178,8 @@ def main():
         print("읽지 못함(다른 프로그램에서 열려 있다):", e.filename)
         sys.exit(2)
     print("\n".join(res["내용"]))
-    print("대조표 %d줄 · 불일치 %d건 · 원문 미확인 %d줄" % (res["줄"], res["불일치"], res["원문미확인"]))
+    print("대조표 %d줄 · 불일치 %d건 · 원문 미확인 %d줄" % (res["줄"], res["불일치"], res["원문미확인"])
+          + (" · 사건 표시만 %d줄" % res["사건표시만"] if res["사건표시만"] else ""))
     sys.exit(1 if res["불일치"] or not res["줄"] else 0)
 
 
