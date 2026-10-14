@@ -50,6 +50,8 @@ GUIDE_SETS = {
     '증거발췌': COMMON + ['4_서면작성/CLAUDE.md', STYLE + 'references/증거-인용.md', '.claude/commands/증거발췌.md'],
     # 1_검토의견/문체가이드-서면.md 는 검토의견서용이라 소송 서면 채점 기준과 맞지 않는다('생각건대' 권장 등).
     '문체검증': COMMON + [STYLE + 'SKILL.md', STYLE + 'references/문체-용례.md', '.claude/commands/문체검증.md'],
+    # 한글 양식에 값을 채우는 작업이다. 서면 문체 지침과 사건상태를 읽지 않고 통지서와 이미 낸 대리인 서류만 본다.
+    '노동위서류': COMMON + ['4_서면작성/CLAUDE.md', '.claude/commands/노동위서류.md'],
     '녹취': COMMON + ['5_녹취록/CLAUDE.md', '5_녹취록/녹취서-작성-가이드.md', '.claude/commands/녹취.md'],
     '손배계산': COMMON + ['6_손해배상계산/CLAUDE.md', '.claude/commands/손배계산.md', '6_손해배상계산/노동금액-계산기준.md'],
     '손배검산': COMMON + ['6_손해배상계산/CLAUDE.md', '.claude/commands/손배검산.md', '6_손해배상계산/노동금액-계산기준.md'],
@@ -244,8 +246,8 @@ class System:
         missing = [f for f in ('CLAUDE.md', '공통/운영.md', '공통/사건상태.md', '공통/브라우저.md', '공통/자체검토.md')
                    if not self.path(f).is_file()]
         commands = {p.stem for p in self.path('.claude/commands').glob('*.md')}
-        required = {'검토의견', '판례검색', '서면보강', '서면',
-                    '증거정리', '증거발췌', '문체검증', '녹취', '손배계산', '손배검산', '자체검토'}
+        required = {'검토의견', '판례검색', '서면보강', '서면', '증거정리', '증거발췌', '문체검증',
+                    '노동위서류', '녹취', '손배계산', '손배검산', '자체검토'}
         missing.extend('.claude/commands/' + n + '.md' for n in sorted(required - commands))
         skill_errors = []
         for p in self.path('.claude/skills').glob('*/SKILL.md'):

@@ -189,6 +189,8 @@ class SystemTests(unittest.TestCase):
         for n in ('검토의견', '판례검색', '서면보강', '서면', '증거정리',
                   '증거발췌', '문체검증', '녹취', '손배계산', '손배검산', '자체검토'):
             self.put('.claude/commands/' + n + '.md', '---\ndescription: 절차\n---\n절차')
+        self.assertIn('.claude/commands/노동위서류.md', self.system.check()['missing'])   # 뒤에 더한 명령어도 필수 목록에 든다
+        self.put('.claude/commands/노동위서류.md', '---\ndescription: 절차\n---\n절차')
         self.assertIn('공통/자체검토.md', self.system.check()['missing'])      # 인용 대조 지침(공통/자체검토.md)이 빠지면 알린다
         for f in ('공통/운영.md', '공통/사건상태.md', '공통/브라우저.md', '공통/자체검토.md'):
             self.put(f, '지침')
