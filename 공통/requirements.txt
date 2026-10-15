@@ -1,0 +1,7 @@
+# 공통/scripts 실행에 필요한 것. 시스템 파이썬에 그대로 깐다(가상환경 없음).
+#
+# msal            : mail_attach 가 메일 첨부를 받기 전에 Microsoft 계정으로 로그인한다(마이크로소프트 인증 라이브러리)
+# msal-extensions : 그 로그인 정보를 이 PC에 Windows 사용자 계정으로 암호화해 둔다
+
+msal>=1.28
+msal-extensions>=1.2
