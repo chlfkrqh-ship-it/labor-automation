@@ -205,6 +205,30 @@ class StyleRuleTests(unittest.TestCase):
         result = self.check('원고는 입사하였습니다(갑 제2호증).', '[갑 제2호증 근로계약서]', '원고는 성실히 근무하였습니다.')
         self.assertEqual(self.found(result, rule, 'notes'), [])
 
+    def test_write_verb_is_noted(self):
+        """자료에 쓰여 있다는 뜻의 '적다'는 '기재하다'로 쓴다(2026. 10. 16. OES 답변서(1) 담당 노무사).
+        참고 항목이고, '적용·적극·실적·목적·적어도·적시' 같은 다른 낱말은 잡지 않는다."""
+        rule = "'적다' → '기재'"
+        for text in ("채용공고에 '최대 10년까지 재계약 가능'이라고 적혀 있던 사안입니다.",
+                     "입사 추천서에 관계를 '전 직장 선배'로 적었을 뿐입니다(사 제2호증의4).",
+                     "인사발령 문서에 갱신 거절의 사유가 적혀 있지 않습니다.",
+                     "'계약기간 만료'라고만 적은 문서로 통보한 사안입니다.",
+                     '계약 종료를 문서에 따로 적지 않았습니다.',
+                     '다른 직원의 성명은 비실명으로 적고 생년월일은 적지 않았습니다.'):
+            with self.subTest(text=text):
+                result = self.check(text)
+                self.assertTrue(self.found(result, rule, 'notes'))
+                self.assertEqual(result['violations'], [])
+        for text in ('근로기준법 제27조가 적용되지 않습니다.',
+                     '신청인은 적극적으로 협조하지 않았습니다.',
+                     '업무 실적과 사업의 목적에 비추어 판단하였습니다.',
+                     '적어도 3년 이상 근무하였습니다.',
+                     '최종적인 의사결정이 적시에 이루어지지 못하였습니다.',
+                     '적법한 절차를 거쳤습니다.',
+                     '연장 여부는 계약직 심의 결과에 기재된 바와 같습니다(사 제13호증).'):
+            with self.subTest(text=text):
+                self.assertEqual(self.found(self.check(text), rule, 'notes'), [])
+
     def test_appendix_below_rule_is_not_checked(self):
         result = self.check('원고는 입사하였습니다.', '---', '① [확인 필요 사항]', '[반박 보완 필요] 둘째, 근태기록')
         self.assertEqual(result['violations'], [])
