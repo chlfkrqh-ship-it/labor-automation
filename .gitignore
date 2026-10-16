@@ -175,6 +175,12 @@ Thumbs.db
 .claude/first-run
 .claude/assistant-daemon-state.json
 
+# ── 다른 AI 도구의 흔적 ── 이 시스템은 Claude Code 만 쓴다. ChatGPT·Codex 가 이 폴더를 열면 만드는 안내·설정 파일이
+# git 에 섞여 올라가지 않게 막는다. 폴더에는 남으므로 보이면 지운다(2026. 10. 16. 담당 노무사: "codex 관련 … 시스템과 상관없으니 지워도").
+AGENTS.md
+.codex/
+.agents/
+
 # 공통 도구의 파생 자료(캐시). 공통/백업/·비교/ 는 지운 동기화·결과비교 기능이 만들던 묶음으로,
 # 두 PC에 옛 묶음이 남아 있을 수 있어 규칙은 둔다
 공통/캐시/
