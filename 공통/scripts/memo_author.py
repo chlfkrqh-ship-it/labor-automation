@@ -1,11 +1,11 @@
 """의뢰인 문서에 남긴 메모·변경 내용 추적의 작성자를 '법무법인 평안'으로 맞춘다.
 
-Word·한글로 메모를 달거나 고치면 프로그램이 그 PC의 사용자 이름(담당자 개인 이름)을 작성자로 넣는다. 의뢰인에게
-가는 검토본에는 개인 이름이 아니라 법인 이름이 보여야 하므로(2026. 10. 16. 담당 노무사 지시), 넘기기 전에 이
-스크립트로 이번에 새로 생긴 메모·변경의 작성자를 바꾼다. 의뢰인이 원래 남긴 메모·변경은 원본과 맞대어 가려내고
-그대로 둔다. 절차는 1_검토의견/CLAUDE.md 3-5.
+Word·한글로 메모를 달거나 고치면 프로그램이 그 PC의 사용자 이름(담당자 개인 이름)을 작성자로 넣는다. 검토본·서면에
+다는 메모는 개인 이름이 아니라 법인 이름이 보여야 하므로(2026. 10. 16. 담당 노무사 지시), 넘기기 전에 이 스크립트로
+이번에 새로 생긴 메모·변경의 작성자를 바꾼다. 원본(의뢰인이 보낸 문서, 서면은 그 판을 만들기 전의 담당자 저장본·직전 판)에
+원래 있던 메모·변경은 이름이 같아도 하나하나 맞대어 가려내고 그대로 둔다. 절차는 루트 CLAUDE.md 와 1_검토의견/CLAUDE.md 3-5.
 
-    python -B 공통/scripts/memo_author.py "{검토본}" --원본 "{의뢰인이 보낸 원본}"
+    python -B 공통/scripts/memo_author.py "{검토본}" --원본 "{의뢰인이 보낸 원본·바탕 문서}"
     python -B 공통/scripts/memo_author.py "{검토본}" --원본 "{원본}" --확인           # 바꾸지 않고 보기만
     python -B 공통/scripts/memo_author.py "{검토본}" --원본 "{원본}" --개인 "홍길동"   # 원본에 든 우리 쪽 이전 메모도
 
@@ -28,6 +28,7 @@ import sys
 import tempfile
 import zipfile
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
 FIRM, INITIALS = '법무법인 평안', '평안'
@@ -86,37 +87,82 @@ def write_zip(path: Path, infos: list[zipfile.ZipInfo], parts: dict[str, bytes])
 
 
 class Plan:
-    """누구를 바꾸는지. 원본에 없던 작성자와 --개인 으로 지목한 작성자를 법인 이름으로 바꾼다."""
+    """무엇을 바꾸는지. 원본(바탕 문서)에 없던 메모·변경과 --개인 으로 지목한 작성자의 것을 법인 이름으로 바꾼다.
 
-    def __init__(self, theirs: set[str], personal=(), name: str = FIRM):
-        self.theirs, self.personal, self.name = theirs, set(personal), name
+    이름이 아니라 메모·변경 하나하나를 원본과 맞댄다. 서면은 담당자가 직접 단 메모가 든 저장본 위에서 다시 고치는
+    일이 많아, 담당자의 메모와 이번에 Word 가 같은 사용자 이름으로 넣은 메모가 섞이기 때문이다. 일시가 있으면
+    '누가·언제'(분 단위)로 맞댄다. 새로 단 것은 언제나 지금 시각이고, Word 가 다시 저장하며 원래 수정 표시를 여러
+    조각으로 나누거나 합쳐도 누가·언제는 그대로이기 때문이다. 일시가 없으면 종류·작성자·글이 같은 것을 하나씩 지워 가며 맞춘다.
+    """
+
+    def __init__(self, before: Counter, pairs: set, personal=(), name: str = FIRM):
+        self.before, self.pairs, self.personal, self.name = Counter(before), set(pairs), set(personal), name
         self.renamed = Counter()                        # (옛 이름, 종류) → 개수
         self.kept = Counter()
         self.initials = 0                               # 작성자는 이미 법인 이름인데 머리글자만 고친 메모
 
-    def target(self, author: str | None) -> bool:
-        return bool(author) and author != self.name and (author not in self.theirs or author in self.personal)
-
-    def note(self, author: str, kind: str) -> None:
-        if self.target(author):
-            self.renamed[(author, kind)] += 1
-        elif author != self.name:
+    def decide(self, key, author: str, kind: str, when: str = '') -> str:
+        """'rename'(바꾼다), 'keep'(원본에 있던 것), 'firm-new'·'firm-old'(이미 법인 이름)."""
+        if when:
+            matched = (author, minute(when)) in self.pairs
+        else:
+            matched = self.before[key] > 0
+            if matched:
+                self.before[key] -= 1
+        if author == self.name:
+            return 'firm-old' if matched else 'firm-new'
+        if matched and author not in self.personal:
             self.kept[(author, kind)] += 1
+            return 'keep'
+        self.renamed[(author, kind)] += 1
+        return 'rename'
+
+    def decide_name(self, author: str, kind: str, theirs: set[str]) -> str:
+        """하나하나 가를 수 없는 자리(한글 변경 추적 작성자 목록 등)는 이름으로 가른다."""
+        if author == self.name:
+            return 'firm-old'
+        if author in theirs and author not in self.personal:
+            self.kept[(author, kind)] += 1
+            return 'keep'
+        self.renamed[(author, kind)] += 1
+        return 'rename'
+
+
+def minute(value: str) -> str:
+    """일시를 분 단위로(Word 는 초를 버리고, 프로그램마다 'Z'·소수 초 표기가 다르다)."""
+    try:
+        moment = datetime.fromisoformat(value.strip().replace('Z', '+00:00'))
+    except ValueError:
+        return value.strip()
+    if moment.tzinfo:
+        moment = moment.astimezone(timezone.utc)
+    return moment.strftime('%Y-%m-%dT%H:%M')
 
 
 # ── Word ──
+
+TEXT = (W + 't', W + 'delText', W + 'instrText', W + 'delInstrText')
+
 
 def docx_xml_parts(parts: dict[str, bytes]) -> list[str]:
     return [n for n in parts if n.startswith('word/') and n.endswith('.xml') and n != 'word/people.xml']
 
 
-def docx_authors(parts: dict[str, bytes]) -> set[str]:
-    found = set()
+def docx_key(el) -> tuple:
+    """메모·변경을 원본과 맞댈 열쇠: 종류, 작성자, 일시, 안의 글."""
+    return (local(el.tag), el.get(W + 'author') or '', el.get(W + 'date') or '', ''.join(t.text or '' for t in el.iter(*TEXT)))
+
+
+def docx_index(parts: dict[str, bytes]) -> tuple[Counter, set]:
+    keys, pairs = Counter(), set()
     for name in docx_xml_parts(parts):
-        found |= {el.get(W + 'author') for el in parse(parts[name]).iter() if el.get(W + 'author')}
-    if 'word/people.xml' in parts:
-        found |= {p.get(W15 + 'author') for p in parse(parts['word/people.xml']).iter(W15 + 'person') if p.get(W15 + 'author')}
-    return found
+        for el in parse(parts[name]).iter():
+            author = el.get(W + 'author')
+            if author:
+                keys[docx_key(el)] += 1
+                if el.get(W + 'date'):
+                    pairs.add((author, minute(el.get(W + 'date'))))
+    return keys, pairs
 
 
 def last_modified_by(parts: dict[str, bytes]):
@@ -127,7 +173,7 @@ def last_modified_by(parts: dict[str, bytes]):
 
 
 def fix_docx(parts: dict[str, bytes], original: dict[str, bytes], plan: Plan, apply: bool) -> tuple[list[str], dict]:
-    changed, notes = {}, []
+    changed, notes, gone, still = {}, [], set(), set()
     for name in docx_xml_parts(parts):
         root, touched = parse(parts[name]), False
         for el in root.iter():
@@ -135,25 +181,26 @@ def fix_docx(parts: dict[str, bytes], original: dict[str, bytes], plan: Plan, ap
             if not author:
                 continue
             kind = '메모' if el.tag == W + 'comment' else '변경'
-            plan.note(author, kind)
-            if plan.target(author):
+            state = plan.decide(docx_key(el), author, kind, el.get(W + 'date') or '')
+            if state == 'rename':
                 el.set(W + 'author', plan.name)
+                gone.add(author)
                 touched = True
-            if kind == '메모' and el.get(W + 'author') == plan.name and author not in plan.theirs - plan.personal \
-                    and el.get(W + 'initials') != INITIALS:
+            if kind == '메모' and state in ('rename', 'firm-new') and el.get(W + 'initials') != INITIALS:
                 el.set(W + 'initials', INITIALS)
-                plan.initials += author == plan.name
+                plan.initials += state == 'firm-new'
                 touched = True
+            still.add(el.get(W + 'author'))
         if touched:
             changed[name] = dump(root, parts[name])
     if 'word/people.xml' in parts:
         root = parse(parts['word/people.xml'])
-        gone = [p for p in root.iter(W15 + 'person') if plan.target(p.get(W15 + 'author'))]
-        for p in gone:
+        drop = [p for p in root.iter(W15 + 'person') if p.get(W15 + 'author') in gone - still]
+        for p in drop:
             p.getparent().remove(p)
-        if gone:
+        if drop:
             changed['word/people.xml'] = dump(root, parts['word/people.xml'])
-            notes.append('Word 계정 정보(people.xml)에서 개인 이름·메일 ' + ', '.join(p.get(W15 + 'author') for p in gone) + ' 을(를) 지움')
+            notes.append('Word 계정 정보(people.xml)에서 개인 이름·메일 ' + ', '.join(p.get(W15 + 'author') for p in drop) + ' 을(를) 지움')
     core, last = last_modified_by(parts)
     _, before = last_modified_by(original)
     if last is not None and last.text and last.text != plan.name \
@@ -180,49 +227,63 @@ def memo_box(el) -> bool:
 
 
 def hwpx_slots(root):
-    """작성자가 든 자리: (요소, 속성 이름 또는 None=글자, 종류)."""
+    """작성자가 든 자리: (요소, 속성 이름 또는 None=글자, 종류, 가르는 법 'one'=하나하나 원본과 맞댐·'name'=이름으로)."""
     for el in root.iter():
         name = local(el.tag)
         if name == 'trackChangeAuthor' and el.get('name') is not None:
-            yield el, 'name', '변경'
+            yield el, 'name', '변경', 'name'
         if el.get('name') == 'Author' and any(memo_box(a) for a in el.iterancestors()):
-            yield el, None, '메모'                     # 메모 칸의 <hp:stringParam name="Author">
+            yield el, None, '메모', 'one'              # 메모 칸의 <hp:stringParam name="Author">
         for key in el.attrib:
             if local(key).lower() == 'author':          # 모양을 모르는 다른 작성자 칸
-                yield el, key, '메모'
+                yield el, key, '메모', 'name'
         if name == 'meta' and el.get('name') == 'lastsaveby':
-            yield el, None, '저장'
+            yield el, None, '저장', 'name'
 
 
 def slot_value(el, attr):
     return el.get(attr) if attr else (el.text or '')
 
 
-def hwpx_authors(parts: dict[str, bytes]) -> set[str]:
-    found = set()
-    for name in hwpx_xml_parts(parts):
-        found |= {slot_value(el, attr) for el, attr, _ in hwpx_slots(parse(parts[name])) if slot_value(el, attr)}
-    return found
+def memo_key(author_el) -> tuple:
+    """한글 메모를 원본과 맞댈 열쇠: 작성자, 만든 일시, 메모 글."""
+    box = next((a for a in author_el.iterancestors() if memo_box(a)), None)
+    created = text = ''
+    if box is not None:
+        created = next((p.text or '' for p in box.iter() if p.get('name') == 'CreateDateTime'), '')
+        text = ''.join(t.text or '' for t in box.iter() if local(t.tag) == 't')
+    return ('memo', author_el.text or '', created, text)
+
+
+def hwpx_index(parts: dict[str, bytes]) -> tuple[Counter, set]:
+    keys = Counter(memo_key(el) for n in hwpx_xml_parts(parts) for el, _, _, how in hwpx_slots(parse(parts[n])) if how == 'one')
+    return keys, {(k[1], minute(k[2])) for k in keys if k[2]}
 
 
 def fix_hwpx(parts: dict[str, bytes], original: dict[str, bytes], plan: Plan, apply: bool) -> tuple[list[str], dict]:
     changed, notes = {}, []
-    before = {slot_value(el, attr) for n in hwpx_xml_parts(original) for el, attr, kind in hwpx_slots(parse(original[n]))
-              if kind == '저장'}
+    by_name = [(slot_value(el, attr), kind) for n in hwpx_xml_parts(original)
+               for el, attr, kind, how in hwpx_slots(parse(original[n])) if how == 'name']
+    names = {v for v, kind in by_name if kind != '저장'}
+    saved = {v for v, kind in by_name if kind == '저장'}
     for name in hwpx_xml_parts(parts):
         root, touched = parse(parts[name]), False
-        for el, attr, kind in hwpx_slots(root):
+        for el, attr, kind, how in hwpx_slots(root):
             value = slot_value(el, attr)
             if not value:
                 continue
             if kind == '저장':
-                if value != plan.name and (value not in before or value in plan.personal):
+                if value != plan.name and (value not in saved or value in plan.personal):
                     notes.append(f"'마지막 저장한 사람' {value} → {plan.name}")
                     el.text = plan.name
                     touched = True
                 continue
-            plan.note(value, kind)
-            if plan.target(value):
+            if how == 'one':
+                key = memo_key(el)
+                state = plan.decide(key, value, kind, key[2])
+            else:
+                state = plan.decide_name(value, kind, names)
+            if state == 'rename':
                 if attr:
                     el.set(attr, plan.name)
                 else:
@@ -285,7 +346,7 @@ def report(path: Path, plan: Plan, notes: list[str], apply: bool) -> int:
         parts = ', '.join(f'{kind} {n}개' for (o, kind), n in sorted(plan.renamed.items()) if o == old)
         print(f"  {old} → {plan.name}  ({parts})" if apply else f'  바꿀 작성자  {old}  ({parts})')
     for (who, kind), n in sorted(plan.kept.items()):
-        print(f'  그대로  {who}  ({kind} {n}개, 원본에 있던 작성자)')
+        print(f'  그대로  {who}  ({kind} {n}개, 원본에 원래 있던 것)')
     for note in notes:
         print(f'  {note}' if apply else f'  바꿀 것  {note}')
     if not plan.renamed and not notes:
@@ -331,12 +392,13 @@ def process(path: Path, original: Path, personal=(), check: bool = False, name: 
         raise MemoError(f'검토본과 원본의 형식이 다릅니다({path.suffix}, {original.suffix}). 같은 형식의 원본을 넘기십시오.')
     infos, parts = read_zip(path)
     _, before = read_zip(original)
-    authors, fix = (docx_authors, fix_docx) if kind == '.docx' else (hwpx_authors, fix_hwpx)
-    plan = Plan(authors(before), personal, name)
+    index, fix = (docx_index, fix_docx) if kind == '.docx' else (hwpx_index, fix_hwpx)
+    plan = Plan(*index(before), personal, name)
     notes, changed = fix(parts, before, plan, apply=not check)
     if not check and changed:
         write_zip(path, infos, parts)
-    rest = leftovers(parts, {old for old, _ in plan.renamed} | plan.personal) if not check else []
+    gone = {old for old, _ in plan.renamed} - {who for who, _ in plan.kept}      # 원래 메모로 남은 이름은 빼고 본다
+    rest = leftovers(parts, gone | plan.personal) if not check else []
     if rest:
         notes = notes + ['본문 밖에 개인 이름이 남은 부분(눈으로 확인): ' + ', '.join(rest)]
     return report(path, plan, notes, apply=not check), bool(changed) and not check

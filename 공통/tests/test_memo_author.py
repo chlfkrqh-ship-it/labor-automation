@@ -1,6 +1,7 @@
-"""memo_author.py — 검토본의 새 메모·변경 작성자를 '법무법인 평안'으로 맞추는지 작은 docx·hwpx 로 시험한다.
+"""memo_author.py — 검토본·서면의 새 메모·변경 작성자를 '법무법인 평안'으로 맞추는지 작은 docx·hwpx 로 시험한다.
 
-사람 이름·메일은 지어낸 값이다(홍길동 = 의뢰인 쪽, 김담당 = 우리 쪽 개인).
+사람 이름·메일은 지어낸 값이다(홍길동 = 의뢰인 쪽, 김담당 = 우리 쪽 개인). 원래 있던 메모·변경은 지난 일시(OLD),
+이번에 새로 단 것은 지금 일시(NEW)로 둔다.
 """
 import importlib.util
 import io
@@ -22,14 +23,20 @@ W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
 TYPES = HEAD + ('<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
                 '<Default Extension="xml" ContentType="application/xml"/></Types>')
 OURS, THEIRS = '김담당 노무사', '홍길동'
+OLD, NEW = '2026-10-10T09:00:00Z', '2026-10-16T05:30:00Z'
 
 
-def ins(author, text, i):
-    return f'<w:ins w:id="{i}" w:author="{author}" w:date="2026-10-16T00:00:00Z"><w:r><w:t>{text}</w:t></w:r></w:ins>'
+def ins(author, text, i, when=OLD):
+    return f'<w:ins w:id="{i}" w:author="{author}" w:date="{when}"><w:r><w:t>{text}</w:t></w:r></w:ins>'
 
 
-def dele(author, text, i):
-    return f'<w:del w:id="{i}" w:author="{author}" w:date="2026-10-16T00:00:00Z"><w:r><w:delText>{text}</w:delText></w:r></w:del>'
+def dele(author, text, i, when=OLD):
+    return f'<w:del w:id="{i}" w:author="{author}" w:date="{when}"><w:r><w:delText>{text}</w:delText></w:r></w:del>'
+
+
+def bold(author, i, when=OLD):
+    return (f'<w:r><w:rPr><w:b/><w:rPrChange w:id="{i}" w:author="{author}" w:date="{when}"><w:rPr/></w:rPrChange>'
+            '</w:rPr><w:t>굵게</w:t></w:r>')
 
 
 def document(*pieces):
@@ -38,8 +45,9 @@ def document(*pieces):
 
 
 def comments(*items):
-    inner = ''.join(f'<w:comment w:id="{i}" w:author="{a}" w:initials="{ini}" w:date="2026-10-16T00:00:00Z">'
-                    f'<w:p><w:r><w:t>{t}</w:t></w:r></w:p></w:comment>' for i, a, ini, t in items)
+    """(id, 작성자, 머리글자, 글[, 일시])."""
+    inner = ''.join(f'<w:comment w:id="{c[0]}" w:author="{c[1]}" w:initials="{c[2]}" w:date="{c[4] if len(c) > 4 else OLD}">'
+                    f'<w:p><w:r><w:t>{c[3]}</w:t></w:r></w:p></w:comment>' for c in items)
     return HEAD + f'<w:comments {W}>{inner}</w:comments>'
 
 
@@ -76,8 +84,9 @@ ORIGINAL_DOCX = {
 REVIEWED_DOCX = {
     '[Content_Types].xml': TYPES,
     'word/document.xml': document(ins(THEIRS, '의뢰인이 고친 곳', 1), '<w:r><w:t>김담당 노무사가 검토함</w:t></w:r>',
-                                  ins(OURS, '우리가 넣은 글', 2), dele(OURS, '우리가 지운 글', 3)),
-    'word/comments.xml': comments((0, THEIRS, 'HG', '의뢰인 메모'), (1, OURS, 'KD', '수정 이유 1'), (2, OURS, 'KD', '수정 이유 2')),
+                                  ins(OURS, '우리가 넣은 글', 2, NEW), dele(OURS, '우리가 지운 글', 3, NEW)),
+    'word/comments.xml': comments((0, THEIRS, 'HG', '의뢰인 메모'), (1, OURS, 'KD', '수정 이유 1', NEW),
+                                  (2, OURS, 'KD', '수정 이유 2', NEW)),
     'word/people.xml': people((THEIRS, 'client@example.com'), (OURS, 'staff@example.com')),
     'docProps/core.xml': core(THEIRS, OURS),
 }
@@ -142,14 +151,48 @@ class DocxTests(unittest.TestCase):
         write_docx(self.original, earlier)
         write_docx(self.review, dict(REVIEWED_DOCX, **{'word/comments.xml': earlier['word/comments.xml']}))
         self.run_memo()
-        self.assertIn(f'w:author="{OURS}"', read(self.review, 'word/comments.xml'))   # 원본에 있던 작성자라 그대로
+        self.assertIn(f'w:author="{OURS}"', read(self.review, 'word/comments.xml'))   # 원본에 있던 메모라 그대로
         code, _ = self.run_memo(personal=[OURS])
         self.assertEqual(code, 0)
         self.assertNotIn(f'w:author="{OURS}"', read(self.review, 'word/comments.xml'))
 
+    def test_staff_memo_in_the_base_stays_and_new_one_under_the_same_name_changes(self):
+        # 서면: 담당자가 직접 메모·수정을 남긴 저장본 위에서 다시 고치면 Word 가 같은 사용자 이름으로 새 메모를 넣는다
+        base = {'[Content_Types].xml': TYPES,
+                'word/document.xml': document(ins(OURS, '담당자가 고친 곳', 1)),
+                'word/comments.xml': comments((0, OURS, 'KD', '담당자가 직접 단 메모')),
+                'word/people.xml': people((OURS, 'staff@example.com')),
+                'docProps/core.xml': core(THEIRS, OURS)}
+        write_docx(self.original, base)
+        write_docx(self.review, dict(base, **{
+            'word/document.xml': document(ins(OURS, '담당자가 고친 곳', 1), ins(OURS, '새로 넣은 글', 2, NEW)),
+            'word/comments.xml': comments((0, OURS, 'KD', '담당자가 직접 단 메모'), (1, OURS, 'KD', '확인을 부탁드립니다', NEW))}))
+        code, out = self.run_memo()
+        self.assertEqual(code, 0, out)
+        com, doc = read(self.review, 'word/comments.xml'), read(self.review, 'word/document.xml')
+        self.assertIn(f'w:author="{OURS}" w:initials="KD"', com)                       # 담당자 메모는 그대로
+        self.assertIn('w:author="법무법인 평안" w:initials="평안"', com)
+        self.assertEqual((doc.count(f'w:author="{OURS}"'), doc.count('w:author="법무법인 평안"')), (1, 1))
+        self.assertIn('staff@example.com', read(self.review, 'word/people.xml'))      # 남은 담당자 메모가 가리킨다
+        self.assertIn(f'{OURS} → 법무법인 평안  (메모 1개, 변경 1개)', out)
+        self.assertIn(f'그대로  {OURS}  (메모 1개', out)
+        self.assertNotIn('본문 밖에 개인 이름', out)
+
+    def test_pieces_of_an_original_change_stay_after_word_saves_again(self):
+        # Word 가 다시 저장하며 원래 수정 하나를 여러 조각으로 나누어도(일시 표기가 조금 달라도) 원래 것으로 본다
+        write_docx(self.original, dict(ORIGINAL_DOCX, **{'word/document.xml': document(
+            ins(THEIRS, '의뢰인이 고친 곳', 1), bold(OURS, 5))}))
+        write_docx(self.review, dict(ORIGINAL_DOCX, **{'word/document.xml': document(
+            ins(THEIRS, '의뢰인이 ', 1), ins(THEIRS, '고친 곳', 4, '2026-10-10T09:00:00'),
+            bold(OURS, 5), bold(OURS, 6, '2026-10-10T09:00:30Z'), bold(OURS, 7, NEW))}))
+        self.run_memo()
+        doc = read(self.review, 'word/document.xml')
+        self.assertEqual((doc.count(f'w:author="{THEIRS}"'), doc.count(f'w:author="{OURS}"'),
+                          doc.count('w:author="법무법인 평안"')), (2, 2, 1))
+
     def test_memo_already_by_the_firm_gets_the_firm_initials(self):
         write_docx(self.review, dict(ORIGINAL_DOCX, **{
-            'word/comments.xml': comments((0, THEIRS, 'HG', '의뢰인 메모'), (1, '법무법인 평안', 'C', '수정 이유'))}))
+            'word/comments.xml': comments((0, THEIRS, 'HG', '의뢰인 메모'), (1, '법무법인 평안', 'C', '수정 이유', NEW))}))
         code, out = self.run_memo()
         self.assertEqual(code, 0, out)
         self.assertIn('w:author="법무법인 평안" w:initials="평안"', read(self.review, 'word/comments.xml'))
@@ -188,6 +231,7 @@ class DocxTests(unittest.TestCase):
 
 HH = 'xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head"'
 HP = 'xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"'
+H_OLD, H_NEW = '2026-10-10 09:00:00', '2026-10-16 14:30:00'
 
 
 def header(*authors):
@@ -195,11 +239,11 @@ def header(*authors):
     return HEAD + f'<hh:head {HH}><hh:refList><hh:trackChangeAuthors itemCnt="{len(authors)}">{inner}</hh:trackChangeAuthors></hh:refList></hh:head>'
 
 
-def memo_field(i, author, text):
+def memo_field(i, author, text, when=H_OLD):
     return (f'<hp:ctrl><hp:fieldBegin id="{i}" type="MEMO" name=""><hp:parameters cnt="5" name="">'
             f'<hp:stringParam name="ID">m{i}</hp:stringParam><hp:integerParam name="Number">{i}</hp:integerParam>'
             f'<hp:stringParam name="Author">{author}</hp:stringParam>'
-            f'<hp:stringParam name="CreateDateTime">2026-10-16 09:00:00</hp:stringParam>'
+            f'<hp:stringParam name="CreateDateTime">{when}</hp:stringParam>'
             f'<hp:stringParam name="MemoShapeIDRef">0</hp:stringParam></hp:parameters>'
             f'<hp:subList><hp:p><hp:run><hp:t>{text}</hp:t></hp:run></hp:p></hp:subList></hp:fieldBegin></hp:ctrl>')
 
@@ -230,7 +274,7 @@ class HwpxTests(unittest.TestCase):
         self.original, self.review = t / 'original.hwpx', t / 'review.hwpx'
         write_hwpx(self.original, header(THEIRS), section(memo_field(1, THEIRS, '의뢰인 메모')), content(THEIRS, THEIRS))
         write_hwpx(self.review, header(THEIRS, '김담당'),
-                   section(memo_field(1, THEIRS, '의뢰인 메모'), memo_field(2, '김담당', '수정 이유')),
+                   section(memo_field(1, THEIRS, '의뢰인 메모'), memo_field(2, '김담당', '수정 이유', H_NEW)),
                    content(THEIRS, '김담당'))
 
     def tearDown(self):
@@ -254,8 +298,19 @@ class HwpxTests(unittest.TestCase):
         self.assertEqual((first.filename, first.compress_type), ('mimetype', zipfile.ZIP_STORED))
         self.assertIn('김담당 → 법무법인 평안  (메모 1개, 변경 1개)', out.getvalue())
 
+    def test_hangul_staff_memo_in_the_base_stays(self):
+        write_hwpx(self.original, header('김담당'), section(memo_field(1, '김담당', '담당자 메모')), content(THEIRS, '김담당'))
+        write_hwpx(self.review, header('김담당'),
+                   section(memo_field(1, '김담당', '담당자 메모'), memo_field(2, '김담당', '새 메모', H_NEW)),
+                   content(THEIRS, '김담당'))
+        with redirect_stdout(io.StringIO()):
+            memo.run(self.review, self.original)
+        sec = read(self.review, 'Contents/section0.xml')
+        self.assertEqual((sec.count('name="Author">김담당<'), sec.count('name="Author">법무법인 평안<')), (1, 1))
+        self.assertIn('name="김담당"', read(self.review, 'Contents/header.xml'))       # 목록의 이름은 원본에 있던 것
+
     def test_memo_author_inside_a_memo_group_is_found(self):
-        grouped = section(memo_field(2, '김담당', '수정 이유')).replace(
+        grouped = section(memo_field(2, '김담당', '수정 이유', H_NEW)).replace(
             '</hs:sec>', '<hp:memogroup><hp:memo id="2"><hp:stringParam name="Author">김담당</hp:stringParam></hp:memo></hp:memogroup></hs:sec>')
         write_hwpx(self.review, header(THEIRS), grouped, content(THEIRS, THEIRS))
         with redirect_stdout(io.StringIO()):
@@ -287,6 +342,13 @@ class HwpxTests(unittest.TestCase):
             with self.assertRaises(memo.MemoError) as caught:
                 memo.hwp_app()
         self.assertIn('hwpx', str(caught.exception))
+
+
+class MinuteTests(unittest.TestCase):
+    def test_minute_ignores_seconds_and_marks(self):
+        self.assertEqual({memo.minute(v) for v in ('2026-10-10T09:00:00Z', '2026-10-10T09:00:30Z', '2026-10-10T09:00:00',
+                                                    '2026-10-10T09:00:00.000Z', '2026-10-10 09:00:59')}, {'2026-10-10T09:00'})
+        self.assertEqual(memo.minute('어제'), '어제')
 
 
 if __name__ == '__main__':
