@@ -37,6 +37,9 @@ REFERENCES = [STYLE + 'references/' + n for n in
 BRIEF = ['4_서면작성/CLAUDE.md', STYLE + 'SKILL.md'] + REFERENCES
 GUIDE_SETS = {
     '검토의견': COMMON + CITE + ['1_검토의견/CLAUDE.md', '.claude/commands/검토의견.md', '공통/사건상태.md'] + LBOX,
+    # 배당 메일과 후속 메일을 가른 뒤 검토의견 절차를 그대로 탄다.
+    '배당확인': COMMON + CITE + ['1_검토의견/CLAUDE.md', '.claude/commands/배당확인.md', '.claude/commands/검토의견.md',
+                            '공통/사건상태.md'] + LBOX,
     '판례검색': COMMON + CITE + ['2_판례검색/CLAUDE.md', '.claude/commands/판례검색.md'] + LBOX,
     '서면보강': COMMON + CITE + ['3_서면보강/CLAUDE.md', '.claude/commands/서면보강.md'] + LBOX,
     # 서면 하나가 입구다. 반박 구성과 노동위 기록 추출은 자료에 따라 켜는 갈래이며
@@ -247,7 +250,7 @@ class System:
                    if not self.path(f).is_file()]
         commands = {p.stem for p in self.path('.claude/commands').glob('*.md')}
         required = {'검토의견', '판례검색', '서면보강', '서면', '증거정리', '증거발췌', '문체검증',
-                    '노동위서류', '녹취', '손배계산', '손배검산', '자체검토'}
+                    '노동위서류', '녹취', '손배계산', '손배검산', '자체검토', '배당확인'}
         missing.extend('.claude/commands/' + n + '.md' for n in sorted(required - commands))
         skill_errors = []
         for p in self.path('.claude/skills').glob('*/SKILL.md'):
