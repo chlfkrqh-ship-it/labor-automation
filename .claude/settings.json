@@ -24,6 +24,29 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -B \"${CLAUDE_PROJECT_DIR:-.}/공통/scripts/case_watch.py\" prompt",
+            "timeout": 60,
+            "statusMessage": "사건 기록 확인 중"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -B \"${CLAUDE_PROJECT_DIR:-.}/공통/scripts/case_watch.py\" stop",
+            "timeout": 30
+          }
+        ]
+      }
     ]
   }
 }

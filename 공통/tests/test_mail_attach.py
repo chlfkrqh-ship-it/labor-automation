@@ -203,7 +203,7 @@ class GetTests(unittest.TestCase):
         code, out = self.run_get(M1['internetMessageId'], to=str(outside), names=['통지'])
         self.assertEqual(code, 0, out)
         self.assertEqual(sorted(p.name for p in outside.iterdir()), ['심문일정 통지.pdf'])
-        self.assertIn(str(outside / '심문일정 통지.pdf'), out)
+        self.assertIn(str((outside / '심문일정 통지.pdf').resolve()), out)                # 스크립트는 경로를 풀어 적는다(8.3 짧은 이름 TEMP)
 
     def test_moved_or_missing_mail_and_expired_login(self):
         with self.assertRaises(mail.MailError) as caught:
