@@ -191,6 +191,8 @@ class SystemTests(unittest.TestCase):
             self.put('.claude/commands/' + n + '.md', '---\ndescription: 절차\n---\n절차')
         self.assertIn('.claude/commands/노동위서류.md', self.system.check()['missing'])   # 뒤에 더한 명령어도 필수 목록에 든다
         self.put('.claude/commands/노동위서류.md', '---\ndescription: 절차\n---\n절차')
+        self.assertIn('.claude/commands/배당확인.md', self.system.check()['missing'])
+        self.put('.claude/commands/배당확인.md', '---\ndescription: 절차\n---\n절차')
         self.assertIn('공통/자체검토.md', self.system.check()['missing'])      # 인용 대조 지침(공통/자체검토.md)이 빠지면 알린다
         for f in ('공통/운영.md', '공통/사건상태.md', '공통/브라우저.md', '공통/자체검토.md'):
             self.put(f, '지침')
@@ -225,7 +227,7 @@ class SystemTests(unittest.TestCase):
 
     def test_cite_guide_is_read_only_by_citing_commands(self):
         """인용 대조 지침은 판례·결정례·행정해석을 인용하는 산출물의 명령어만 읽는다(공통/자체검토.md 2절)."""
-        citing = {'검토의견', '판례검색', '서면보강', '서면', '서면(반박 구성)', '서면(노동위 기록)', '자체검토'}
+        citing = {'검토의견', '배당확인', '판례검색', '서면보강', '서면', '서면(반박 구성)', '서면(노동위 기록)', '자체검토'}   # 배당확인은 검토의견을 쓴다
         for name, paths in module.GUIDE_SETS.items():
             self.assertEqual('공통/자체검토.md' in paths, name in citing, name)
 
