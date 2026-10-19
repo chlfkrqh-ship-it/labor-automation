@@ -369,9 +369,15 @@ class SafetyTests(CaseDir):
             trs = nxt.findall(qn('w:tr'))
             self.assertTrue(all(tr.find(qn('w:trPr')) is not None and tr.find(qn('w:trPr')).find(qn('w:cantSplit')) is not None
                                 for tr in trs))
-            for tr in trs[:-1]:
+            for tr in trs:          # '귀중' 줄까지 한 면에 두므로 마지막 행도 다음과 붙인다
                 for p in tr.iter(qn('w:p')):
                     self.assertIsNotNone(p.find(qn('w:pPr')).find(qn('w:keepNext')))
+            node = nxt.getnext()
+            while node is not None and not ''.join(t.text or '' for t in node.iter(qn('w:t'))).strip().endswith('귀중'):
+                if node.tag == qn('w:p'):
+                    self.assertIsNotNone(node.find(qn('w:pPr')).find(qn('w:keepNext')))
+                node = node.getnext()
+            self.assertIsNotNone(node)
 
     def test_frame_without_evidence_title_stops(self):
         make_frame(self.frame)

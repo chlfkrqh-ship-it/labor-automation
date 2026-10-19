@@ -28,7 +28,8 @@ docx_merge.py — 서면초안.md 를 서면_프레임.docx 의 "다음" 이후�
      - 들여쓴 "을나 제N호증  이름" 줄 → 입증방법 항목('(가)번호매기기_내용')
      - '입 증 방 법' 줄 뒤에 아무 줄도 없으면(새로 내는 호증이 없는 서면) 입증방법 제목을 넣지 않고,
        본문 끝(결론) 뒤에 빈 문단 두 개를 둔 다음 프레임의 제출일·대리인 블록을 잇는다(새 면으로 넘기지 않는다.
-       2026. 10. 19. 한전 태양광 준비서면(3) 담당자 지시, 서면별-구조.md '입증방법 표기').
+       2026. 10. 19. 한전 태양광 준비서면(3) 담당자 지시, 서면별-구조.md '입증방법 표기'). 그 블록(표)과 '귀중' 줄은
+       한 면에 묶어, 면 끝에서 제출일 줄만 남거나 '귀중' 줄만 다음 면으로 넘어가지 않게 한다.
      - 그 밖의 줄 → 본문 문단(원문자는 본문 한글 글꼴, 가운뎃점 낱말은 noProof)
      - 요소 사이에는 빈 문단 하나
      - 발췌 그림: 캡션 바로 뒤(빈 줄 없이), 폭 15cm, keepNext·keepLines(문서변환.md 나. 증거 이미지).
@@ -153,8 +154,21 @@ def _key(text):
 _TRPR_AFTER_CANTSPLIT = ('trHeight', 'tblHeader', 'tblCellSpacing', 'jc', 'hidden', 'ins', 'del', 'trPrChange')
 
 
-def _keep_table_together(tbl):
-    """표가 두 면으로 갈라지지 않게 한다: 행마다 cantSplit, 마지막 행 앞까지 칸 안 문단마다 keepNext."""
+def _keep_next(p):
+    """문단에 keepNext 를 넣는다(스키마 순서상 pStyle 바로 뒤)."""
+    ppr = p.find(qn('w:pPr'))
+    if ppr is None:
+        ppr = p.makeelement(qn('w:pPr'), {})
+        p.insert(0, ppr)
+    if ppr.find(qn('w:keepNext')) is None:
+        kn = ppr.makeelement(qn('w:keepNext'), {})
+        ps = ppr.find(qn('w:pStyle'))
+        (ps.addnext(kn) if ps is not None else ppr.insert(0, kn))
+
+
+def _keep_table_together(tbl, tail=()):
+    """표가 두 면으로 갈라지지 않게 한다: 행마다 cantSplit, 마지막 행 앞까지 칸 안 문단마다 keepNext.
+    tail(표 뒤 '귀중' 앞까지의 문단)을 주면 마지막 행과 그 문단들에도 keepNext 를 넣어 '귀중' 줄까지 한 면에 둔다."""
     trs = tbl.findall(qn('w:tr'))
     for k, tr in enumerate(trs):
         trpr = tr.find(qn('w:trPr'))
@@ -166,17 +180,12 @@ def _keep_table_together(tbl):
             cs = trpr.makeelement(qn('w:cantSplit'), {})
             later = next((c for c in trpr if c.tag in {qn('w:' + n) for n in _TRPR_AFTER_CANTSPLIT}), None)
             (later.addprevious(cs) if later is not None else trpr.append(cs))
-        if k == len(trs) - 1:
+        if k == len(trs) - 1 and not tail:
             continue
         for p in tr.iter(qn('w:p')):
-            ppr = p.find(qn('w:pPr'))
-            if ppr is None:
-                ppr = p.makeelement(qn('w:pPr'), {})
-                p.insert(0, ppr)
-            if ppr.find(qn('w:keepNext')) is None:
-                kn = ppr.makeelement(qn('w:keepNext'), {})
-                ps = ppr.find(qn('w:pStyle'))
-                (ps.addnext(kn) if ps is not None else ppr.insert(0, kn))
+            _keep_next(p)
+    for p in tail:
+        _keep_next(p)
 
 
 def _excerpt_names(m, n):
@@ -498,8 +507,15 @@ def merge(frame, md, out):
         for _ in range(2 if anchor is not p_end._p else 1):
             anchor.addprevious(copy.deepcopy(blank_tpl))
         if anchor.tag == qn('w:tbl'):
-            # 본문 바로 뒤에 오므로 면 끝에서 제출일 줄만 남고 대리인이 다음 면으로 갈라지지 않게 표를 묶는다
-            _keep_table_together(anchor)
+            # 본문 바로 뒤에 오므로 면 끝에서 제출일 줄만 남거나 '귀중' 줄만 다음 면으로 넘어가지 않게
+            # 표와 그 뒤 '귀중' 앞까지의 문단을 한 덩어리로 묶는다
+            gwi = paras[i_gwi]._p
+            tail, node = [], anchor.getnext()
+            while node is not None and node is not gwi:
+                if node.tag == qn('w:p'):
+                    tail.append(node)
+                node = node.getnext()
+            _keep_table_together(anchor, tail if node is gwi else ())
         print("입증방법: 새로 내는 호증이 없어 제목을 넣지 않고, 결론 뒤 빈 줄 두 개 다음에 제출일·대리인 블록을 이었습니다")
     elif anchor is not p_end._p:
         anchor.addprevious(copy.deepcopy(blank_tpl))
