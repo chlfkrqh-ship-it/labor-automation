@@ -8,7 +8,8 @@ docx_restyle.py — 병합된 서면 docx의 제목·본문 문단에 프레임�
   python scripts/docx_restyle.py <파일.docx> --dry      # 바꿀 문단을 스타일과 함께 출력만 함
 
 --check 는 아래 구조 이상도 함께 보고하고, 하나라도 있으면 종료 코드 1을 낸다.
-  - 범위('다음' 뒤 ~ '입 증 방 법' 앞)에 '1.번호매기기' 대제목 문단이 하나도 없음
+  - 범위('다음' 뒤 ~ '입 증 방 법' 앞. 새로 내는 호증이 없어 입증방법 제목이 없으면 제출일·대리인 표 앞)에
+    '1.번호매기기' 대제목 문단이 하나도 없음
   - 대제목 누락 의심: 'N. 제목' 꼴 글자로 시작하는데 본문(또는 대제목 앞 Normal)으로 남은 문단
   - 캡션 붙임 없음: 발췌 그림 바로 앞 캡션 문단에 keepNext 가 없음(공통/문서변환.md 나. 증거 이미지)
   대제목 앞의 그 밖의 문단은 스타일을 정할 수 없어 그대로 두고 '참고'로만 알린다.
@@ -24,7 +25,7 @@ docx_restyle.py — 병합된 서면 docx의 제목·본문 문단에 프레임�
   - "(1) …" 로 시작하는 문단은 같은 가. 안의 (n) 문단이 모두 소제목감일 때만 소제목('(1) 번호매기기')으로 보고,
     하나라도 길거나 여러 문장이면 그 가. 안의 (n) 문단은 전부 본문('가.번호매기기_내용')으로 둔다(번호가 섞이지 않도록).
     소제목감은 90자 이내 한 문장이거나, '소결'·'판단 기준'처럼 마침표 없이 끝나는 40자 이내 명사구다(2026. 9. 22. 변호사 지시).
-  - 빈 문단은 앞뒤 본문과 같은 _내용 스타일. 증거 캡션('표의첫행제목')·그림 문단·가운데 정렬 문단·입증방법 이후·'다음' 앞은 건드리지 않는다.
+  - 빈 문단은 앞뒤 본문과 같은 _내용 스타일. 증거 캡션('표의첫행제목')·그림 문단·가운데 정렬 문단·입증방법(없으면 제출일·대리인 표) 이후·'다음' 앞은 건드리지 않는다.
 """
 import sys, re, shutil, os
 from collections import Counter
@@ -207,7 +208,20 @@ def plan(doc):
     i_end = next((i for i, p in enumerate(paras) if i > i_start and _style_name(p, sid2name) == EV_TITLE
                   and re.sub(r'\s', '', _text(p)) == '입증방법'), None)
     if i_end is None:
-        raise SystemExit("'다음' 뒤에서 '입 증 방 법'(별지제목) 문단을 찾지 못했습니다. "
+        # 새로 내는 호증이 없는 서면은 입증방법 제목을 두지 않는다(docx_merge.py, 서면별-구조.md '입증방법 표기').
+        # 그때는 '다음' 뒤 첫 표(제출일·대리인 블록) 앞까지, 그 표가 없으면 마지막 '귀중' 문단 앞까지가 범위다.
+        node = paras[i_start].getnext()
+        while node is not None and node.tag != qn('w:tbl'):
+            node = node.getnext()
+        if node is not None:
+            node = node.getnext()
+            while node is not None and node.tag != qn('w:p'):
+                node = node.getnext()
+            i_end = paras.index(node) if node is not None else len(paras)
+        else:
+            i_end = max((i for i, p in enumerate(paras) if i > i_start and _text(p).strip().endswith('귀중')), default=None)
+    if i_end is None:
+        raise SystemExit("'다음' 뒤에서 '입 증 방 법'(별지제목) 문단도, 제출일·대리인 표나 '귀중' 문단도 찾지 못했습니다. "
                          "초안 끝에 '입 증 방 법' 줄이 있는지, 프레임의 입증방법 제목이 '별지제목' 스타일인지 확인합니다")
     # 1차: 대제목/소제목/(n)후보/본문/빈 문단 분류
     recs = []          # [p, kind, raw_text]

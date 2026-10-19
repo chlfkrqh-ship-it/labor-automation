@@ -26,6 +26,9 @@ docx_merge.py — 서면초안.md 를 서면_프레임.docx 의 "다음" 이후�
      - "가. …" 줄 → 소제목(프레임의 같은 줄을 재사용, 없으면 복제) + 볼드
      - "[갑 제N호증 …]" 한 줄 → 증거 캡션('표의첫행제목', 가운데, keepNext·keepLines)
      - 들여쓴 "을나 제N호증  이름" 줄 → 입증방법 항목('(가)번호매기기_내용')
+     - '입 증 방 법' 줄 뒤에 아무 줄도 없으면(새로 내는 호증이 없는 서면) 입증방법 제목을 넣지 않고,
+       본문 끝(결론) 뒤에 빈 문단 두 개를 둔 다음 프레임의 제출일·대리인 블록을 잇는다(새 면으로 넘기지 않는다.
+       2026. 10. 19. 한전 태양광 준비서면(3) 담당자 지시, 서면별-구조.md '입증방법 표기').
      - 그 밖의 줄 → 본문 문단(원문자는 본문 한글 글꼴, 가운뎃점 낱말은 noProof)
      - 요소 사이에는 빈 문단 하나
      - 발췌 그림: 캡션 바로 뒤(빈 줄 없이), 폭 15cm, keepNext·keepLines(문서변환.md 나. 증거 이미지).
@@ -146,6 +149,36 @@ def _key(text):
     return re.sub(r'\s+', '', text)
 
 
+# 스키마 순서상 cantSplit 뒤에 와야 하는 trPr 자식, keepNext 뒤에 와야 하는 pPr 자식(pStyle 만 앞선다)
+_TRPR_AFTER_CANTSPLIT = ('trHeight', 'tblHeader', 'tblCellSpacing', 'jc', 'hidden', 'ins', 'del', 'trPrChange')
+
+
+def _keep_table_together(tbl):
+    """표가 두 면으로 갈라지지 않게 한다: 행마다 cantSplit, 마지막 행 앞까지 칸 안 문단마다 keepNext."""
+    trs = tbl.findall(qn('w:tr'))
+    for k, tr in enumerate(trs):
+        trpr = tr.find(qn('w:trPr'))
+        if trpr is None:
+            trpr = tr.makeelement(qn('w:trPr'), {})
+            ex = tr.find(qn('w:tblPrEx'))
+            (ex.addnext(trpr) if ex is not None else tr.insert(0, trpr))
+        if trpr.find(qn('w:cantSplit')) is None:
+            cs = trpr.makeelement(qn('w:cantSplit'), {})
+            later = next((c for c in trpr if c.tag in {qn('w:' + n) for n in _TRPR_AFTER_CANTSPLIT}), None)
+            (later.addprevious(cs) if later is not None else trpr.append(cs))
+        if k == len(trs) - 1:
+            continue
+        for p in tr.iter(qn('w:p')):
+            ppr = p.find(qn('w:pPr'))
+            if ppr is None:
+                ppr = p.makeelement(qn('w:pPr'), {})
+                p.insert(0, ppr)
+            if ppr.find(qn('w:keepNext')) is None:
+                kn = ppr.makeelement(qn('w:keepNext'), {})
+                ps = ppr.find(qn('w:pStyle'))
+                (ps.addnext(kn) if ps is not None else ppr.insert(0, kn))
+
+
 def _excerpt_names(m, n):
     """호증키 캡션의 n번째 발췌 이미지 이름 (새 이름, 옛 이름 또는 None).
     가지번호는 '의', 순번은 '-n' 으로 적어 '을나 제2호증의 2'(을나2의2.png)와
@@ -185,7 +218,7 @@ def read_draft(md):
             problems.append(f"{no}행: '[[각주:' 와 ']]' 짝이 맞지 않습니다(']' 하나로 닫았거나 줄바꿈으로 끊김): {s[:40]}")
     if not any(_key(ln) == '입증방법' for _, ln in body):
         problems.append("초안 본문('---' 위)에 '입 증 방 법' 줄이 없습니다. 새로 내는 호증이 없어도 제목 줄은 둡니다"
-                        "(SKILL.md 14: 서면 말미는 '입 증 방 법'으로 끝냅니다).")
+                        "(서면 말미는 '입 증 방 법'으로 끝냅니다. 그 뒤에 호증 줄이 없으면 docx 에는 제목을 넣지 않습니다).")
     if problems:
         raise SystemExit("병합하지 않았습니다(파일을 만들거나 바꾸지 않음).\n  " + "\n  ".join(problems))
     return [ln for _, ln in body]
@@ -317,6 +350,10 @@ def merge(frame, md, out):
         raise SystemExit("병합하지 않았습니다(파일을 만들거나 바꾸지 않음). 프레임의 '다음'과 '귀중' 사이에 "
                          "'입 증 방 법'(별지제목 스타일) 문단이 없습니다. 프레임에 입증방법 제목을 두고 다시 병합합니다.")
 
+    # 새로 내는 호증이 없으면('입 증 방 법' 줄 뒤가 비어 있으면) 입증방법 제목을 넣지 않는다
+    i_ev = max(i for i, ln in enumerate(body_lines) if _key(ln) == '입증방법')
+    no_ev = not any(ln.strip() for ln in body_lines[i_ev + 1:])
+
     out_elems = []; used_sub = set(); img_map = {}
     h1_by_key = {}
     for t, e in h1:
@@ -343,7 +380,9 @@ def merge(frame, md, out):
                 out_elems.append(new_h1(cand[1], s)); continue
             kept_body.append(s)
         if _key(s) == '입증방법' and ev_title is not None:
-            out_elems.append(ev_title); continue
+            if not no_ev:
+                out_elems.append(ev_title)
+            continue
         if ln.startswith('    ') and EV_RE.match(s) and ev_tpl is not None:
             parts = re.split(r'\s{2,}', s, maxsplit=1)
             e = copy.deepcopy(ev_tpl)
@@ -453,7 +492,16 @@ def merge(frame, md, out):
         prev = made[-1]
         print("발췌 이미지 삽입: %s (%.1fcm%s)" % (
             os.path.basename(img), full_cm, ", 2장 분할" if n > 1 else ""))
-    if anchor is not p_end._p:
+    if no_ev:
+        # 결론 문단 뒤 빈 줄 두 개, 이어서 제출일·대리인 블록(입증방법 제목·쪽 나눔 없음). 마무리 표가 없으면
+        # '귀중' 앞 빈 문단(p_end)이 두 번째 빈 줄이 된다.
+        for _ in range(2 if anchor is not p_end._p else 1):
+            anchor.addprevious(copy.deepcopy(blank_tpl))
+        if anchor.tag == qn('w:tbl'):
+            # 본문 바로 뒤에 오므로 면 끝에서 제출일 줄만 남고 대리인이 다음 면으로 갈라지지 않게 표를 묶는다
+            _keep_table_together(anchor)
+        print("입증방법: 새로 내는 호증이 없어 제목을 넣지 않고, 결론 뒤 빈 줄 두 개 다음에 제출일·대리인 블록을 이었습니다")
+    elif anchor is not p_end._p:
         anchor.addprevious(copy.deepcopy(blank_tpl))
 
     # 후처리까지 임시 파일에서 마친 뒤에만 출력 자리로 옮긴다. 도중에 멈추면 기존 출력(사람이 고친 판일 수

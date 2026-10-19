@@ -348,6 +348,31 @@ class SafetyTests(CaseDir):
         self.assertEqual(self.backups(), [])
         self.assertEqual(self.leftovers(), [])
 
+    def test_draft_without_new_evidence_drops_title(self):
+        """새로 내는 호증이 없으면 입증방법 제목·쪽 나눔 없이 결론 뒤 빈 줄 두 개 다음에 제출일·대리인 블록이 온다."""
+        draft = self.DRAFT.replace(EVIDENCE, '\n입 증 방 법\n\n---\n① [확인 필요 사항]\n- 없음\n')
+        code, log = self.merge(draft)
+        self.assertEqual(code, 0, log)
+        self.assertIn('새로 내는 호증이 없어', log)
+        d = docx.Document(str(self.out))
+        self.assertNotIn('입증방법', [p.text.replace(' ', '') for p in d.paragraphs])
+        concl = next(p for p in d.paragraphs if p.text == '원고의 청구는 기각되어야 합니다.')
+        after = concl._p.itersiblings()
+        self.assertFalse(any(el.xpath('.//w:br[@w:type="page"]') for el in after))   # 결론 뒤 새 면으로 넘기지 않는다
+        nxt, blanks = concl._p.getnext(), 0
+        while nxt is not None and nxt.tag == qn('w:p') and not ''.join(t.text or '' for t in nxt.iter(qn('w:t'))).strip():
+            blanks += 1
+            nxt = nxt.getnext()
+        self.assertEqual(blanks, 2)
+        self.assertIsNotNone(nxt)
+        if nxt.tag == qn('w:tbl'):      # 제출일·대리인 표는 두 면으로 갈라지지 않게 묶는다
+            trs = nxt.findall(qn('w:tr'))
+            self.assertTrue(all(tr.find(qn('w:trPr')) is not None and tr.find(qn('w:trPr')).find(qn('w:cantSplit')) is not None
+                                for tr in trs))
+            for tr in trs[:-1]:
+                for p in tr.iter(qn('w:p')):
+                    self.assertIsNotNone(p.find(qn('w:pPr')).find(qn('w:keepNext')))
+
     def test_frame_without_evidence_title_stops(self):
         make_frame(self.frame)
         d = docx.Document(str(self.frame))
