@@ -4,7 +4,7 @@
 본문과 각주를 뽑되 각주가 붙은 자리를 본문에 {{n}} 으로 남긴다. n 은 본문에 나오는 순서이고 Word 가 매기는
 각주 번호와 같다. system.py extract 는 본문과 각주를 따로 이어 붙여 어느 문장의 각주인지 보이지 않는다.
 
-    python -B 공통/scripts/review_text.py "1_검토의견/사건/…/(…) … 관련 검토.docx" --out "1_검토의견/사건/…/작업/검토대상.md"
+    python -B 공통/scripts/review_text.py "1_검토의견/사건/…/(…) … 관련 검토_초안.docx" --out "1_검토의견/사건/…/작업/검토대상.md"
 
 면수·서식·그림은 나오지 않는다. 렌더 확인은 따로 한다. Word 메모(word/comments.xml)의 글도 뽑지 않고, 메모가 있으면 건수만 경고한다.
 메모가 있으면 --memos 로 메모의 글과 그 메모가 붙은 본문 구절(w:commentRangeStart 와 w:commentRangeEnd 사이의 글), 메모가 달린 문단을
