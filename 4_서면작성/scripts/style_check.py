@@ -35,9 +35,9 @@ BANNED = re.compile(
     r'|(?<![가-힣])(?:첫째|둘째|셋째)(?:\s*,|로(?![가-힣]))'
     r'|살피건대|생각건대|요컨대|할 것입니다|다름 아|알 수 있습니다|입증합니다'
     r'|증명합니다|방증|예상됩니다|본건|금번|재판장님|한자\(|（')
-# '사료됩니다' 는 루트 CLAUDE.md 의 완충 종결 예시이면서 서면 스킬이 피하라고 한 표현이라
-# 위반으로 막지 않고 참고로만 센다. 평가·전망을 맺는 자리인지 사람이 보고 정한다.
-HEDGE = re.compile(r'사료')
+# '사료됩니다'·'~것으로 보입니다'는 서면에서 쓰지 않는 완충 종결이다(SKILL.md '종결어미', 2026. 10. 19. 담당자 지시).
+# 다만 상대방의 장래 주장을 짚는 '다툴 것으로 보입니다'는 그대로 두므로 위반으로 막지 않고 참고로만 센다.
+HEDGE = re.compile(r'사료|것으로 보입니다')
 # 자료에 쓰여 있다는 뜻의 '적다'는 '기재하다'로 쓴다(references/표기-어휘.md, 2026. 10. 16. 담당 노무사).
 # '적은 인원', '적지 않은 수'처럼 수가 적다는 뜻과 글자로 가를 수 없어 참고로만 센다.
 # 낱말 첫머리의 '적'만 본다('실적', '목적'은 아니다). '적용·적극·적법·적시·적어도'는 뒤 글자로 걸러진다.
@@ -194,7 +194,7 @@ def check(path: Path):
         for hit in set(m[0] for m in MEMO.finditer(own)):
             add(violations, '대괄호 메모 잔존', line, text, hit[:30])
         if HEDGE.search(own):
-            add(notes, '사료 종결', line, text, HEDGE.search(own)[0])
+            add(notes, '완충 종결', line, text, HEDGE.search(own)[0])
         for hit in WRITE.finditer(own):
             add(notes, "'적다' → '기재'", line, text, own[hit.start():hit.end() + 4].strip())
 
