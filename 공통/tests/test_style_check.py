@@ -192,6 +192,10 @@ class StyleRuleTests(unittest.TestCase):
         # 발췌 캡션 한 줄은 사실 문단이 아니다
         result = self.check('[갑 제8호증 징계처분사유설명서]', '원고는 성실히 근무하였습니다.')
         self.assertEqual(self.found(result, rule, 'notes'), [])
+        # 앞 문단과의 관계를 드러내는 연결어로 시작하면 잡지 않는다(SKILL.md '문단·문장 이음')
+        for start in ('그런데도 피고는 해명하지 않았습니다.', '실제로 원고는 성실히 근무하였습니다.', '참고로, 원고는 상을 받았습니다.'):
+            result = self.check('원고는 2020. 3. 1. 입사하였습니다(갑 제2호증).', start)
+            self.assertEqual(self.found(result, rule, 'notes'), [], start)
         # 증거를 인용한 문단 바로 뒤의 캡션·그림 묶음은 평가 문단이 아니다(2026. 10. 3. 한영대 재심청구서)
         result = self.check('신고인은 "다 빼고 찾아 뵐게요"라고 답하였습니다(증 제7호증).',
                             '[증 제7호증 신고인과 주고받은 메시지]\n![](증7-2.png)')
