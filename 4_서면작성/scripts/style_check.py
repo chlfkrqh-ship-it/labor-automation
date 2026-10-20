@@ -35,6 +35,11 @@ BANNED = re.compile(
     r'|(?<![가-힣])(?:첫째|둘째|셋째)(?:\s*,|로(?![가-힣]))'
     r'|살피건대|생각건대|요컨대|할 것입니다|다름 아|알 수 있습니다|입증합니다'
     r'|증명합니다|방증|예상됩니다|본건|금번|재판장님|한자\(|（')
+# 판례를 극적으로 들이는 말(SKILL.md 금지 사항 11): '~한 하급심 판결도 있습니다', '~라는 판결이 있습니다', '사례가 존재합니다',
+# '주목할 만한 판결', '정면으로 판단한 하급심'. 지시 접속어 뒤에 곧바로 법원과 법리를 쓴다. 2026. 10. 20. 김경민 청구원인에서
+# '…산정한 하급심 판결도 있습니다(…)'가 이 검사가 없어 넘어갔다가 자체 검토에서 나왔다.
+DRAMA = re.compile(r'(?:판결|판례|하급심|결정례|재결례|선례)(?:도|이|가)?\s*(?:있습니다|존재합니다)'
+                   r'|사례(?:도|가)?\s*존재합니다|주목할 만한|정면으로 판단한')
 # '사료됩니다'·'~것으로 보입니다'는 서면에서 쓰지 않는 완충 종결이다(SKILL.md '종결어미', 2026. 10. 19. 담당자 지시).
 # 다만 상대방의 주장을 짚는 문장('…라고 주장하는 것으로 보입니다', '다툴 것으로 보입니다')은 그대로 두므로 위반으로 막지 않고 참고로만 센다.
 HEDGE = re.compile(r'사료|것으로 보입니다')
@@ -190,6 +195,8 @@ def check(path: Path):
         sentences = prose(text)
         for hit in set(BANNED.findall(own)):
             add(violations, '금지 낱말', line, text, hit)
+        for hit in set(m[0] for m in DRAMA.finditer(own)):
+            add(violations, '판례 도입 연극조', line, text, hit)
         conjunction = CONJUNCTION.match(own)
         if conjunction:
             add(violations, '접속부사 뒤 쉼표 없음', line, text,
