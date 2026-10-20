@@ -200,9 +200,12 @@ def plan(doc):
     sid2name = {s.get(qn('w:styleId')): n for n, s in styles.items()}
     by_id = {s.get(qn('w:styleId')): s for s in styles.values()}
     paras = [k for k in doc.element.body.iterchildren() if k.tag == qn('w:p')]
-    i_start = next((i for i, p in enumerate(paras) if _text(p).replace('\t', '').replace(' ', '') == '다음'), None)
+    flat = [_text(p).replace('\t', '').replace(' ', '') for p in paras]
+    # 시작 기준은 '다음'. 표지 없는 소장 청구원인 프레임은 '다음'이 없으므로 '청 구 원 인' 제목이다(docx_merge.py 1.)
+    start = '다음' if '다음' in flat else '청구원인'
+    i_start = next((i for i, t in enumerate(flat) if t == start), None)
     if i_start is None:
-        raise SystemExit("'다음' 문단을 찾지 못했습니다")
+        raise SystemExit("'다음' 문단(표지 없는 청구원인 프레임은 '청 구 원 인' 제목)을 찾지 못했습니다")
     # 끝 경계는 '다음' 뒤의 입증방법 제목이다. 서면명 제목('재심답변서(2)')에 별지제목을 쓰는 프레임도 있어
     # 스타일만 보고 '다음' 앞의 문단을 잡으면 범위가 비어 아무것도 검사하지 않게 된다.
     i_end = next((i for i, p in enumerate(paras) if i > i_start and _style_name(p, sid2name) == EV_TITLE

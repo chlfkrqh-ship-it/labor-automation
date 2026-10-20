@@ -17,6 +17,8 @@ docx_merge.py — 서면초안.md 를 서면_프레임.docx 의 "다음" 이후�
      - 한 줄 안에서 '[[각주:' 와 ']]' 짝이 맞지 않으면 멈춘다(']' 하나로 닫았거나 줄바꿈으로 끊긴 표시).
      - '|' 로 시작하는 md 표 줄이 있으면 멈춘다(docx 표로 바꾸지 않는다).
   1. 프레임의 '다음' 문단과 '귀중' 앞 빈 문단 사이를 비우고, md 본문을 채운다.
+     - 표지 없는 소장 청구원인 프레임처럼 '다음' 문단이 없으면 '청 구 원 인' 제목 문단을 시작 기준으로 쓴다
+       (전자소송이 소장 첫 면을 만들고 우리 파일은 '청 구 원 인'부터 쓴다. 2026. 10. 20. 김경민 임금 등 청구 소장).
      - "N. 제목" 줄이 프레임 대제목('1.번호매기기')과 같으면(공백 무시) 프레임 요소를 그대로 재사용.
        프레임 목차에 없으면 새 대제목 문단에 '1.번호매기기' 스타일을 이름으로 입히고 글자 번호는 지운다
        (자동 번호). 스타일이 없으면 Normal 에 볼드로 넣는다(공통/문서변환.md 가. 서식).
@@ -255,7 +257,9 @@ def merge(frame, md, out):
             if pred(p):
                 return i
         raise SystemExit("프레임에서 기준 문단을 찾지 못했습니다")
-    i_daum = find(lambda p: p.text.replace('\t', '').replace(' ', '') == '다음')
+    flat = [p.text.replace('\t', '').replace(' ', '') for p in paras]
+    # 본문 시작 기준: '다음'. 표지 없는 청구원인 프레임은 '다음'이 없으므로 '청 구 원 인' 제목(첫 번째)
+    i_daum = find(lambda p: p.text.replace('\t', '').replace(' ', '') == ('다음' if '다음' in flat else '청구원인'))
     i_gwi = max(i for i, p in enumerate(paras) if p.text.strip().endswith('귀중'))
     i_end = i_gwi - 1
     p_end = paras[i_end]
@@ -267,6 +271,10 @@ def merge(frame, md, out):
         if p.runs and p.style.name == 'Normal' and p.text.strip():
             body_font_rpr = p.runs[0]._r.find(qn('w:rPr'))
     blank_tpl = copy.deepcopy(p_end._p)
+    if body_font_rpr is None and flat[i_daum] == '청구원인':
+        # 청구원인 프레임에는 '위 사건에 관하여 …' 문단이 없다. 표준 프레임의 그 문단 run 서식(동아시아 글꼴 우선)을 쓴다
+        body_font_rpr = blank_tpl.makeelement(qn('w:rPr'), {})
+        body_font_rpr.append(body_font_rpr.makeelement(qn('w:rFonts'), {qn('w:hint'): 'eastAsia'}))
 
     h1 = []; sub = {}; ev_title = None; ev_tpl = None; sub_tpl = None
     for p in paras[i_daum + 1:i_end]:
