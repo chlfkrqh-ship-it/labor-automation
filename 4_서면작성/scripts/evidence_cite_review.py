@@ -506,6 +506,23 @@ def brief_pdf_of(md: Path):
     return pdfs[0] if pdfs else None
 
 
+def brief_page_numbers(brief: Path) -> list:
+    """서면 PDF 면마다 인쇄된 쪽 번호(머리·바닥 세 줄 안에서 숫자만 있는 줄, '- 3 -' 꼴 포함). 없는 면은 None.
+    표지 있는 서면은 표지가 None 이고 본문이 1부터, 표지 없는 소장 청구원인은 첫 면부터 1이다. 2026. 10. 21. 김경민
+    청구원인에서 '표지가 1면'만 가정하여 인쇄 면이 한 면씩 적게(첫 면은 0면으로) 나왔다."""
+    nums = []
+    for p in pymupdf.open(brief):
+        lines = [s.strip() for s in p.get_text().split('\n') if s.strip()]
+        num = None
+        for s in lines[:3] + lines[-3:]:
+            m = re.fullmatch(r'[-−–]?\s*(\d{1,4})\s*[-−–]?', s)
+            if m:
+                num = int(m.group(1))
+                break
+        nums.append(num)
+    return nums
+
+
 def cmd_scan(args) -> int:
     md = Path(args.md)
     text = md.read_text(encoding='utf-8-sig')
@@ -519,6 +536,7 @@ def cmd_scan(args) -> int:
     ocr_map = dict(x.split('=', 1) for x in (args.ocr_map or []))
     brief = Path(args.pdf) if args.pdf else brief_pdf_of(md)
     brief_txt = [canon(p.get_text()) for p in pymupdf.open(brief)] if brief and brief.is_file() else []
+    brief_nums = brief_page_numbers(brief) if brief_txt else []
     opened = {}
     report = []
     for n, c in enumerate(cites, 1):
@@ -532,7 +550,8 @@ def cmd_scan(args) -> int:
             probes = [cs[k:k + 18] for k in range(0, max(1, len(cs) - 18), 9)] or [cs]
             for pi, t in enumerate(brief_txt):
                 if sum(1 for pr in probes if pr and pr in t) >= max(1, len(probes) // 2):
-                    r['brief_print_page'] = pi       # 표지가 1면이므로 인쇄 면 = pdf 면 - 1
+                    # 그 면에 인쇄된 쪽 번호. 번호를 읽지 못하면 표지가 1면인 것으로 보아 인쇄 면 = pdf 면 - 1
+                    r['brief_print_page'] = brief_nums[pi] if brief_nums[pi] is not None else pi
                     break
         if c['caption']:                       # 발췌 그림 제목: 바로 아래 그림을 싣는다
             nxt = next((s for s in md_lines[c['line']:c['line'] + 3] if s.strip()), '')

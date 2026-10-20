@@ -178,6 +178,15 @@ class PrintedPageTest(unittest.TestCase):
             self.assertEqual(report[0]['windows'][0]['page'], 3)
             self.assertIn('인쇄 쪽 2', report[0]['windows'][0]['src'])
 
+    def test_brief_page_numbers_with_and_without_cover(self):
+        """서면 PDF 의 인쇄 쪽 번호: 표지 있는 서면은 표지 None·본문 1부터, 표지 없는 소장 청구원인은 첫 면부터 1."""
+        with tempfile.TemporaryDirectory() as tmp:
+            cover, plain = Path(tmp) / 'cover.pdf', Path(tmp) / 'plain.pdf'
+            make_pdf(cover, [['cover cover'], ['- 1 -', 'body text'], ['body text', 'more text', '- 2 -']])
+            make_pdf(plain, [['1', 'body text 300,000,000'], ['2', 'body text']])
+            self.assertEqual(ecr.brief_page_numbers(cover), [None, 1, 2])
+            self.assertEqual(ecr.brief_page_numbers(plain), [1, 2])
+
 
 if __name__ == '__main__':
     unittest.main()
