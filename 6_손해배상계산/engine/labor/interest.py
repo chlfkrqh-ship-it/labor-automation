@@ -64,7 +64,7 @@ DI-14 [법령] 변제충당: 이자(지연손해금) → 원본(민법 제479조
       변제일까지는 변제 전 원금에 이자가 붙고, 줄어든 원금은 다음 날부터 적용한다(창원지법 2018가합52160 충당 이자
       363,464원 = 지급기일 다음 날부터 변제일까지). 이자 기산일 전(지급기일 당일 포함) 변제는 발생한 이자가 없으므로
       원본에 바로 충당하고 warning, 계산 기준일 뒤 변제는 반영하지 않고 warning.
-DI-15 [법령·판례확립] 소멸시효 3년(근로기준법 제49조, 퇴직급여법 제10조). 임금은 정기지급일(DI-19 이면 그 지급기일)부터,
+DI-15 [법령·판례확립] 소멸시효 3년(근로기준법 제49조, 퇴직급여법 제10조). 임금은 정기지급일(퇴직 뒤 정기지급일이 오는 임금은 DI-19)부터,
       청산 금품은 지급사유 발생일(마지막 근무일 다음 날, DI-02 와 같은 방법으로 정함)부터. 초일 불산입 → 만료일 =
       기산일의 3년 뒤 해당일. 말일이 토·일요일이면 다음 날(민법 제161조, 판례 미확인, `di_limitation_weekend_shift`;
       공휴일은 모름). 소 제기일(`suit_filed_date`)이 만료일 뒤면 '시효 완성 의심' 표시(재판 외 최고·일부청구는 사람이
@@ -77,15 +77,29 @@ DI-18 [법령] 근로기준법 적용 제외 사업(동거 친족만 사용하�
       해고예고수당의 20% 대상 여부는 하급심이 갈려 warning 만(settlement 값은 사람이 정함).
 검증: 반박 검증 메모(delay_interest_검증메모.md) 판정 반영. 검색 보강(결정례·유권해석 탭, 3페이지)은 하지 않았다.
 DI-17 [법령] 청구 범위 제한: `di_claimed_rate_cap`(연 %) — 원고가 구한 이율보다 높게 계산하지 않는다.
-DI-19 [법령] 근로관계가 끝났는데(last_working_day) 정기지급일이 마지막 근무일 + 14일보다 늦은 원금(Claim.settlement=False —
-      마지막 달 임금·시간외수당 차액 등)은 지급기일을 min(정기지급일, 마지막 근무일 + 14일)로 본다. 제36조 "근로자가 사망 또는
-      퇴직한 경우에는 그 지급 사유가 발생한 때부터 14일 이내에 임금, 보상금, 그 밖의 모든 금품을 지급하여야 한다", 구 제37조
-      제1항 "제36조에 따라 지급하여야 하는 임금 …의 전부 또는 일부를 그 지급 사유가 발생한 날부터 14일 이내에 지급하지 아니한
-      경우 그 다음 날부터", 개정 제37조 제1항 제1호 "지급 사유가 발생한 날부터 14일이 되는 날". 정기지급일이 퇴직 뒤라 개정
-      제2항("지연이자를 지급할 의무가 발생한 이후 근로자가 사망 또는 퇴직한 경우")의 정기지급일 기준에 들지 않는다.
-      6%/5%·20%·시효 기산일(DI-15)이 모두 이 지급기일을 쓴다. 20%는 구법·개정법 모두 마지막 근무일 + 15일부터(구법분은
-      di_ended_old_law_20·di_redismissal_20 을 따른다). 지급기일은 연차 모듈 AL-14 '지급기일 전 퇴직'(min(지급일, 퇴직 + 14일))과
-      같다. 정기지급일이 기한 안이면 바꾸지 않고, 근로기준법 적용 제외 사업(DI-18)은 제36조가 없으므로 정기지급일 그대로 둔다.
+DI-19 [법령·하급심/불명확] 근로관계가 끝난 뒤(last_working_day) 정기지급일이 오는 원금(Claim.settlement=False — 마지막 달
+      임금·시간외수당 차액 등). 근로기준법 적용 제외 사업(DI-18)은 제36조가 없으므로 정기지급일 그대로 둔다. 이 경우를 정면으로
+      다룬 판결은 찾지 못하였다(2026. 10. 21. LBOX 20개·법제처 6개 검색어).
+      - 20%: 정기지급일이 마지막 근무일 + 14일보다 늦어도 그 다음 날(마지막 근무일 + 15일)부터. 구법·개정법 모두 같고, 구법분은
+        di_ended_old_law_20·di_redismissal_20 을 따른다. 제36조 "근로자가 사망 또는 퇴직한 경우에는 그 지급 사유가 발생한 때부터
+        14일 이내에 임금, 보상금, 그 밖의 모든 금품을 지급하여야 한다", 구 제37조 제1항 "제36조에 따라 지급하여야 하는 임금 …의
+        전부 또는 일부를 그 지급 사유가 발생한 날부터 14일 이내에 지급하지 아니한 경우 그 다음 날부터", 개정 제37조 제1항 제1호
+        "지급 사유가 발생한 날부터 14일이 되는 날". 정기지급일이 퇴직 뒤라 개정 제2항("지연이자를 지급할 의무가 발생한 이후
+        근로자가 사망 또는 퇴직한 경우")에 들지 않는다. 퇴직자의 미지급 임금·수당·퇴직금에 퇴직일부터 14일이 지난 다음 날부터
+        20%를 붙인 판결이 많고(대법원 2024다230084·2023다279983·2022다200249 자판, 서울남부지법 2019가합109927 — 익월 20일
+        지급 사업장), 정기지급일 다음 날부터 붙인 판결은 찾지 못하였다.
+      - 6%/5% 시작 `di_post_retirement_due`: statutory_14(기본) = min(정기지급일, 마지막 근무일 + 14일) 다음 날부터 — 부산고법
+        2018나57479 "임금 및 퇴직금에 대한 지연손해금은 퇴직일로부터 14일이 경과한 다음 날부터 발생한다고 봄이 타당하다"(원고의
+        '퇴직 다음 날~14일째 5%' 청구를 받아들이지 않음. 지연이율은 대법원 2022다200249 로 파기자판되었고 자판도 같은 기산일),
+        광주고법 2021나24973(퇴직금 — 14일 안에 이행청구를 받았으면 그 다음 날부터, 없었으면 14일 경과 다음 날부터).
+        day_after_retirement = 퇴직 다음 날부터 — 대법원 2025다219095 자판, 서울중앙지법 2022가단5203043, 서울북부지법
+        2019가단120197(원고가 그렇게 구한 사안으로 보임). 지급기일은 연차 모듈 AL-14 '지급기일 전 퇴직'(min(지급일, 퇴직 + 14일))과
+        같고, 퇴직금 RS-06 `rs_due_date` 도 같은 갈래다.
+      - 시효(DI-15): 기산일 = min(정기지급일, 마지막 근무일 + 14일) — 서울중앙지법 2013가합89100(확정)은 퇴직자 임금채권의 변제기가
+        늦어도 퇴직일로부터 14일이 경과한 날에 전부 도래하여 그때부터 시효가 진행된다고 하였다. 퇴직금을 퇴직 다음 날부터 행사할
+        수 있다고 본 대법원 2001다24051 판결요지 [4]("사용자에게 위 기간 동안 임금이나 퇴직금 지급의무의 이행을 유예하여 준
+        것이라고 볼 수는 없으므로")를 옮기면 더 이르므로, 퇴직 다음 날부터 초일 산입으로 센 날을 비고에 적고 시효 완성 의심은
+        이른 날로 판단한다(warning). 약정 지급일(익월 15일)을 지급기일로 본 서울동부지법 2021가합116437(확정, 결론에 영향 없음)도 있다.
 """
 
 from __future__ import annotations
@@ -136,6 +150,11 @@ OPTIONS: dict[str, OptionSpec] = {s.key: s for s in [
     OptionSpec("di_claimed_rate_cap", None, "원고가 구한 최고 이율(연 %). 비우면 제한 없음", "DI-17"),
     OptionSpec("di_limitation_weekend_shift", True,
                "시효 만료일이 토·일요일이면 다음 날로(민법 제161조, 판례 미확인)", "DI-15"),
+    OptionSpec("di_post_retirement_due", "statutory_14",
+               "퇴직 뒤 정기지급일이 오는 임금의 6%/5% 시작일(20%·시효 기산일은 바꾸지 않음)", "DI-19", {
+        "statutory_14": "min(정기지급일, 마지막 근무일 + 14일) 다음 날부터(부산고법 2018나57479, 대법원 2022다200249 자판)",
+        "day_after_retirement": "퇴직 다음 날부터(대법원 2025다219095 자판 등 — 원고가 그렇게 구한 사안으로 보임)",
+    }),
 ]}
 
 RULES: dict[str, tuple[str, str]] = {
@@ -155,7 +174,8 @@ RULES: dict[str, tuple[str, str]] = {
     "DI-15": ("소멸시효 3년 만료일 표시 — 청산 금품은 초일 산입 날짜를 함께 적고 이른 날로 완성 의심 판정", "법령·판례확립"),
     "DI-17": ("원고가 구한 이율 상한", "법령"),
     "DI-18": ("근로기준법 적용 제외 사업은 20% 없음, 해고예고수당 20% 여부는 경고", "법령/하급심"),
-    "DI-19": ("퇴직 뒤 정기지급일이 마지막 근무일 + 14일보다 늦은 임금은 그 날이 지급기일(6%/5%·20%·시효 기산)", "법령"),
+    "DI-19": ("퇴직 뒤 정기지급일이 오는 임금: 20%는 마지막 근무일 + 15일부터, 6%/5% 시작은 옵션, 시효는 "
+              "min(정기지급일, 마지막 근무일 + 14일)부터(퇴직 다음 날 기산을 비고에)", "법령·하급심/불명확"),
 }
 
 LSA20_EFFECTIVE = date(2005, 7, 1)
@@ -449,12 +469,26 @@ def _settle_trigger(c: Claim, inp: InterestInput) -> date:
     return c.due_date - timedelta(days=13)
 
 
-def _due(c: Claim, inp: InterestInput) -> date:
-    """이율 구간·시효에 쓰는 지급기일(DI-19). 근로관계가 끝났고 정기지급일이 제36조 기한(마지막 근무일 + 14일)보다 늦으면
-    그 기한이다. 청산 금품은 원금을 만든 모듈이 정한 due_date(DI-02), 근로기준법 적용 제외 사업은 정기지급일 그대로."""
-    if c.settlement or inp.last_working_day is None or inp.lsa_not_applicable:
+def _after_retirement(c: Claim, inp: InterestInput) -> bool:
+    """근로관계가 끝난 뒤 정기지급일이 오는 원금인가(DI-19). 청산 금품(원금을 만든 모듈이 due_date 를 정함, DI-02)과
+    근로기준법 적용 제외 사업(제36조 없음)은 아니다."""
+    end = inp.last_working_day
+    return not c.settlement and end is not None and not inp.lsa_not_applicable and c.due_date > end
+
+
+def _due36(c: Claim, inp: InterestInput) -> date:
+    """20%·시효에 쓰는 지급기일(DI-19) — 정기지급일이 제36조 기한(마지막 근무일 + 14일)보다 늦으면 그 기한."""
+    if not _after_retirement(c, inp):
         return c.due_date
     return min(c.due_date, inp.last_working_day + timedelta(days=14))
+
+
+def _due(c: Claim, inp: InterestInput, o: dict) -> date:
+    """6%/5% 구간이 시작하는 날의 전날(DI-19 `di_post_retirement_due`). day_after_retirement 이면 퇴직 뒤 정기지급일이
+    오는 임금은 마지막 근무일 — 퇴직 다음 날부터 6%/5%."""
+    if o["di_post_retirement_due"] == "day_after_retirement" and _after_retirement(c, inp):
+        return inp.last_working_day
+    return _due36(c, inp)
 
 
 def _lsa20_start(c: Claim, inp: InterestInput, o: dict, regime: str, trace: list, warnings: list) -> tuple[date | None, str]:
@@ -472,7 +506,7 @@ def _lsa20_start(c: Claim, inp: InterestInput, o: dict, regime: str, trace: list
             why += f" — 지급기일 {_fmt(c.due_date)} 다음 날부터 {_fmt(deadline)}까지는 20% 아님"
         return start, why
 
-    due = _due(c, inp)
+    due = _due36(c, inp)
     late = (f" — 정기지급일 {_fmt(c.due_date)}이 제36조 기한 {_fmt(due)}보다 늦어 기한 다음 날부터(DI-19)"
             if due < c.due_date else "")
     cutoff = parse_date(o["di_new_law_cutoff"])
@@ -495,7 +529,7 @@ def _lsa20_start(c: Claim, inp: InterestInput, o: dict, regime: str, trace: list
 def _schedule(c: Claim, inp: InterestInput, o: dict, regime: str, trace: list, warnings: list) -> list[Segment]:
     base_rate = Decimal("6") if inp.employer_merchant else Decimal("5")
     base_label = "상사 6%" if inp.employer_merchant else "민사 5%"
-    due = _due(c, inp)
+    due = _due(c, inp, o)
     start = due + timedelta(days=1)
     lsa_start, lsa_why = _lsa20_start(c, inp, o, regime, trace, warnings)
     excl_end = _exclusion_end(inp, o, warnings)
@@ -537,9 +571,13 @@ def _schedule(c: Claim, inp: InterestInput, o: dict, regime: str, trace: list, w
             segs[-1].end = e
         else:
             segs.append(Segment(s, e, r, rule, label))
-    if due < c.due_date:
-        trace.append(Trace("DI-19", f"{c.label} 지급기일", _fmt(due),
+    due36 = _due36(c, inp)
+    if due36 < c.due_date:
+        trace.append(Trace("DI-19", f"{c.label} 지급기일", _fmt(due36),
                            f"정기지급일 {_fmt(c.due_date)}이 마지막 근무일 + 14일(제36조)보다 늦음"))
+    if due < due36:
+        trace.append(Trace("DI-19", f"{c.label} 6%/5% 시작", _fmt(start),
+                           "퇴직 다음 날부터(di_post_retirement_due=day_after_retirement)"))
     trace.append(Trace("DI-03" if not c.settlement else "DI-02", f"{c.label} 20% 판단", lsa_why))
     return segs
 
@@ -624,26 +662,33 @@ def _accrue(c: Claim, segs: list[Segment], until: date, pays: list[Payment], o: 
     return total
 
 
-def _limitation(c: Claim, inp: InterestInput, o: dict) -> tuple[LimitationRow, date | None]:
-    """(시효 표시 행, 초일 산입으로 본 더 이른 만료일 또는 None) — DI-15."""
-    start = _settle_trigger(c, inp) if c.settlement else _due(c, inp)
+def _limitation(c: Claim, inp: InterestInput, o: dict) -> tuple[LimitationRow, date | None, str]:
+    """(시효 표시 행, 더 이른 만료일 또는 None, 그 날짜의 근거 'settlement'·'post_retirement') — DI-15·DI-19."""
+    start = _settle_trigger(c, inp) if c.settlement else _due36(c, inp)
     expiry = _add_years(start, 3)
     if o["di_limitation_weekend_shift"]:
         while expiry.weekday() >= 5:
             expiry += timedelta(days=1)
-    early, note = None, ""
-    if not c.settlement and start < c.due_date:
-        note = f"정기지급일 {_fmt(c.due_date)}이 제36조 기한보다 늦어 기한 {_fmt(start)}을 기산일로 봄(DI-19)"
+    early, kind, notes = None, "", []
     if c.settlement:
         # 지급사유 발생일(퇴직 다음 날)은 0시에 시작 — 초일 산입(민법 제157조 단서)이면 '기산일 + 3년 − 1일'(연차 AL-15)
         alt = _period_end(start, 36)
         if alt < expiry:
-            early = alt
-            note = (f"초일 산입(민법 제157조 단서 — 연차 모듈 AL-15 방식)이면 {_fmt(alt)} 만료. "
-                    "두 규칙이 통일되지 않아 시효 완성 의심은 이 날짜로 판단")
+            early, kind = alt, "settlement"
+            notes.append(f"초일 산입(민법 제157조 단서 — 연차 모듈 AL-15 방식)이면 {_fmt(alt)} 만료. "
+                         "두 규칙이 통일되지 않아 시효 완성 의심은 이 날짜로 판단")
+    elif _after_retirement(c, inp):
+        if start < c.due_date:
+            notes.append(f"정기지급일 {_fmt(c.due_date)}이 제36조 기한보다 늦어 기한 {_fmt(start)}을 기산일로 봄(DI-19)")
+        # 퇴직금처럼 퇴직 다음 날부터 행사할 수 있다고 보면(대법원 2001다24051) 더 이르다 — 청산 금품과 같이 초일 산입으로 센다
+        alt = _period_end(inp.last_working_day + timedelta(days=1), 36)
+        if alt < expiry:
+            early, kind = alt, "post_retirement"
+            notes.append(f"퇴직 다음 날부터 초일 산입으로 세면(대법원 2001다24051 의 퇴직금 논리) {_fmt(alt)} 만료. "
+                         "규칙이 통일되지 않아 시효 완성 의심은 이 날짜로 판단(DI-19)")
     check = early or expiry
     suspect = None if inp.suit_filed_date is None else inp.suit_filed_date > check
-    return LimitationRow(c.label, c.category, start, expiry, suspect, note), early
+    return LimitationRow(c.label, c.category, start, expiry, suspect, "; ".join(notes)), early, kind
 
 
 def _run(claims: list[Claim], inp: InterestInput, o: dict, regime: str, trace, warnings, rows) -> tuple[Decimal, list[ClaimSchedule]]:
@@ -654,7 +699,7 @@ def _run(claims: list[Claim], inp: InterestInput, o: dict, regime: str, trace, w
             continue
         segs = _schedule(c, inp, o, regime, trace, warnings)
         sch = ClaimSchedule(c, segs, order_text=_order_text(c, segs))
-        if inp.calc_until and inp.calc_until > _due(c, inp):
+        if inp.calc_until and inp.calc_until > _due(c, inp, o):
             pays = [p for p in inp.payments if p.claim == c.label]
             sch.interest_total = _accrue(c, segs, inp.calc_until, pays, o, rows, warnings)
             total += sch.interest_total
@@ -713,24 +758,34 @@ def calculate_interest(inp: InterestInput, opts: dict, claims: list[Claim] | Non
         alternatives["청구 최대(배제 없음)"] = (cm_total, cm_sched)
 
     limitation = []
-    any_early = False
+    early_kinds = set()
     for c in all_claims:
         if c.amount <= 0:
             continue
-        lr, early = _limitation(c, inp, o)
+        lr, early, kind = _limitation(c, inp, o)
         limitation.append(lr)
-        any_early = any_early or early is not None
+        if early is not None:
+            early_kinds.add(kind)
         if not lr.suspect:
             continue
         if inp.suit_filed_date > lr.expiry:
             warnings.append(f"{lr.claim}: 시효 만료일 {_fmt(lr.expiry)}이 소 제기일보다 앞섭니다. 최고·승인 등 중단 사유를 확인하세요.")
+        elif kind == "post_retirement":
+            warnings.append(f"{lr.claim}: 퇴직 다음 날부터 초일 산입으로 세면(대법원 2001다24051 의 퇴직금 논리) 시효 만료일 "
+                            f"{_fmt(early)}이 소 제기일보다 앞섭니다(지급기일 기준이면 {_fmt(lr.expiry)}까지). 규칙이 통일되지 "
+                            "않았으므로 최고·승인 등 중단 사유를 확인하세요.")
         else:
             warnings.append(f"{lr.claim}: 초일 산입(민법 제157조 단서)으로 보면 시효 만료일 {_fmt(early)}이 소 제기일보다 앞섭니다"
                             f"(초일 불산입이면 {_fmt(lr.expiry)}까지). 규칙이 통일되지 않았으므로 최고·승인 등 중단 사유를 확인하세요.")
-    if any_early:
+    if "settlement" in early_kinds:
         warnings.append("청산 금품의 시효 만료일은 초일 불산입(DI-15)으로 적었습니다. 기산일(마지막 근무일 다음 날)이 0시에 "
                         "시작하므로 초일 산입(민법 제157조 단서 — 연차휴가수당 시트의 시효 완성일, AL-15)이면 더 이른 날이 "
                         "만료일입니다(소멸시효 시트 비고). 두 규칙은 통일되지 않았으니 청구 시기는 이른 날짜를 기준으로 판단하세요.")
+    if "post_retirement" in early_kinds:
+        warnings.append("퇴직 뒤 정기지급일이 오는 임금(DI-19)의 시효 만료일은 지급기일 min(정기지급일, 마지막 근무일 + 14일)부터 "
+                        "적었습니다(서울중앙지법 2013가합89100). 퇴직금을 퇴직 다음 날부터 행사할 수 있다고 본 대법원 2001다24051 의 "
+                        "논리를 옮기면 더 이른 날이 만료일입니다(소멸시효 시트 비고). 판결이 통일되지 않았으니 청구 시기는 이른 날짜를 "
+                        "기준으로 판단하세요.")
     if inp.suit_filed_date is None:
         warnings.append("소 제기일이 없어 시효 완성 여부는 표시하지 않고 만료일만 적었습니다.")
 

@@ -205,6 +205,16 @@ def test_퇴직_뒤_정기지급일이_14일_기한보다_늦으면_기한_다�
     lr = r.limitation[0]
     assert (lr.start, lr.expiry, lr.suspect) == (date(2023, 11, 27), date(2026, 11, 27), True)
     assert "DI-19" in lr.note
+    # 퇴직 다음 날부터 초일 산입으로 세면(대법원 2001다24051 의 퇴직금 논리) 2026. 11. 13. 만료 — 의심은 이른 날로 판단
+    r = calculate_interest(load_interest({"employer_merchant": False, "suit_filed_date": "2026-11-20"}, worker),
+                           opts(di_exclusion_end="none"), [c])
+    lr = r.limitation[0]
+    assert "2026. 11. 13." in lr.note and lr.suspect is True
+    assert any("2001다24051" in w and "2026. 11. 13." in w and "소 제기일" in w for w in r.warnings)
+    assert any("DI-19" in w and "2013가합89100" in w for w in r.warnings)
+    r = calculate_interest(load_interest({"employer_merchant": False, "suit_filed_date": "2026-11-13"}, worker),
+                           opts(di_exclusion_end="none"), [c])
+    assert r.limitation[0].suspect is False
     # 20%를 사실심 선고일까지 배제하면 5%도 기한 다음 날부터
     r = calculate_interest(load_interest({"employer_merchant": False, "first_instance_judgment_date": "2025-06-12"},
                                          worker), opts(), [c])
@@ -223,8 +233,25 @@ def test_정기지급일이_14일_기한_안이면_지급기일을_바꾸지_않
                            opts(di_exclusion_end="none"), [c])
     assert [(s.start, s.rate) for s in r.schedules[0].segments] == [
         (date(2023, 11, 26), Decimal(5)), (date(2023, 11, 28), Decimal(20))]
-    assert r.limitation[0].start == date(2023, 11, 25) and r.limitation[0].note == ""
+    lr = r.limitation[0]
+    # 시효 기산일은 정기지급일 그대로, 퇴직 다음 날부터 센 이른 날만 비고에
+    assert lr.start == date(2023, 11, 25) and "기산일로 봄" not in lr.note and "2026. 11. 13." in lr.note
     assert not any(t.rule == "DI-19" for t in r.trace)
+
+
+def test_퇴직_다음날부터_6_5_옵션():
+    # di_post_retirement_due=day_after_retirement — 퇴직 뒤 정기지급일이 오는 임금은 퇴직 다음 날부터 5%(대법원 2025다219095
+    # 자판 등), 20%는 그대로 마지막 근무일 + 15일부터. 퇴직 전 정기지급일 임금과 시효 기산일은 바뀌지 않는다
+    late = Claim("시간외수당 차액", "2023. 11.분", Decimal(1_000_000), date(2023, 11, 30))
+    before = Claim("시간외수당 차액", "2023. 10.분", Decimal(1_000_000), date(2023, 10, 31))
+    o = opts(di_exclusion_end="none", di_post_retirement_due="day_after_retirement")
+    r = calculate_interest(load_interest({"employer_merchant": False}, {"last_working_day": "2023-11-13"}), o, [late, before])
+    assert [(s.start, s.rate) for s in r.schedules[0].segments] == [
+        (date(2023, 11, 14), Decimal(5)), (date(2023, 11, 28), Decimal(20))]
+    assert [(s.start, s.rate) for s in r.schedules[1].segments] == [
+        (date(2023, 11, 1), Decimal(5)), (date(2023, 11, 28), Decimal(20))]
+    assert [lr.start for lr in r.limitation] == [date(2023, 11, 27), date(2023, 10, 31)]
+    assert any(t.rule == "DI-19" and t.label.endswith("6%/5% 시작") and t.value == "2023. 11. 14." for t in r.trace)
 
 
 def test_개정법_도래분도_퇴직_뒤_정기지급일이_기한보다_늦으면_기한_다음날부터_20():
@@ -239,7 +266,7 @@ def test_개정법_도래분도_퇴직_뒤_정기지급일이_기한보다_늦�
     r = calculate_interest(load_interest({"employer_merchant": True, "lsa_not_applicable": True}, worker),
                            opts(di_exclusion_end="none"), [c])
     assert [(s.start, s.rate) for s in r.schedules[0].segments] == [(date(2026, 1, 26), Decimal(6))]
-    assert r.limitation[0].start == date(2026, 1, 25)
+    assert (r.limitation[0].start, r.limitation[0].note) == (date(2026, 1, 25), "")
 
 
 def test_청구_이율_상한():
