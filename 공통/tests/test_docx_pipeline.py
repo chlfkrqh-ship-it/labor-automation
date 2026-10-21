@@ -36,6 +36,7 @@ import docx_footnotes  # noqa: E402
 import docx_merge  # noqa: E402
 import docx_normalize  # noqa: E402
 import docx_restyle  # noqa: E402
+import figure_fit  # noqa: E402
 
 TOC = ('이 사건의 경위', '징계사유의 존재', '결론')
 CP949 = dict(os.environ, PYTHONIOENCODING='cp949')
@@ -246,6 +247,166 @@ class RestyleCheckTests(CaseDir):
         code, log = self.check(d)
         self.assertEqual(code, 1)
         self.assertIn('캡션 붙임(keepNext) 없음 1건', log)
+
+
+HEAD_STYLES = ('1.번호매기기', '가.번호매기기', '(1) 번호매기기')
+
+
+def ppr_tags(p):
+    """문단 pPr 의 자식 이름 차례(접두어 없이)."""
+    ppr = p._p.find(qn('w:pPr'))
+    return [etree.QName(c).localname for c in ppr] if ppr is not None else []
+
+
+def unkeep(p):
+    """문단에 직접 건 keepNext·keepLines 를 지운다(담당자 저장본·옛 병합본처럼)."""
+    p.paragraph_format.keep_with_next = None
+    p.paragraph_format.keep_together = None
+
+
+class HeadingKeepTests(CaseDir):
+    """제목 붙임: 세 제목 스타일 문단과 그 바로 뒤 빈 문단에 keepNext 를 넣어 면 끝에 소제목만 남지 않게 한다
+    (2026. 10. 21. 박준선 항소이유서 7면 (4)·17면 (6)). 글자와 캡션·그림 문단은 건드리지 않는다."""
+
+    # (2) 소제목 바로 뒤에 캡션이 오는 자리도 넣어 빈 문단을 따라가다 캡션에서 멈추는지 본다
+    DRAFT = ('1. 이 사건의 경위\n\n가. 징계의 경위\n\n(1) 징계위원회가 열렸습니다.\n\n'
+             '피고는 원고를 징계하였습니다(을나 제1호증).\n\n(2) 회의록의 기재\n\n[을나 제1호증 회의록]\n\n'
+             '원고는 다투었습니다.\n\n2. 결론\n\n원고의 청구는 기각되어야 합니다.\n' + EVIDENCE)
+    HEADS = ['이 사건의 경위', '징계의 경위', '징계위원회가 열렸습니다.', '회의록의 기재', '결론']
+    BODY = ['피고는 원고를 징계하였습니다(을나 제1호증).', '원고는 다투었습니다.', '원고의 청구는 기각되어야 합니다.']
+
+    def merged(self):
+        png(self.excerpts / '을나1.png', 600, 300, 'white')
+        code, log = self.merge(self.DRAFT, toc=('이 사건의 경위', '결론'))
+        self.assertEqual(code, 0, log)
+        return log
+
+    def heads(self, d):
+        return [p for p in d.paragraphs if p.style.name in HEAD_STYLES and p.text.strip()]
+
+    def check(self, d):
+        d.save(str(self.out))
+        return run(docx_restyle.main, str(self.out), check=True)
+
+    def after(self, d, p):
+        """본문 차례에서 p 바로 다음 문단."""
+        ps = d.paragraphs
+        return ps[[q._p for q in ps].index(p._p) + 1]
+
+    def assert_kept(self, d):
+        """제목마다 keepNext·keepLines, 그 바로 뒤 빈 문단에 keepNext, pPr 안의 차례는 pStyle·keepNext·keepLines·numPr."""
+        for h in self.heads(d):
+            tags = ppr_tags(h)
+            self.assertEqual(tags[:3], ['pStyle', 'keepNext', 'keepLines'], (h.text, tags))
+            if 'numPr' in tags:
+                self.assertGreater(tags.index('numPr'), tags.index('keepLines'), (h.text, tags))
+            nxt = self.after(d, h)
+            self.assertEqual(nxt.text, '')
+            self.assertTrue(nxt.paragraph_format.keep_with_next, h.text)
+
+    def test_merge_keeps_headings_with_next(self):
+        log = self.merged()
+        self.assertNotIn('제목 붙임(keepNext) 없음', log)
+        d = docx.Document(str(self.out))
+        self.assertEqual([p.text for p in self.heads(d)], self.HEADS)
+        self.assertEqual([p.style.name for p in self.heads(d)],
+                         ['1.번호매기기', '가.번호매기기', '(1) 번호매기기', '(1) 번호매기기', '1.번호매기기'])
+        self.assert_kept(d)
+        for p in d.paragraphs:
+            if p.text in self.BODY:      # 본문 문단은 다음 문단과 붙이지 않는다
+                self.assertFalse(p.paragraph_format.keep_with_next, p.text)
+
+    def test_only_headings_and_blanks_after_them_change(self):
+        """제목 붙임이 바꾸는 것은 제목 문단과 그 바로 뒤 빈 문단의 pPr 뿐이다(글자, 캡션·그림·본문 문단은 그대로)."""
+        self.merged()
+        kept = docx.Document(str(self.out))
+        with mock.patch.object(docx_restyle, 'keep_heads', return_value=(0, 0)):
+            self.merged()
+        plain = docx.Document(str(self.out))
+        a, b = kept.paragraphs, plain.paragraphs
+        self.assertEqual([p.text for p in a], [p.text for p in b])
+        changed = [i for i, (x, y) in enumerate(zip(a, b)) if etree.tostring(x._p) != etree.tostring(y._p)]
+        heads = [i for i, p in enumerate(a) if p.style.name in HEAD_STYLES and p.text.strip()]
+        self.assertEqual(changed, sorted(heads + [i + 1 for i in heads]))
+        cap = next(i for i, p in enumerate(a) if p.text == '[을나 제1호증 회의록]')
+        self.assertIn(cap - 1, changed)            # (2) 소제목 뒤 빈 문단까지 넣고 캡션에서 멈춘다
+        self.assertNotIn(cap, changed)
+
+    def test_figure_fit_releases_only_the_picture(self):
+        """figure_fit 1단계는 마지막 그림 문단의 keepNext 만 풀고 제목 붙임·캡션 붙임은 남긴다(제목 → 빈 문단 → 캡션 → 그림)."""
+        self.merged()
+        root = figure_fit.읽기(str(self.out))
+        body = root.find(figure_fit.W + 'body')
+        ps = [e for e in body if e.tag == figure_fit.W + 'p']
+        head = next(p for p in ps if figure_fit.글(p) == '회의록의 기재')
+        blank, cap, pic = ps[ps.index(head) + 1:ps.index(head) + 4]
+        self.assertEqual((figure_fit.글(blank), figure_fit.글(cap)), ('', '[을나 제1호증 회의록]'))
+        self.assertTrue(figure_fit.그림들(pic))
+        발췌 = figure_fit.발췌목록(body)
+        self.assertEqual([f['cap'] for f in 발췌], ['[을나 제1호증 회의록]'])
+        self.assertEqual(figure_fit.묶음풀기(발췌), 1)
+        self.assertFalse(figure_fit.keep_next(pic))
+        self.assertTrue(all(figure_fit.keep_next(x) for x in (head, blank, cap)))
+
+    def test_restyle_again_keeps_schema_order(self):
+        """제목 붙임이 있는 제목에 번호를 다시 입혀도 numPr 은 keepNext·keepLines 뒤에 온다(Word 가 읽는 차례)."""
+        self.merged()
+        d = docx.Document(str(self.out))
+        body = next(p for p in d.paragraphs if p.text == self.BODY[0])
+        body.runs[0].bold = True                   # 고칠 곳이 생기면 소제목 번호를 모두 다시 입힌다
+        d.save(str(self.out))
+        code, log = run(docx_restyle.main, str(self.out), backup=False)
+        self.assertEqual(code, 0, log)
+        self.assertIn('1건 변경', log)
+        self.assertNotIn('제목 붙임', log)        # 이미 켜져 있어 새로 켠 것이 없다
+        d = docx.Document(str(self.out))
+        self.assert_kept(d)
+        code, log = self.check(d)
+        self.assertEqual(code, 0, log)
+
+    def test_check_reports_missing_keep_as_note(self):
+        self.merged()
+        d = docx.Document(str(self.out))
+        unkeep(next(p for p in d.paragraphs if p.text == '결론'))
+        code, log = self.check(d)
+        self.assertEqual(code, 0, log)             # 참고로만 알리고 점검은 통과
+        self.assertIn("참고: 제목 붙임(keepNext) 없음 1건", log)
+        self.assertIn("'결론'", log)
+
+    def test_keep_option_adds_keep_without_restyling(self):
+        """--keep: 담당자 저장본처럼 다시 병합하지 않는 파일에 스타일은 그대로 두고 제목 붙임만 넣는다."""
+        self.merged()
+        d = docx.Document(str(self.out))
+        for h in self.heads(d):
+            unkeep(h)
+            unkeep(self.after(d, h))
+        edited = next(p for p in d.paragraphs if p.text == self.BODY[1])
+        edited.style = d.styles['Normal']          # 담당자가 바꾼 스타일(restyle 이면 되돌린다)
+        d.save(str(self.out))
+        result = subprocess.run([sys.executable, '-B', str(SCRIPTS / 'docx_restyle.py'), str(self.out), '--keep'],
+                                capture_output=True, text=True, encoding='utf-8', env=CP949)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('제목 붙임(keepNext): 제목 5개, 새로 켠 문단 10개', result.stdout)
+        d = docx.Document(str(self.out))
+        self.assert_kept(d)
+        self.assertEqual(next(p for p in d.paragraphs if p.text == self.BODY[1]).style.name, 'Normal')
+        self.assertEqual(run(docx_restyle.main, str(self.out), keep_only=True)[1].strip(), '바꿀 문단 없음')
+
+    def test_keep_from_style_is_not_duplicated(self):
+        """스타일에 keepNext 가 있으면 문단에 다시 넣지 않고(점검도 통과), 없는 keepLines 만 넣는다."""
+        self.merged()
+        d = docx.Document(str(self.out))
+        d.styles['1.번호매기기'].paragraph_format.keep_with_next = True
+        h1 = [p for p in self.heads(d) if p.style.name == '1.번호매기기']
+        for h in h1:
+            unkeep(h)
+        code, log = self.check(d)
+        self.assertEqual(code, 0, log)
+        self.assertNotIn('제목 붙임(keepNext) 없음', log)
+        heads, kept = docx_restyle.keep_heads(d)
+        self.assertEqual((heads, kept), (5, 2))
+        for h in h1:
+            self.assertEqual(ppr_tags(h)[:2], ['pStyle', 'keepLines'])
 
 
 class ExcerptImageTests(CaseDir):
