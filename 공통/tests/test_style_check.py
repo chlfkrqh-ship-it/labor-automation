@@ -252,6 +252,17 @@ class StyleRuleTests(unittest.TestCase):
         self.assertEqual(result['measured']['connector_open_ratio'], 100.0)
         self.assertNotIn('문단 첫머리 연결어가 본보기보다 적음', [n['rule'] for n in result['notes']])
 
+    def test_each_long_sentence_is_listed(self):
+        """200자 넘는 문장은 행 번호와 길이로 하나씩 짚는다(SKILL.md '문장 길이', 2026. 10. 21.).
+        각주에 옮긴 판결 원문은 길어도 세지 않고, 200자 이하 문장도 세지 않는다."""
+        rule = '200자 넘는 문장'
+        long = '원고는 ' + '가' * 210 + '라고 주장합니다(갑 제1호증).'
+        short = '그러나, 원고의 주장은 이유 없습니다.'
+        footnote = '이 사건 해고는 위법합니다(대법원 2016두34240 판결[[각주: ' + '나' * 300 + '.]]).'
+        result = self.check(short, long, footnote, short + ' ' + long)
+        found = [(row['line'], row['detail']) for row in result['notes'] if row['rule'] == rule]
+        self.assertEqual(found, [(3, '%d자' % len(long)), (7, '%d자' % len(long))])
+
     def test_quotes_in_headings_are_violations(self):
         """소제목에는 따옴표를 쓰지 않는다(SKILL.md 금지 사항 16, 2026. 10. 21. 박준선 항소이유서 담당자 지시)."""
         rule = '소제목 따옴표'

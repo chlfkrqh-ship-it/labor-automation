@@ -10,7 +10,8 @@
     python 4_서면작성/scripts/style_check.py "출력/(의뢰인명) 서면명_초안.docx" --json
 
 `위반` 이 하나라도 있으면 종료 코드 1을 낸다. `참고` 는 세어서 보여 줄 뿐이며
-판단을 대신하지 않는다. 사람이 그 자리를 열어 보고 정한다.
+판단을 대신하지 않는다. 사람이 그 자리를 열어 보고 정한다. 200자 넘는 문장은 하나씩
+'200자 넘는 문장' 참고 항목으로 짚으므로 `--notes` 로 행 번호를 보고 나눈다(SKILL.md '문장 길이').
 
 md 초안의 `[[각주: …]]` 는 판결 원문을 옮기는 자리이므로(docx_footnotes.py) 금지 낱말·
 대괄호 메모·문장 수·해라체 검사에서 뺀다.
@@ -233,6 +234,11 @@ def check(path: Path):
         count = len(SENTENCE.findall(sentences))
         if count >= 3:
             add(notes, '3문장 이상 문단', line, text, '%d문장' % count)
+        # 200자 넘는 문장은 하나씩 짚는다. 결론과 근거, 법리와 적용, 호증별 사실로 나눌 자리를 본다
+        # (SKILL.md '문장 길이', 2026. 10. 21. 박준선 항소이유서를 본보기 기준으로 고친 방식을 지침화)
+        for sentence in split_sentences(sentences):
+            if len(sentence) > 200:
+                add(notes, '200자 넘는 문장', line, sentence, '%d자' % len(sentence))
         plain = PLAIN.search(sentences)
         if plain:
             add(notes, '해라체 종결', line, text, plain[0].strip())
@@ -273,7 +279,7 @@ def check(path: Path):
         notes.append({'rule': '문장이 기준보다 김', 'line': '-',
                       'detail': '평균 %.0f자 (기준 %d자)' % (measured['sentence_chars_mean'],
                                                         REFERENCE['sentence_chars_mean']),
-                      'text': '문장을 나누지 말고 한 문단에 논지가 몇 개 들어갔는지 본다'})
+                      'text': "'200자 넘는 문장'부터 나눌 자리를 보고, 한 문단에 논지가 몇 개 들어갔는지 본다(SKILL.md 문장 길이)"})
 
     # 본보기와 견주는 두 값(MODEL). 제목·캡션·입증방법 줄처럼 문장 끝이 없는 문단은 세지 않는다.
     prose_paras = [FOOTNOTE.sub('', t).strip() for _, t, body in blocks if body]
@@ -291,7 +297,7 @@ def check(path: Path):
     if sents and measured['over200_ratio'] > MODEL['over200_ratio'] * 2:
         notes.append({'rule': '200자 넘는 문장이 본보기보다 많음', 'line': '-',
                       'detail': '%d개 %.1f%% (본보기 %.1f%%)' % (len(long_sents), measured['over200_ratio'], MODEL['over200_ratio']),
-                      'text': '판례 소개·열거 문장에서 결론과 근거, 법리와 적용을 나눌 수 있는지 본다(references/문체-용례.md 본보기)'})
+                      'text': "'200자 넘는 문장' 참고 항목을 하나씩 열어 결론과 근거, 법리와 적용, 호증별 사실로 나눈다(SKILL.md 문장 길이)"})
 
     return {
         'file': path.as_posix(),
