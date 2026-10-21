@@ -1,5 +1,5 @@
 """지연손해금 — 근로기준법 제37조 연 20%, 상사 6%·민사 5%, 소송촉진법 이율, 소멸시효 표시
-(lane: delay_interest, 규칙 DI-01~DI-17 / 해고기간 임금 20% 쟁점: dismissal_interest_20).
+(lane: delay_interest, 규칙 DI-01~DI-19 / 해고기간 임금 20% 쟁점: dismissal_interest_20).
 
 다른 모듈이 만든 원금 항목(`Claim`)마다 날짜별 이율을 정해 구간표를 만들고,
 (1) 청구취지·주문형 문구(기산일·이율 구간, 끝은 '다 갚는 날까지'), (2) 기준일까지의 금액,
@@ -27,8 +27,9 @@ DI-03 [법령/판례확립/불명확] 재직 중 정기임금(Claim.settlement=F
       - 구법 적용분: 재직(복직) 중이면 20% 없음 — 대법원 2014. 8. 26. 선고 2014다28305(원심 판단
         수긍) "해고가 무효로 되어 갑이 복직한 이상 이에 해당한다고 보기 어렵고 … 상법이 정한 연 6%".
         근로관계가 끝났으면(정년·계약만료·사직·재해고) 마지막 근무일 + 15일부터 20%(하급심 다수:
-        서울고법 2017나28919 확정, 대전고법 2019나13573 심리불속행). 재해고로 끝난 경우는 확정 고법
-        판결이 갈린다(대전고법 2019나13573 적용 / 서울고법 2021나2031970 부정) → `di_redismissal_20`.
+        서울고법 2017나28919 확정, 대전고법 2019나13573 심리불속행). 정기지급일이 그보다 늦은 임금도 같다(DI-19).
+        재해고로 끝난 경우는 확정 고법 판결이 갈린다(대전고법 2019나13573 적용 / 서울고법 2021나2031970 부정)
+        → `di_redismissal_20`.
       - 개정법 도래분을 해고기간 임금에 적용하는 1심은 세 갈래(서울북부 2026가합20004 지급일 다음날부터
         20%·배제 없음 / 서울중앙 2025가합10452 선고일까지 배제 / 창원 2025구합1375 선고 후 12%).
         기본 계산에 20%를 쓰고 '대안: 개정법 미적용' 결과를 함께 낸다.
@@ -47,6 +48,7 @@ DI-08 [판례확립/하급심] 같은 날 이율을 겹치지 않는다. 우선�
       회생 등 제18조 제1호 제외기간에 소송촉진법 이율을 붙인 사례는 약해서(서울서부 2019가단214470)
       기본 미적용, `di_sokchok_in_exclusion`.
 DI-09 [판례확립·법령] 재직 중 임금 기본형: 정기지급일 다음 날부터 6%/5%, 송달 다음 날부터 소송촉진법 이율.
+      근로관계가 끝난 뒤 정기지급일이 오는 임금은 DI-19 의 지급기일 다음 날부터.
 DI-10 확정 지연손해금의 원금화: 구현하지 않음(원본이 상사채권일 때 이율 미확인) → 필요하면 수동 항목.
 ---------------------------------------------------------------- 일할·끝수·충당
 DI-11 [불명확] `원금 × 연이율 × 기간`, 기산일·종기 모두 산입. 1년 이상이면 기산일부터 만 N년 + 잔여일수/분모.
@@ -62,7 +64,7 @@ DI-14 [법령] 변제충당: 이자(지연손해금) → 원본(민법 제479조
       변제일까지는 변제 전 원금에 이자가 붙고, 줄어든 원금은 다음 날부터 적용한다(창원지법 2018가합52160 충당 이자
       363,464원 = 지급기일 다음 날부터 변제일까지). 이자 기산일 전(지급기일 당일 포함) 변제는 발생한 이자가 없으므로
       원본에 바로 충당하고 warning, 계산 기준일 뒤 변제는 반영하지 않고 warning.
-DI-15 [법령·판례확립] 소멸시효 3년(근로기준법 제49조, 퇴직급여법 제10조). 임금은 정기지급일부터,
+DI-15 [법령·판례확립] 소멸시효 3년(근로기준법 제49조, 퇴직급여법 제10조). 임금은 정기지급일(DI-19 이면 그 지급기일)부터,
       청산 금품은 지급사유 발생일(마지막 근무일 다음 날, DI-02 와 같은 방법으로 정함)부터. 초일 불산입 → 만료일 =
       기산일의 3년 뒤 해당일. 말일이 토·일요일이면 다음 날(민법 제161조, 판례 미확인, `di_limitation_weekend_shift`;
       공휴일은 모름). 소 제기일(`suit_filed_date`)이 만료일 뒤면 '시효 완성 의심' 표시(재판 외 최고·일부청구는 사람이
@@ -75,6 +77,15 @@ DI-18 [법령] 근로기준법 적용 제외 사업(동거 친족만 사용하�
       해고예고수당의 20% 대상 여부는 하급심이 갈려 warning 만(settlement 값은 사람이 정함).
 검증: 반박 검증 메모(delay_interest_검증메모.md) 판정 반영. 검색 보강(결정례·유권해석 탭, 3페이지)은 하지 않았다.
 DI-17 [법령] 청구 범위 제한: `di_claimed_rate_cap`(연 %) — 원고가 구한 이율보다 높게 계산하지 않는다.
+DI-19 [법령] 근로관계가 끝났는데(last_working_day) 정기지급일이 마지막 근무일 + 14일보다 늦은 원금(Claim.settlement=False —
+      마지막 달 임금·시간외수당 차액 등)은 지급기일을 min(정기지급일, 마지막 근무일 + 14일)로 본다. 제36조 "근로자가 사망 또는
+      퇴직한 경우에는 그 지급 사유가 발생한 때부터 14일 이내에 임금, 보상금, 그 밖의 모든 금품을 지급하여야 한다", 구 제37조
+      제1항 "제36조에 따라 지급하여야 하는 임금 …의 전부 또는 일부를 그 지급 사유가 발생한 날부터 14일 이내에 지급하지 아니한
+      경우 그 다음 날부터", 개정 제37조 제1항 제1호 "지급 사유가 발생한 날부터 14일이 되는 날". 정기지급일이 퇴직 뒤라 개정
+      제2항("지연이자를 지급할 의무가 발생한 이후 근로자가 사망 또는 퇴직한 경우")의 정기지급일 기준에 들지 않는다.
+      6%/5%·20%·시효 기산일(DI-15)이 모두 이 지급기일을 쓴다. 20%는 구법·개정법 모두 마지막 근무일 + 15일부터(구법분은
+      di_ended_old_law_20·di_redismissal_20 을 따른다). 지급기일은 연차 모듈 AL-14 '지급기일 전 퇴직'(min(지급일, 퇴직 + 14일))과
+      같다. 정기지급일이 기한 안이면 바꾸지 않고, 근로기준법 적용 제외 사업(DI-18)은 제36조가 없으므로 정기지급일 그대로 둔다.
 """
 
 from __future__ import annotations
@@ -144,6 +155,7 @@ RULES: dict[str, tuple[str, str]] = {
     "DI-15": ("소멸시효 3년 만료일 표시 — 청산 금품은 초일 산입 날짜를 함께 적고 이른 날로 완성 의심 판정", "법령·판례확립"),
     "DI-17": ("원고가 구한 이율 상한", "법령"),
     "DI-18": ("근로기준법 적용 제외 사업은 20% 없음, 해고예고수당 20% 여부는 경고", "법령/하급심"),
+    "DI-19": ("퇴직 뒤 정기지급일이 마지막 근무일 + 14일보다 늦은 임금은 그 날이 지급기일(6%/5%·20%·시효 기산)", "법령"),
 }
 
 LSA20_EFFECTIVE = date(2005, 7, 1)
@@ -437,6 +449,14 @@ def _settle_trigger(c: Claim, inp: InterestInput) -> date:
     return c.due_date - timedelta(days=13)
 
 
+def _due(c: Claim, inp: InterestInput) -> date:
+    """이율 구간·시효에 쓰는 지급기일(DI-19). 근로관계가 끝났고 정기지급일이 제36조 기한(마지막 근무일 + 14일)보다 늦으면
+    그 기한이다. 청산 금품은 원금을 만든 모듈이 정한 due_date(DI-02), 근로기준법 적용 제외 사업은 정기지급일 그대로."""
+    if c.settlement or inp.last_working_day is None or inp.lsa_not_applicable:
+        return c.due_date
+    return min(c.due_date, inp.last_working_day + timedelta(days=14))
+
+
 def _lsa20_start(c: Claim, inp: InterestInput, o: dict, regime: str, trace: list, warnings: list) -> tuple[date | None, str]:
     """20% 기산일과 근거 문구. 적용 없으면 (None, 사유)."""
     if inp.lsa_not_applicable:
@@ -452,8 +472,13 @@ def _lsa20_start(c: Claim, inp: InterestInput, o: dict, regime: str, trace: list
             why += f" — 지급기일 {_fmt(c.due_date)} 다음 날부터 {_fmt(deadline)}까지는 20% 아님"
         return start, why
 
+    due = _due(c, inp)
+    late = (f" — 정기지급일 {_fmt(c.due_date)}이 제36조 기한 {_fmt(due)}보다 늦어 기한 다음 날부터(DI-19)"
+            if due < c.due_date else "")
     cutoff = parse_date(o["di_new_law_cutoff"])
     if regime == "auto" and c.due_date >= cutoff:
+        if late:
+            return due + timedelta(days=1), "퇴직 후 14일 경과(제36조·제37조 제1항)" + late
         return c.due_date + timedelta(days=1), "개정 제37조 제1항 제2호 정기지급일 경과(DI-03, 불명확)"
 
     end = inp.last_working_day
@@ -461,16 +486,17 @@ def _lsa20_start(c: Claim, inp: InterestInput, o: dict, regime: str, trace: list
         return None, "재직(복직) 중 구법 적용분(DI-03, 2014다28305)"
     if inp.end_cause == "redismissal" and not o["di_redismissal_20"]:
         return None, "재해고로 종료 — 20% 미적용 옵션(서울고법 2021나2031970)"
-    start = max(end + timedelta(days=15), c.due_date + timedelta(days=1))
     if end + timedelta(days=15) < LSA20_EFFECTIVE:
         return None, "퇴직일이 2005. 7. 1. 전(DI-01)"
-    return start, "근로관계 종료 후 14일 경과(DI-03, 하급심 다수)"
+    # 지급기일(DI-19)이 마지막 근무일 + 14일을 넘지 않으므로 정기지급일과 관계없이 그 다음 날부터
+    return end + timedelta(days=15), "근로관계 종료 후 14일 경과(DI-03, 하급심 다수)" + late
 
 
 def _schedule(c: Claim, inp: InterestInput, o: dict, regime: str, trace: list, warnings: list) -> list[Segment]:
     base_rate = Decimal("6") if inp.employer_merchant else Decimal("5")
     base_label = "상사 6%" if inp.employer_merchant else "민사 5%"
-    start = c.due_date + timedelta(days=1)
+    due = _due(c, inp)
+    start = due + timedelta(days=1)
     lsa_start, lsa_why = _lsa20_start(c, inp, o, regime, trace, warnings)
     excl_end = _exclusion_end(inp, o, warnings)
     sok_start = inp.service_date + timedelta(days=1) if inp.service_date else None
@@ -511,6 +537,9 @@ def _schedule(c: Claim, inp: InterestInput, o: dict, regime: str, trace: list, w
             segs[-1].end = e
         else:
             segs.append(Segment(s, e, r, rule, label))
+    if due < c.due_date:
+        trace.append(Trace("DI-19", f"{c.label} 지급기일", _fmt(due),
+                           f"정기지급일 {_fmt(c.due_date)}이 마지막 근무일 + 14일(제36조)보다 늦음"))
     trace.append(Trace("DI-03" if not c.settlement else "DI-02", f"{c.label} 20% 판단", lsa_why))
     return segs
 
@@ -597,12 +626,14 @@ def _accrue(c: Claim, segs: list[Segment], until: date, pays: list[Payment], o: 
 
 def _limitation(c: Claim, inp: InterestInput, o: dict) -> tuple[LimitationRow, date | None]:
     """(시효 표시 행, 초일 산입으로 본 더 이른 만료일 또는 None) — DI-15."""
-    start = _settle_trigger(c, inp) if c.settlement else c.due_date
+    start = _settle_trigger(c, inp) if c.settlement else _due(c, inp)
     expiry = _add_years(start, 3)
     if o["di_limitation_weekend_shift"]:
         while expiry.weekday() >= 5:
             expiry += timedelta(days=1)
     early, note = None, ""
+    if not c.settlement and start < c.due_date:
+        note = f"정기지급일 {_fmt(c.due_date)}이 제36조 기한보다 늦어 기한 {_fmt(start)}을 기산일로 봄(DI-19)"
     if c.settlement:
         # 지급사유 발생일(퇴직 다음 날)은 0시에 시작 — 초일 산입(민법 제157조 단서)이면 '기산일 + 3년 − 1일'(연차 AL-15)
         alt = _period_end(start, 36)
@@ -623,7 +654,7 @@ def _run(claims: list[Claim], inp: InterestInput, o: dict, regime: str, trace, w
             continue
         segs = _schedule(c, inp, o, regime, trace, warnings)
         sch = ClaimSchedule(c, segs, order_text=_order_text(c, segs))
-        if inp.calc_until and inp.calc_until > c.due_date:
+        if inp.calc_until and inp.calc_until > _due(c, inp):
             pays = [p for p in inp.payments if p.claim == c.label]
             sch.interest_total = _accrue(c, segs, inp.calc_until, pays, o, rows, warnings)
             total += sch.interest_total
