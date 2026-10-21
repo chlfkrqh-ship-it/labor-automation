@@ -66,7 +66,8 @@ def main() -> None:
             choices = "; ".join(f"`{k}` {v}" for k, v in spec.choices.items()) if spec.choices else spec.description
             lines.append(f"| `{key}` | {default} | {spec.rule} | {choices.replace('|', '/')} |")
     out = ROOT / "노동금액-계산기준.md"
-    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # 저장소는 작업본도 LF 로 둔다(.gitattributes eol=lf). newline 을 주지 않으면 Windows 에서 CRLF 로 써진다
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
     print(f"저장: {out}")
 
 
