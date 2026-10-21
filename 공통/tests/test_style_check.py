@@ -238,6 +238,20 @@ class StyleRuleTests(unittest.TestCase):
         self.assertEqual(result['violations'], [])
         self.assertEqual(result['appendix_paragraphs'], 2)
 
+    def test_model_ratios_are_measured(self):
+        """본보기와 견주는 두 값(2026. 10. 21.): 연결어로 연 문단의 비율, 200자 넘는 문장의 비율. 제목 줄은 세지 않는다."""
+        long = '원고는 ' + '가' * 210 + '라고 주장합니다.'
+        result = self.check('(1) 원고의 주장은 이유 없습니다.', '그러나, 원고의 주장은 이유 없습니다.', '원고는 입사하였습니다.', long)
+        m = result['measured']
+        self.assertEqual(m['connector_open_ratio'], 33.3)
+        self.assertEqual(m['over200_ratio'], 33.3)
+        rules = [n['rule'] for n in result['notes']]
+        self.assertIn('문단 첫머리 연결어가 본보기보다 적음', rules)
+        self.assertIn('200자 넘는 문장이 본보기보다 많음', rules)
+        result = self.check('그러나, 원고의 주장은 이유 없습니다.', '이처럼 원고는 입사하였습니다.')
+        self.assertEqual(result['measured']['connector_open_ratio'], 100.0)
+        self.assertNotIn('문단 첫머리 연결어가 본보기보다 적음', [n['rule'] for n in result['notes']])
+
     def test_quotes_in_headings_are_violations(self):
         """소제목에는 따옴표를 쓰지 않는다(SKILL.md 금지 사항 16, 2026. 10. 21. 박준선 항소이유서 담당자 지시)."""
         rule = '소제목 따옴표'

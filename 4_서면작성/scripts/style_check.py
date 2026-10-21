@@ -98,6 +98,10 @@ RULE_LINE = re.compile(r'^\s*-{3,}\s*$')
 # references/문체-용례.md '실측치' (변호사 최종본 111문단 150문장)
 REFERENCE = {'sentence_chars_mean': 97, 'sentence_chars_median': 89,
              'one_sentence_ratio': 82}
+# 본보기 서면(한전 태양광 준비서면(3), 2026. 10. 20. 판, references/문체-용례.md '본보기 실측치')을 이 스크립트로 잰 값이다.
+# 문장 끝이 있는 본문 문단(제목·캡션·입증방법 줄 제외) 가운데 연결어(POINTER)로 연 문단의 비율과, 문장 가운데 200자 넘는 문장의 비율.
+# 2026. 10. 21. 박준선 항소이유서 담당자("최근 태양광 22명 사건 준비서면(3)이 딱 모범임", "아무래도 본보기 형식이 지침에 반영이 안되었나보네").
+MODEL = {'connector_open_ratio': 71, 'over200_ratio': 4.2}
 
 
 def prose(text):
@@ -271,6 +275,24 @@ def check(path: Path):
                                                         REFERENCE['sentence_chars_mean']),
                       'text': '문장을 나누지 말고 한 문단에 논지가 몇 개 들어갔는지 본다'})
 
+    # 본보기와 견주는 두 값(MODEL). 제목·캡션·입증방법 줄처럼 문장 끝이 없는 문단은 세지 않는다.
+    prose_paras = [FOOTNOTE.sub('', t).strip() for _, t, body in blocks if body]
+    prose_paras = [t for t in prose_paras if t and not HEADING_LINE.match(t) and SENTENCE.search(prose(t))]
+    opened = sum(1 for t in prose_paras if t.startswith(POINTER))
+    sents = [s for t in prose_paras for s in split_sentences(prose(t))]
+    long_sents = [s for s in sents if len(s) > 200]
+    measured['connector_open_ratio'] = round(opened / len(prose_paras) * 100, 1) if prose_paras else 0
+    measured['over200_ratio'] = round(len(long_sents) / len(sents) * 100, 1) if sents else 0
+    measured['model'] = MODEL
+    if prose_paras and measured['connector_open_ratio'] < MODEL['connector_open_ratio'] - 15:
+        notes.append({'rule': '문단 첫머리 연결어가 본보기보다 적음', 'line': '-',
+                      'detail': '%.0f%% (본보기 %.0f%%)' % (measured['connector_open_ratio'], MODEL['connector_open_ratio']),
+                      'text': '앞 문단과의 관계를 드러내는 말로 여는지 문단마다 본다(SKILL.md 문단·문장 이음)'})
+    if sents and measured['over200_ratio'] > MODEL['over200_ratio'] * 2:
+        notes.append({'rule': '200자 넘는 문장이 본보기보다 많음', 'line': '-',
+                      'detail': '%d개 %.1f%% (본보기 %.1f%%)' % (len(long_sents), measured['over200_ratio'], MODEL['over200_ratio']),
+                      'text': '판례 소개·열거 문장에서 결론과 근거, 법리와 적용을 나눌 수 있는지 본다(references/문체-용례.md 본보기)'})
+
     return {
         'file': path.as_posix(),
         'paragraphs': len(body_text),
@@ -309,6 +331,9 @@ def main():
           % (m['sentence_chars_mean'], ref['sentence_chars_mean'],
              m['sentence_chars_median'], ref['sentence_chars_median'],
              m['one_sentence_ratio'], ref['one_sentence_ratio']))
+    print('  연결어로 여는 문단 %4.0f%% (본보기 %.0f%%)   200자 넘는 문장 %4.1f%% (본보기 %.1f%%)'
+          % (m['connector_open_ratio'], m['model']['connector_open_ratio'],
+             m['over200_ratio'], m['model']['over200_ratio']))
     print('위반 %d건 / 참고 %d건\n' % (result['violation_count'], result['note_count']))
     for row in result['violations']:
         print('  [위반] %-18s %5s행  %s' % (row['rule'], row['line'], row['detail']))
