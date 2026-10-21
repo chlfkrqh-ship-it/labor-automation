@@ -238,6 +238,24 @@ class StyleRuleTests(unittest.TestCase):
         self.assertEqual(result['violations'], [])
         self.assertEqual(result['appendix_paragraphs'], 2)
 
+    def test_quotes_in_headings_are_violations(self):
+        """소제목에는 따옴표를 쓰지 않는다(SKILL.md 금지 사항 16, 2026. 10. 21. 박준선 항소이유서 담당자 지시)."""
+        rule = '소제목 따옴표'
+        for heading in ("(4) '유실물 관리체계의 형해화'는 근거가 없습니다.",
+                        "나) 원고들이 관여한 행위는 상시 계속하는 '직무'에 해당하지 않습니다.",
+                        '가. 원고가 말한 "가장 엄중한 처분"은 해임입니다.',
+                        '1. ‘파면’ 기준의 부당성'):
+            with self.subTest(heading=heading):
+                self.assertEqual(len(self.found(self.check(heading), rule)), 1)
+        for text in ('(4) 이 사건 비위로 유실물 관리체계가 무너질 위험이 생겼다고 볼 근거가 없습니다.',
+                     "징계위원회는 '가장 엄중한 처분이 필요하다'는 이유로 해임을 의결하였습니다(갑 제4호증 10면).",
+                     '[갑 제4호증 징계처분사유설명서]'):
+            with self.subTest(text=text):
+                self.assertEqual(self.found(self.check(text), rule), [])
+        # 보완 메모(구분선 아래)의 번호 줄은 보지 않는다
+        result = self.check('원고는 입사하였습니다.', '---', "1. '파면' 표기 확인")
+        self.assertEqual(self.found(result, rule), [])
+
 
 class DocxHeadingTests(unittest.TestCase):
     """docx 의 번호 매기기 제목은 실측에서 빠지되 앞 문단의 증거 인용 맥락을 끊는다(md 의 제목 줄과 같게).
@@ -267,6 +285,21 @@ class DocxHeadingTests(unittest.TestCase):
     def test_without_heading_the_note_remains(self):
         result = self.check(with_heading=False)
         self.assertEqual(len([n for n in result['notes'] if n['rule'] == self.RULE]), 1)
+
+    def test_quote_in_heading_style_is_violation(self):
+        """번호 매기기 제목 스타일의 따옴표만 잡고, 본문과 '기타번호매기기'(입증방법 등)의 따옴표는 그대로 둔다(2026. 10. 21.)."""
+        from docx.enum.style import WD_STYLE_TYPE
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / '따옴표.docx'
+            document = docx.Document()
+            heading = document.styles.add_style('(1) 번호매기기', WD_STYLE_TYPE.PARAGRAPH)
+            other = document.styles.add_style('기타번호매기기', WD_STYLE_TYPE.PARAGRAPH)
+            document.add_paragraph("원고 징계위원회는 '파면'을 상정한 사실이 없습니다.", style=heading)
+            document.add_paragraph("을나 제14호증 '횡령' 관련 언론 보도", style=other)
+            document.add_paragraph("징계위원회는 '가장 엄중한 처분'이라고 하였습니다(갑 제4호증).")
+            document.save(path)
+            result = style_check.check(path)
+        self.assertEqual([v['detail'] for v in result['violations'] if v['rule'] == '소제목 따옴표'], ["'"])
 
 
 if __name__ == '__main__':

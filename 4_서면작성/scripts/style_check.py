@@ -68,6 +68,11 @@ OUTLINE = re.compile(r'^[가-하]\.\s')
 # 목차 제목 줄('가. …', '(1) …', '(3) 소결')은 평가 문단이 아니다. 증거를 인용한 문단 뒤에 다음 소제목이 오는 것은
 # 정해진 모양이다(2026. 10. 3. 한영대 재심청구서에 (n) 소제목을 넣으며 고침).
 HEADING = re.compile(r'^(?:[가-하]\.|\(\d{1,2}\)|\([가-하]\))\s\S.{0,88}$')
+# 소제목(목차 제목)에는 따옴표를 쓰지 않고 본문 문장처럼 뜻을 풀어 쓴다(SKILL.md 금지 사항 16). 따옴표로 떼어 세운 제목은
+# AI 가 쓴 티가 난다(2026. 10. 21. 박준선 항소이유서 담당자 지시). md 는 아래 번호로 시작하는 90자 이내의 줄을,
+# docx 는 번호 매기기 제목 스타일 문단을 본다(heading_texts).
+HEADING_LINE = re.compile(r'^(?:\d{1,2}\.|[가-하]\.|\(\d{1,2}\)|\([가-하]\)|\d{1,2}\)|[가-하]\))\s\S.{0,88}$')
+QUOTE = re.compile('[\'"‘’“”]')
 # 증거 인용으로 끝나는 사실 문단 뒤에는 지시 접속어로 시작하는 평가 문단이 온다.
 # 호증 표기는 공통/scripts/system.py 의 정의를 쓴다('갑 제2, 3호증' 같은 병기 포함).
 CITED = re.compile(r'(?:\([^()]*?(?:' + _system.EVIDENCE_NUMBER + r')[^()]*\)'
@@ -157,6 +162,19 @@ def paragraphs(path: Path):
     return result
 
 
+def heading_texts(path: Path, blocks):
+    """목차 제목 문단의 (행번호, 글). docx 는 번호 매기기 제목 스타일 문단('기타번호매기기'는 입증방법 등에 쓰여 뺀다),
+    md 는 보완 메모 위의 HEADING_LINE 줄이다. 행번호는 paragraphs() 와 같게 센다."""
+    if path.suffix.lower() == '.docx':
+        import docx
+        return [(i + 1, p.text.strip())
+                for i, p in enumerate(docx.Document(str(path)).paragraphs)
+                if p.text.strip() and not p.style.name.startswith('기타')
+                and (p.style.name.startswith(('Heading', '제목')) or re.search(r'번호\s*매기기$', p.style.name))]
+    return [(line, text) for line, text, body in blocks
+            if body and HEADING_LINE.match(FOOTNOTE.sub('', text).strip())]
+
+
 def cover_texts(path: Path):
     """표지와 서명 블록까지 포함한 문단별 글자. 본문 실측에는 쓰지 않는다.
 
@@ -221,6 +239,11 @@ def check(path: Path):
             add(notes, '괄호 안 내부 소괄호', line, text,
                 NESTED.search(own)[0][:40])
         previous_cited = bool(CITED.search(own.strip())) and not CAPTION.match(own.strip())
+
+    for line, text in heading_texts(path, blocks):
+        hit = QUOTE.search(text)
+        if hit:
+            add(violations, '소제목 따옴표', line, text, hit[0])
 
     # 제출처가 노동위원회인 서면에는 '소송대리인'을 쓰지 않는다(4_서면작성/CLAUDE.md 2-2절).
     # 노동위원회에는 공인노무사도 대리인으로 선임되기 때문이다.
