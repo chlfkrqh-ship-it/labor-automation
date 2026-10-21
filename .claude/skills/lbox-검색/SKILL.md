@@ -940,9 +940,9 @@ lboxCiteRank(Object.entries(보관).map(([url, text]) => ({url, text})), 판례.
 
 ## 9. 판결 전문 PDF 내려받기
 
-의뢰인에게 별첨으로 보낼 판결 전문이나 "판례를 내려받아 달라"는 요청을 받으면 **묻거나 다른 길을 시험하지 않고 아래 방식으로 곧바로 받는다**(2026. 10. 2. 담당자 지시). 20건이 2분 안에 끝난다. 서면의 최종 검토에서 본문 인용 판결을 원본과 맞댈 때(`공통/자체검토.md` 4-1절 4.)도 이 방식으로 받되, 그때는 담당자가 내려받기를 시킨 것이 아니므로 받기 전에 건수를 들어 한 줄로 묻고, 받은 PDF 는 `라운드N/참고자료/인용판결_PDF/` 에 푼다.
+의뢰인에게 별첨으로 보낼 판결 전문이나 "판례를 내려받아 달라"는 요청을 받으면 **묻거나 다른 길을 시험하지 않고 아래 방식으로 곧바로 받는다**(2026. 10. 2. 담당자 지시). 20건이 2분 안에 끝난다. 서면·검토의견의 최종 검토에서 본문 인용 판결을 원본과 맞댈 때(`공통/자체검토.md` 4-1절 4.)도 이 방식으로 받되, 그때는 담당자가 내려받기를 시킨 것이 아니므로 받기 전에 건수를 들어 한 줄로 묻고, 받은 PDF 는 `라운드N/참고자료/인용판결_PDF/`(검토의견은 `{사건 폴더}/작업/인용판결_PDF/`)에 푼다.
 
-- **외부 엣지(Claude in Chrome)에서 한다.** 인앱 브라우저는 내려받을 때마다 Windows 저장 창이 떠서 쓸 수 없다(인앱 브라우저의 보관함에 있는 판결 글 묶음만 사용자에게 저장을 부탁하여 인앱에서 받는다. 아래 '보관함의 판결 글 묶음'). PC에 수신용 서버를 띄우는 방법은 보안 검사에서 거부되므로 시도하지 않는다. 엣지의 LBOX 로그인(`GET .../highlights` 200)을 먼저 본다. 엣지로 보내는 목록의 한글(법원명·저장할 이름)은 퍼센트 인코딩한 글자로 적고 페이지 안에서 `decodeURIComponent` 로 푼다(코드에 적은 한글이 깨져 도착할 수 있다. `공통/브라우저.md` '외부 엣지 브라우저의 주의점'. 2026. 10. 21. 이렇게 13건을 모두 받았다).
+- **외부 엣지(Claude in Chrome)에서 한다.** 엣지의 LBOX 로그인이 풀렸거나(조회 401) 담당자가 원격이라 엣지에서 로그인할 수 없으면, 인앱 브라우저에서 받아 아래 '인앱 브라우저에서 받기'대로 저장 창 없이 옮긴다(로그인은 담당자 몫이고 비밀번호를 대신 넣지 않는다). **인앱 브라우저의 내려받기는 쓰지 않는다.** 전에는 내려받을 때마다 Windows 저장 창이 떴고, 2026. 10. 22. 에는 저장 창도 파일도 없이 `blob:https://lbox.kr/…` 제목의 Claude 창만 떴다. PC에 수신용 서버를 띄우는 방법은 보안 검사에서 거부되므로 시도하지 않는다. 엣지의 LBOX 로그인(`GET .../highlights` 200)을 먼저 본다. 엣지로 보내는 목록의 한글(법원명·저장할 이름)은 퍼센트 인코딩한 글자로 적고 페이지 안에서 `decodeURIComponent` 로 푼다(코드에 적은 한글이 깨져 도착할 수 있다. `공통/브라우저.md` '외부 엣지 브라우저의 주의점'. 2026. 10. 21. 이렇게 13건을 모두 받았다).
 - **판결마다 화면을 열어 '더보기 → 다운로드'를 누르지 않는다.** 한 건에 2~3분이 걸린다. 2026. 10. 2. 그렇게 21건을 받다가 6분에 3건밖에 못 받아 담당자가 직접 받겠다고 하였다. 백그라운드 작업에 한 건씩 맡기지도 않는다.
 - 조종 탭(`https://lbox.kr/robots.txt`)에 3항 첫 블록과 아래 블록을 붙여 넣고 `lboxPdfZip`을 부른다. LBOX 화면의 다운로드 단추가 보내는 것과 같은 요청(`POST /gw/research/api/v3/precedents/{법원명}-{사건번호}/pdf`)을 판결마다 4초 간격으로 보내 PDF를 받고, 브라우저 안에서 압축파일 하나로 묶어 **한 번만** 내려받는다. 파일마다 따로 내려받으면 엣지가 여러 파일 다운로드 허용을 묻는다.
 - 요청 본문이 `{}`이면 하이라이트 없는 판결문이 온다(화면에서 '하이라이트 포함 — 전체'를 끈 것과 크기가 같았다). 의뢰인에게 보내는 것은 하이라이트 없는 판으로 받는다.
@@ -973,12 +973,13 @@ function lboxZip(files) {                 // files: [{name, data: Uint8Array}]. 
 }
 
 // 목록: [[LBOX id, 저장할 이름], …]. 1분 넘게 걸리므로 기다리지 않고 걸어 둔 뒤 lboxPdfZip.마지막 을 본다
-async function lboxPdfZip(목록, 파일이름 = 'lbox_pdf.zip') {
+async function lboxPdfZip(목록, 파일이름 = 'lbox_pdf.zip', 내려받기 = true) {   // 인앱 브라우저에서는 내려받기 false(아래 '인앱 브라우저에서 받기')
   lboxGuard();
   const 쓰임 = lboxUsage();
   if (쓰임.최근1시간 + 목록.length > 쓰임.시간당 || 쓰임.최근24시간 + 목록.length > 쓰임.하루)
     throw new Error(`본문 한도 초과(받을 ${목록.length}건 · 최근 1시간 ${쓰임.최근1시간}/${쓰임.시간당} · 24시간 ${쓰임.최근24시간}/${쓰임.하루}). 받지 않고 사용자에게 알린다`);
   const 결과 = [], 파일들 = [];
+  lboxPdfZip.파일들 = 파일들;            // 받은 PDF. 마지막 에 넣지 않는다(마지막 을 볼 때 바이트가 통째로 나온다)
   lboxPdfZip.마지막 = {끝: false, 결과, 받은: 0};
   for (const [id, name] of 목록) {
     try {
@@ -1004,7 +1005,7 @@ async function lboxPdfZip(목록, 파일이름 = 'lbox_pdf.zip') {
       파일들.push({name, data}); 결과.push([id, 'ok', data.length]);
     } catch (e) { 결과.push([id, '오류 ' + e.message]); if (e.message.includes('LBOX 요청 멈춤')) break; }
   }
-  if (파일들.length) {                   // 한 번만 내려받는다
+  if (파일들.length && 내려받기) {        // 한 번만 내려받는다
     const a = document.createElement('a');
     a.href = URL.createObjectURL(lboxZip(파일들)); a.download = 파일이름;
     document.body.appendChild(a); a.click(); a.remove();
@@ -1014,7 +1015,7 @@ async function lboxPdfZip(목록, 파일이름 = 'lbox_pdf.zip') {
 
 // 보관함에 있는 본문을 글자 파일 묶음 하나로 내려받는다(사용자가 판결 글 묶음을 달라고 한 때에만 쓴다). LBOX 에 요청을 보내지 않는다
 // 목록: [[주소, 저장할 이름], …]. 주소는 lboxText 에 넘긴 것과 같은 것(rows 의 url)이다
-async function lboxTextZip(목록, 파일이름 = 'lbox_text.zip') {
+async function lboxTextZip(목록, 파일이름 = 'lbox_text.zip', 내려받기 = true) {   // 인앱 브라우저에서는 내려받기 false 로 부르고 lboxBlobB64(lboxTextZip.묶음, 파일이름) 으로 넘긴다
   const 이름들 = 목록.map(x => x[1]);
   if (이름들.some(n => !n) || new Set(이름들).size !== 이름들.length) throw new Error('저장할 이름이 비었거나 겹친다. 풀 때 서로 덮어쓰므로 판결마다 다른 이름을 준다');
   const 글 = await lboxCache(true, 목록.map(x => x[0])), enc = new TextEncoder(), 파일들 = [], 결과 = [];
@@ -1026,14 +1027,31 @@ async function lboxTextZip(목록, 파일이름 = 'lbox_text.zip') {
     결과.push([url, t.includes('이유 문단에서 옮긴 것이다') ? '이유 문단만(주문·당사자 표시 없음)' : t.length < 300 ? '글자 수가 적음(머리만 보관되었을 수 있다)' : 'ok', t.length]);
   }
   if (파일들.length) {                   // 한 번만 내려받는다
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(lboxZip(파일들)); a.download = 파일이름;
-    document.body.appendChild(a); a.click(); a.remove();
+    lboxTextZip.묶음 = lboxZip(파일들);
+    if (내려받기) {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(lboxTextZip.묶음); a.download = 파일이름;
+      document.body.appendChild(a); a.click(); a.remove();
+    }
   }
   return lboxTextZip.마지막 = {결과, 담은: 파일들.length};
 }
 
-Object.assign(globalThis, {lboxZip, lboxPdfZip, lboxTextZip});
+// 인앱 브라우저에서 받기: 받은 파일을 'LBOXB64|이름|바이트 수|base64|END' 한 줄로 돌려준다. LBOX 에 요청을 보내지 않는다
+// 결과가 길면 도구가 세션의 tool-results 폴더에 저장하고 경로를 알려 준다. 공통/scripts/lbox_b64_save.py 가 그 파일에서 되살린다
+function lboxB64Line(name, u) {
+  let s = '';
+  for (let k = 0; k < u.length; k += 0x8000) s += String.fromCharCode.apply(null, u.subarray(k, k + 0x8000));
+  return 'LBOXB64|' + encodeURIComponent(name) + '|' + u.length + '|' + btoa(s) + '|END';
+}
+function lboxPdfB64(...번호) {            // lboxPdfZip.파일들 의 번호(0부터). 작은 PDF 는 여럿을 한 번에 넘긴다
+  return 번호.map(i => lboxB64Line(lboxPdfZip.파일들[i].name, lboxPdfZip.파일들[i].data)).join('\n');
+}
+async function lboxBlobB64(blob, name) {  // 묶음(Blob) 하나를 넘긴다(보관함의 판결 글 묶음 등)
+  return lboxB64Line(name, new Uint8Array(await blob.arrayBuffer()));
+}
+
+Object.assign(globalThis, {lboxZip, lboxPdfZip, lboxTextZip, lboxB64Line, lboxPdfB64, lboxBlobB64});
 ```
 
 ```js
@@ -1053,11 +1071,21 @@ lboxPdfZip([
 4. **받는 범위.** 각주에 사건번호가 적힌 판결은 모두 받는다. 확정 표시에 적은 상급심도 넣고, 각주가 '원심 인정사실'을 들었으면 그 원심 판결도 넣는다. 행정해석·결정례는 이 요청으로 받아지지 않으므로 뺀 사실을 답변에 적는다.
 5. LBOX가 만든 PDF에는 면마다 옅은 LBOX 표시가 들어 있다.
 
+### 인앱 브라우저에서 받기(저장 창 없이)
+
+엣지의 LBOX 로그인이 풀렸거나 담당자가 원격이어서 엣지를 쓸 수 없을 때 한다. 담당자에게 저장을 부탁하지 않아도 되어 원격 중에도 된다. 2026. 10. 22. HPS 업종 분류 검토의견서의 마지막 자체 검토에서 판결 5건(3.9MB, 가장 큰 것 2.29MB)을 이렇게 옮겼고, 되살린 파일의 바이트 수가 LBOX 응답과 모두 같았다(담당자 "인앱브라우저는 될텐데?", "지금 리모트컨트롤이라 잘 다운받아보시길").
+
+1. 인앱 조종 탭(`https://lbox.kr/robots.txt`)에 3항 첫 블록과 위 블록을 붙여 넣고 로그인 조회(`GET …/highlights` 200), `lboxUsage()`, 멈춤 표시를 본다.
+2. `lboxPdfZip(목록, 'x.zip', false).catch(e => (lboxPdfZip.오류 = e.message))` 를 걸어 둔다. 사용량 기록·간격·멈춤 표시는 엣지에서 받을 때와 같고, 내려받지 않고 `lboxPdfZip.파일들` 에 붙잡아 둔다. 끝나면 `lboxPdfZip.마지막` 의 결과(건마다 ok·status 404 등)를 본다.
+3. `lboxPdfB64(0)`, `lboxPdfB64(1, 2)` 처럼 번호를 넘겨 PDF 를 base64 글로 돌려받는다. 결과가 도구의 한도를 넘으면 대화에 들어오지 않고 세션의 `tool-results/…javascript_tool-….txt` 에 저장되었다는 안내와 경로가 온다(7만 5천 자에서 저장됨, 305만 자까지 한 번에 됨). 작은 PDF 하나만 넘기면 대화에 그대로 들어올 수 있으므로 작은 것은 여럿을 묶어 넘긴다.
+4. `python -B 공통/scripts/lbox_b64_save.py "{결과 파일}" … --out "{저장할 폴더}" --remove` 로 되살린다. 조각에 적힌 바이트 수와 크기, PDF 머리와 면수, 첫 두 면의 사건번호를 확인하고, 모두 맞으면 결과 파일을 지운다. 어긋나면 지우지 않고 그 판결만 다시 넘긴다(LBOX 에 다시 요청하지 않는다. 받은 PDF 는 페이지에 남아 있다).
+5. 인앱에서 `lboxPdfZip` 을 내려받기 기본값으로 부르지 않는다. 잘못 불러 `blob:` 창이 떴으면 그 창은 담당자가 닫으면 되고, 같은 목록을 다시 부르지 않는다(`lboxPdfZip.파일들` 이 남아 있으면 3번으로 넘어간다).
+
 ### 보관함의 판결 글 묶음
 
 **인용 대조에는 쓰지 않는다.** 인용 대조에서는 보관함의 글을 내려받지 않고 조종 탭에서 그대로 확인한다(`공통/자체검토.md` 4절). 아래는 사용자가 판결 글 묶음을 달라고 한 때에만 쓴다.
 
-**이미 받은 본문을 다시 요청하지 않고 보관함에서 꺼내 글자 파일 묶음으로 내린다.** 위 블록의 `lboxTextZip`이 그 일을 하고, LBOX에는 요청을 보내지 않으므로 본문 한도와 무관하다. 보관함은 브라우저마다 따로이므로 **본문을 받은 그 브라우저의 조종 탭에서 부르고, 내려받으려고 브라우저를 옮기지 않는다.** 엣지에서 받았으면 저장 창 없이 다운로드 폴더에 내려온다. 인앱 브라우저에서 받았으면 Windows 저장 창이 뜨므로 부르기 전에 사용자에게 그 창에서 다운로드 폴더에 저장해 달라고 알리고, 저장된 것을 확인한 뒤 이어 간다(인앱에서 이 묶음을 저장해 본 적은 아직 없다). 저장되지 않으면 받지 못한 판결을 사용자에게 알린다. **인앱 보관함에 온전히 있는 본문(결과가 ok 인 것)을 엣지로 옮겨 `lboxPdfZip`으로 다시 받지 않는다.** `lboxTextZip`을 엣지에서 부르면 전 건이 '보관함에 없음'으로 나오고, 엣지에는 인앱의 사용량 기록과 멈춤 표시가 보이지 않는다(3항 '계정 보호'). 본문을 받은 브라우저가 지금 PC에 없으면(다른 PC에서 받은 경우) 법제처에서 받는 판결을 먼저 쓰고, 남은 판결을 이 PC의 브라우저에서 PDF로 받을지는 사용자에게 묻는다. 다른 PC에서 쓴 본문 수는 이쪽 사용량 기록에 없으므로 묻지 않고 받지 않는다.
+**이미 받은 본문을 다시 요청하지 않고 보관함에서 꺼내 글자 파일 묶음으로 내린다.** 위 블록의 `lboxTextZip`이 그 일을 하고, LBOX에는 요청을 보내지 않으므로 본문 한도와 무관하다. 보관함은 브라우저마다 따로이므로 **본문을 받은 그 브라우저의 조종 탭에서 부르고, 내려받으려고 브라우저를 옮기지 않는다.** 엣지에서 받았으면 저장 창 없이 다운로드 폴더에 내려온다. 인앱 브라우저에서 받았으면 내려받기가 되지 않으므로 `lboxTextZip(목록, 이름, false)` 로 부른 뒤 `await lboxBlobB64(lboxTextZip.묶음, 이름)` 으로 넘기고 위 '인앱 브라우저에서 받기' 4번대로 되살려 푼다(2026. 10. 22. 인앱 내려받기가 저장 창도 파일도 없이 `blob:` 창만 띄운 뒤로 바꿈). **인앱 보관함에 온전히 있는 본문(결과가 ok 인 것)을 엣지로 옮겨 `lboxPdfZip`으로 다시 받지 않는다.** `lboxTextZip`을 엣지에서 부르면 전 건이 '보관함에 없음'으로 나오고, 엣지에는 인앱의 사용량 기록과 멈춤 표시가 보이지 않는다(3항 '계정 보호'). 본문을 받은 브라우저가 지금 PC에 없으면(다른 PC에서 받은 경우) 법제처에서 받는 판결을 먼저 쓰고, 남은 판결을 이 PC의 브라우저에서 PDF로 받을지는 사용자에게 묻는다. 다른 PC에서 쓴 본문 수는 이쪽 사용량 기록에 없으므로 묻지 않고 받지 않는다.
 
 ```js
 await lboxTextZip([
