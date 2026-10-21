@@ -4,7 +4,7 @@
 """
 
 import sys
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -299,19 +299,18 @@ def test_퇴직_뒤_정기지급일_임금은_구법_종료_옵션과_무관하�
         assert {s.rate for s in r.schedules[1].segments} == {Decimal(5)}
 
 
-def test_청산금품_지급기일이_14일_기한보다_늦어도_기한_다음날부터():
-    # 합의로 지급기일을 연장해도 지연이자 의무는 면하지 못한다(고용노동부 근로기준과-3981) — 마지막 근무일 2024. 1. 31.,
-    # 지급기일을 3. 10.로 적은 퇴직금도 2. 15.부터 20%, 20%를 배제하면 6%도 2. 15.부터
-    c = Claim("퇴직금", "퇴직금", Decimal(1_000_000), date(2024, 3, 10), settlement=True)
-    worker = {"last_working_day": "2024-01-31"}
+def test_청산금품_지급기일을_합의로_연장했으면_연장된_지급기일_다음날부터():
+    # 연장 합의가 인정된 판결은 모두 연장된 지급기일 다음 날부터(서울남부지법 2023나60986 확정 — 2021. 3. 1. 퇴직, 5. 31.까지
+    # 연장 → 6. 1.부터 20%). 마지막 근무일 2021. 2. 28.로 넣고 지급기일을 연장된 날로 적으면 20%·6% 모두 그 다음 날부터
+    c = Claim("퇴직금", "퇴직금", Decimal(1_000_000), date(2021, 5, 31), settlement=True)
+    worker = {"last_working_day": "2021-02-28"}
     r = calculate_interest(load_interest({"employer_merchant": True}, worker), opts(di_exclusion_end="none"), [c])
-    assert [(s.start, s.rate) for s in r.schedules[0].segments] == [(date(2024, 2, 15), Decimal(20))]
-    assert any("근로기준과-3981" in w and "2024. 2. 14." in w for w in r.warnings)
-    assert any(t.rule == "DI-02" and t.value == "2024. 2. 14." for t in r.trace)
-    r = calculate_interest(load_interest({"employer_merchant": True, "first_instance_judgment_date": "2025-05-20"}, worker),
+    assert [(s.start, s.rate) for s in r.schedules[0].segments] == [(date(2021, 6, 1), Decimal(20))]
+    assert any("합의로 연장한 지급기일" in w and "2020가단270" in w and "2021. 3. 15." in w for w in r.warnings)
+    r = calculate_interest(load_interest({"employer_merchant": True, "first_instance_judgment_date": "2023-11-23"}, worker),
                            opts(), [c])
-    assert [(s.start, s.rate) for s in r.schedules[0].segments] == [(date(2024, 2, 15), Decimal(6)), (date(2025, 5, 21), Decimal(20))]
-    assert r.limitation[0].start == date(2024, 2, 1)          # 시효 기산일은 지급사유 발생일 그대로(DI-15)
+    assert [(s.start, s.rate) for s in r.schedules[0].segments] == [(date(2021, 6, 1), Decimal(6)), (date(2023, 11, 24), Decimal(20))]
+    assert r.limitation[0].start == date(2021, 3, 1)          # 시효 기산일은 지급사유 발생일 그대로(DI-15)
 
 
 def test_청구_이율_상한():
@@ -357,14 +356,15 @@ def test_G2_창원_2018가합52160_변제일까지_변제전_원금_이자():
 
 
 def test_지급기일_이전_변제는_원금에서_바로_뺀다():
+    # 14일째 2024. 1. 14.이 일요일이라 1. 15.(월)까지(민법 제161조) — 그날까지의 변제는 이자 기산일(1. 16.) 전
     c = Claim("퇴직금 차액", "퇴직금 차액", Decimal(10_000_000), date(2024, 1, 14), settlement=True)
-    for paid_on in ("2024-01-10", "2024-01-14"):
+    for paid_on in ("2024-01-10", "2024-01-14", "2024-01-15"):
         inp = load_interest({"employer_merchant": True, "calc_until": "2024-12-31", "last_working_day": "2023-12-31",
                              "payments": [{"date": paid_on, "amount": 6_000_000, "claim": "퇴직금 차액"}]})
         r = calculate_interest(inp, opts(di_exclusion_end="none"), [c])
         [row] = r.rows
-        assert (row.start, row.principal) == (date(2024, 1, 15), 4_000_000)
-        assert r.total == 769_398                        # 4,000,000 × 20% × 352/366 버림
+        assert (row.start, row.principal) == (date(2024, 1, 16), 4_000_000)
+        assert r.total == 4_000_000 * 20 * 351 // (100 * 366)     # 4,000,000 × 20% × 351/366 버림
         assert any("이자 기산일" in w and "원금에서 바로 뺐습니다" in w for w in r.warnings)
 
 
@@ -421,11 +421,63 @@ def test_청산금품_시효는_초일산입_날짜도_비고에_적고_이른_�
     assert calculate_interest(load_interest({"employer_merchant": True}, worker), opts(), [wage]).limitation[0].note == ""
 
 
-def test_14일째가_일요일이어도_다음날부터_20():
-    # 성남지원 2021가합413433: 지급기한 2022. 7. 10.(일) → 20%는 7. 11.부터
+def test_14일째가_토일_공휴일이면_민법_161조로_다음_평일까지_늘린다():
+    # 판결의 퇴직일(= 마지막 근무일)과 기산일: 서울북부지법 2019나40407(14일째 토·일 → 7. 16.(월)), 의정부지법 2020가합52832
+    # (1. 1.), 부산지법 서부지원 2022가단4913(일요일 + 개천절), 광주지법 2024나84218(토·일 + 한글날)
+    for last, start in ((date(2018, 6, 30), date(2018, 7, 17)), (date(2019, 12, 18), date(2020, 1, 3)),
+                        (date(2022, 9, 18), date(2022, 10, 5)), (date(2023, 9, 23), date(2023, 10, 11))):
+        c = Claim("퇴직금", "퇴직금", Decimal(1_000_000), last + timedelta(days=14), settlement=True)
+        inp = load_interest({"employer_merchant": True}, {"last_working_day": last.isoformat()})
+        r = calculate_interest(inp, opts(di_exclusion_end="none"), [c])
+        assert (r.schedules[0].segments[0].start, r.schedules[0].segments[0].rate) == (start, Decimal(20)), last
+        assert any("민법 제161조" in t.value for t in r.trace if t.label.endswith("20% 판단")), last
+    # 퇴직 전 정기지급일 임금(구법): 대전지법 2023나222268 — 2022. 7. 24.부터 14일째 8. 7.(일) → 8. 8. 만료, 8. 9.부터 20%
+    wage = Claim("임금", "2022. 6.분", Decimal(1_000_000), date(2022, 7, 10))
+    inp = load_interest({"employer_merchant": False}, {"last_working_day": "2022-07-24"})
+    segs = calculate_interest(inp, opts(di_exclusion_end="none"), [wage]).schedules[0].segments
+    assert [(s.start, s.rate) for s in segs] == [(date(2022, 7, 11), Decimal(5)), (date(2022, 8, 9), Decimal(20))]
+    # 성남지원 2021가합413433(무변론 — 제161조를 다루지 않음)처럼 14일째 다음 날부터 보려면 옵션을 끈다
     c = Claim("임금", "최종월 임금", Decimal(2_800_000), date(2022, 7, 10), settlement=True)
-    segs = calculate_interest(_inp(), opts(di_exclusion_end="none"), [c]).schedules[0].segments
-    assert (segs[0].start, segs[0].rate) == (date(2022, 7, 11), Decimal(20))
+    assert calculate_interest(_inp(), opts(di_exclusion_end="none"), [c]).schedules[0].segments[0].start == date(2022, 7, 12)
+    off = opts(di_exclusion_end="none", di_deadline_holiday_shift=False)
+    assert calculate_interest(_inp(), off, [c]).schedules[0].segments[0].start == date(2022, 7, 11)
+
+
+def test_공휴일_달력과_대체공휴일():
+    from engine.labor.interest import _is_rest
+
+    none = frozenset()
+    # 양력 공휴일의 연혁: 제헌절(2007년까지·2026. 5. 11.부터), 한글날(2012. 12. 28. 개정부터), 노동절(2026. 5. 1.부터)
+    assert _is_rest(date(2007, 7, 17), none) and not _is_rest(date(2008, 7, 17), none) and _is_rest(date(2026, 7, 17), none)
+    assert not _is_rest(date(2012, 10, 9), none) and _is_rest(date(2013, 10, 9), none)
+    assert not _is_rest(date(2025, 5, 1), none) and _is_rest(date(2026, 5, 1), none)
+    # 대체공휴일(제3조): 어린이날 일요일(2019 — 2013년 규정, 2024), 광복절·개천절 일요일과 한글날 토요일(2021), 한글날
+    # 일요일(2022), 3·1절 토요일(2025)·일요일(2026), 기독탄신일 토요일(2027 — 2023년 개정), 노동절 토요일(2027 — 2026년 개정)
+    for d in (date(2019, 5, 6), date(2024, 5, 6), date(2021, 8, 16), date(2021, 10, 4), date(2021, 10, 11),
+              date(2022, 10, 10), date(2025, 3, 3), date(2026, 3, 2), date(2027, 12, 27), date(2027, 5, 3)):
+        assert _is_rest(d, none), d
+    # 2021. 8. 4. 전에는 국경일 대체공휴일이 없었다(2020. 10. 3. 토요일 개천절)
+    assert not _is_rest(date(2020, 10, 5), none)
+    # 사람이 넣은 공휴일과 겹치면 그다음 비공휴일 — 2025. 5. 5. 어린이날·부처님 오신 날 → 5. 6.
+    assert not _is_rest(date(2025, 5, 6), none) and _is_rest(date(2025, 5, 6), frozenset({date(2025, 5, 5)}))
+
+
+def test_엔진이_모르는_공휴일은_interest_holidays_로():
+    # 14일째 2024. 2. 9.(금, 설 연휴) — 엔진은 설을 모르므로 2. 10.부터, 설 전날과 대체공휴일(2. 12.)을 넣으면 2. 13.까지 늘려 2. 14.부터
+    c = Claim("퇴직금", "퇴직금", Decimal(1_000_000), date(2024, 2, 9), settlement=True)
+    worker = {"last_working_day": "2024-01-26"}
+    r = calculate_interest(load_interest({"employer_merchant": True}, worker), opts(di_exclusion_end="none"), [c])
+    assert r.schedules[0].segments[0].start == date(2024, 2, 10)
+    assert any("interest.holidays" in w and "2024. 2. 9.(금)" in w for w in r.warnings)
+    inp = load_interest({"employer_merchant": True, "holidays": ["2024-02-09", "2024-02-12"]}, worker)
+    r = calculate_interest(inp, opts(di_exclusion_end="none"), [c])
+    assert r.schedules[0].segments[0].start == date(2024, 2, 14)
+    assert any("2024. 2. 9.(금) → 2024. 2. 13.(화)" in w for w in r.warnings)
+    with pytest.raises(LaborError, match="holidays"):
+        load_interest({"employer_merchant": True, "holidays": "2024-02-09"})
+    # 시효 만료일도 같다 — 2023. 3. 2. 지급분은 2026. 3. 2.(3·1절 대체공휴일) → 3. 3.
+    wage = Claim("임금", "2023. 2.분", Decimal(1_000_000), date(2023, 3, 2))
+    assert calculate_interest(_inp(), opts(), [wage]).limitation[0].expiry == date(2026, 3, 3)
 
 
 def test_근로기준법_적용제외_사업은_20_없음():
@@ -484,7 +536,7 @@ def test_제외기간_20_중단과_원천세_원금감액():
                                        "kind": "withholding"}]})
     r = calculate_interest(inp, opts(di_exclusion_end="none"), [_retire_claim()])
     assert [(s.start, s.end, s.rate) for s in r.schedules[0].segments] == [
-        (date(2024, 1, 15), date(2024, 2, 29), Decimal(20)),
+        (date(2024, 1, 16), date(2024, 2, 29), Decimal(20)),     # 14일째 1. 14.(일) → 1. 15.(월)까지(민법 제161조)
         (date(2024, 3, 1), date(2024, 6, 30), Decimal(6)),       # 제18조 제1호 등 — 소송촉진법도 미적용(DI-08)
         (date(2024, 7, 1), None, Decimal(20))]
     # 원천세는 납부일(9. 1.)부터 줄어든 원금(DI-13)
@@ -495,8 +547,13 @@ def test_제외기간_20_중단과_원천세_원금감액():
 
 
 def test_끝수_합계후_버림과_분모_actual_365():
+    # 끝수·분모만 보는 시험이라 14일째(2024. 1. 14. 일요일)를 늘리지 않는다(di_deadline_holiday_shift=false)
     inp = load_interest({"employer_merchant": True, "calc_until": "2024-12-31", "last_working_day": "2023-12-31",
                          "exclusions": [{"start": "2024-03-01", "end": "2024-06-30"}]})
+
+    def opts(**kw):
+        return dict(DEFAULTS, di_deadline_holiday_shift=False, **kw)
+
     per = calculate_interest(inp, opts(di_exclusion_end="none"), [_retire_claim()])
     tot = calculate_interest(inp, opts(di_exclusion_end="none", di_rounding="floor_total"), [_retire_claim()])
     # 20% 46/366(2. 29. 포함) + 6% 122/365 + 20% 184/365

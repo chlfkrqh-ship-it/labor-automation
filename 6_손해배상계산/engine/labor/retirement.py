@@ -64,7 +64,8 @@ RS-06 [법령·하급심] 제9조 제1항 "그 지급사유가 발생한 날부�
       2023가단118024 2022. 11. 4.). `rs_due_date=day_after_retirement` 이면 due_date = L(지연손해금 L + 1일부터 —
       부산지방법원 2020나52559 "원고의 퇴직일 다음 날인 2019. 9. 11.부터"). 이율 구간은 지연손해금 모듈: 원금 항목에
       지급사유 발생일(`trigger_date` = L + 1일)을 붙여 넘기므로, day_after_retirement 여도 연 20%는 L + 15일부터이고
-      L + 1일부터 L + 14일까지는 6%/5%다(DI-02). 시효 기산일도 L + 1일(DI-15).
+      L + 1일부터 L + 14일까지는 6%/5%다(DI-02). 시효 기산일도 L + 1일(DI-15). L + 14일이 토·일요일·공휴일이면 지연손해금
+      모듈이 민법 제161조로 기한을 다음 평일까지 늘려 그 다음 날부터 셈한다(DI-02 — 이 모듈의 due_date 는 L + 14일 그대로).
 RS-07 [판례확립(청구 형태)·행정해석(산식)] DC형은 부담금 차액을 계정에 납입하라는 이행청구(대법원 2023. 4. 13. 선고
       2018다283926 "정당한 부담금과 이미 납입된 부담금의 차액을 퇴직연금제도 계정에 납입할 것을 청구하는 이행의 소"),
       소급분 산식은 행정해석(퇴직연금복지과-526·926). 이 모듈은 법정 퇴직금만 계산하고 `dc_plan: true` 면 warning 만.
@@ -642,11 +643,13 @@ def calculate_retirement(inp: RetirementInput, opts: dict, **deps) -> Retirement
     trace.append(Trace("RS-05", "퇴직금 차액", f"{sev} − {final_paid} = {diff}"))
     if o["rs_due_date"] == "statutory_14":
         due = L + timedelta(days=14)
-        due_note = f"지급사유 발생일 {_fmt(L + timedelta(days=1))}부터 14일이 되는 {_fmt(due)}(제9조 제1항); 지연손해금 {_fmt(due + timedelta(days=1))}부터"
+        due_note = (f"지급사유 발생일 {_fmt(L + timedelta(days=1))}부터 14일이 되는 {_fmt(due)}(제9조 제1항); 지연손해금 "
+                    f"{_fmt(due + timedelta(days=1))}부터(그날이 토·일요일·공휴일이면 민법 제161조로 늘어남 — 지연손해금 DI-02)")
     else:
         due = L
         due_note = (f"퇴직일 다음 날 {_fmt(L + timedelta(days=1))}부터 지연손해금(부산지방법원 2020나52559), "
-                    f"연 20%는 {_fmt(L + timedelta(days=15))}부터(지급사유 발생일부터 14일 경과 — 지연손해금 DI-02)")
+                    f"연 20%는 {_fmt(L + timedelta(days=15))}부터(지급사유 발생일부터 14일 경과, 14일째가 토·일요일·공휴일이면 "
+                    "민법 제161조로 늘어남 — 지연손해금 DI-02)")
     trace.append(Trace("RS-06", "지급기일", _fmt(due), due_note + " — 이율 구간은 지연손해금 모듈"))
     if diff > 0:
         claim = Claim("퇴직금 차액", f"퇴직금 차액({_fmt(start)}~{_fmt(L)})", diff, due, True, note=due_note)
