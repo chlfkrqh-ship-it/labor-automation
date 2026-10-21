@@ -18,18 +18,21 @@ DI-02 [법령·판례확립] 퇴직·사망 청산 금품(Claim.settlement=True)
       다음 날부터(민법 제161조 미적용, 판결 확인). 지급사유 발생일은 원금 항목의 `trigger_date` 속성이 있으면 그 날,
       없으면 마지막 근무일(`last_working_day`) 다음 날, 둘 다 없으면 due_date − 13일로 본다(warning).
       due_date 가 마지막 근무일 + 14일보다 이르면(퇴직금 `rs_due_date=day_after_retirement`, 퇴직 직후 지급기일의
-      연차수당 등) due_date 다음 날부터 6%/5%, 20%는 마지막 근무일 + 15일부터.
+      연차수당 등) due_date 다음 날부터 6%/5%, 20%는 마지막 근무일 + 15일부터. due_date 가 그보다 늦으면(합의 연장이나
+      입력 잘못) 기한을 지급기일로 보고 6%/5%·20% 모두 기한 다음 날부터 셈한다(warning) — 고용노동부 2005. 7. 28.
+      근로기준과-3981 "당사자 간의 합의에 의하여 지급기일을 연장했을 경우 동 조의 위반은 면할 수 있으나, … 당사자간의
+      합의만으로 동법 제36조의2에 따른 지연이자 지급의무를 면할 수 있는 것은 아님"(제36조의2는 지금의 제37조).
 DI-03 [법령/판례확립/불명확] 재직 중 정기임금(Claim.settlement=False)
       - 개정 제37조 제1항 제2호(법률 제20520호, 2025. 10. 23. 시행): 제43조 제2항 정기지급일까지
         미지급이면 다음 날부터 20%. 부칙 제2조 "시행 이후 … 지연이자 지급사유가 발생하는 경우부터".
         경계 정기지급일 2025. 10. 22.(고용노동부 Q&A '10. 23. 0시부터 지급 지연') — 판결 확인 없음,
-        `di_new_law_cutoff`. 퇴직 후에도 정기지급일 기준 유지(제37조 제2항).
+        `di_new_law_cutoff`. 퇴직 후에도 정기지급일 기준 유지(제37조 제2항). 정기지급일이 퇴직 뒤인 임금은 DI-19.
       - 구법 적용분: 재직(복직) 중이면 20% 없음 — 대법원 2014. 8. 26. 선고 2014다28305(원심 판단
         수긍) "해고가 무효로 되어 갑이 복직한 이상 이에 해당한다고 보기 어렵고 … 상법이 정한 연 6%".
         근로관계가 끝났으면(정년·계약만료·사직·재해고) 마지막 근무일 + 15일부터 20%(하급심 다수:
-        서울고법 2017나28919 확정, 대전고법 2019나13573 심리불속행). 정기지급일이 그보다 늦은 임금도 같다(DI-19).
-        재해고로 끝난 경우는 확정 고법 판결이 갈린다(대전고법 2019나13573 적용 / 서울고법 2021나2031970 부정)
-        → `di_redismissal_20`.
+        서울고법 2017나28919 확정, 대전고법 2019나13573 심리불속행). 재해고로 끝난 경우는 확정 고법 판결이 갈린다
+        (대전고법 2019나13573 적용 / 서울고법 2021나2031970 부정) → `di_redismissal_20`. 두 옵션은 퇴직 전에 정기지급일이
+        온 임금에만 쓴다 — 정기지급일이 퇴직 뒤인 임금은 DI-19.
       - 개정법 도래분을 해고기간 임금에 적용하는 1심은 세 갈래(서울북부 2026가합20004 지급일 다음날부터
         20%·배제 없음 / 서울중앙 2025가합10452 선고일까지 배제 / 창원 2025구합1375 선고 후 12%).
         기본 계산에 20%를 쓰고 '대안: 개정법 미적용' 결과를 함께 낸다.
@@ -80,14 +83,18 @@ DI-17 [법령] 청구 범위 제한: `di_claimed_rate_cap`(연 %) — 원고가 
 DI-19 [법령·하급심/불명확] 근로관계가 끝난 뒤(last_working_day) 정기지급일이 오는 원금(Claim.settlement=False — 마지막 달
       임금·시간외수당 차액 등). 근로기준법 적용 제외 사업(DI-18)은 제36조가 없으므로 정기지급일 그대로 둔다. 이 경우를 정면으로
       다룬 판결은 찾지 못하였다(2026. 10. 21. LBOX 20개·법제처 6개 검색어).
-      - 20%: 정기지급일이 마지막 근무일 + 14일보다 늦어도 그 다음 날(마지막 근무일 + 15일)부터. 구법·개정법 모두 같고, 구법분은
-        di_ended_old_law_20·di_redismissal_20 을 따른다. 제36조 "근로자가 사망 또는 퇴직한 경우에는 그 지급 사유가 발생한 때부터
-        14일 이내에 임금, 보상금, 그 밖의 모든 금품을 지급하여야 한다", 구 제37조 제1항 "제36조에 따라 지급하여야 하는 임금 …의
-        전부 또는 일부를 그 지급 사유가 발생한 날부터 14일 이내에 지급하지 아니한 경우 그 다음 날부터", 개정 제37조 제1항 제1호
-        "지급 사유가 발생한 날부터 14일이 되는 날". 정기지급일이 퇴직 뒤라 개정 제2항("지연이자를 지급할 의무가 발생한 이후
-        근로자가 사망 또는 퇴직한 경우")에 들지 않는다. 퇴직자의 미지급 임금·수당·퇴직금에 퇴직일부터 14일이 지난 다음 날부터
-        20%를 붙인 판결이 많고(대법원 2024다230084·2023다279983·2022다200249 자판, 서울남부지법 2019가합109927 — 익월 20일
-        지급 사업장), 정기지급일 다음 날부터 붙인 판결은 찾지 못하였다.
+      - 20%: 마지막 근무일 + 15일부터(정기지급일이 마지막 근무일 + 14일보다 늦어도 같다). 제36조 "근로자가 사망 또는 퇴직한
+        경우에는 그 지급 사유가 발생한 때부터 14일 이내에 임금, 보상금, 그 밖의 모든 금품을 지급하여야 한다", 구 제37조 제1항
+        "제36조에 따라 지급하여야 하는 임금 …의 전부 또는 일부를 그 지급 사유가 발생한 날부터 14일 이내에 지급하지 아니한 경우
+        그 다음 날부터", 개정 제37조 제1항 제1호 "지급 사유가 발생한 날부터 14일이 되는 날". 퇴직자의 미지급 임금·수당·퇴직금에
+        퇴직일부터 14일이 지난 다음 날부터 20%를 붙인 판결이 많고(대법원 2024다230084·2023다279983·2022다200249 자판,
+        서울남부지법 2019가합109927 — 익월 20일 지급 사업장), 정기지급일 다음 날부터 붙인 판결은 찾지 못하였다.
+        제36조 금품이므로 구법·개정법이 같고, 퇴직 전에 정기지급일이 온 임금에 쓰는 di_ended_old_law_20·di_redismissal_20 과도
+        무관하다. 개정법 도래분도 정기지급일이 퇴직 뒤 14일 안에 오면 제1항 제2호(그 지급일 다음 날)가 아니라 제1호로 본다 —
+        개정 제2항("지연이자를 지급할 의무가 발생한 이후 근로자가 사망 또는 퇴직한 경우")이 퇴직 전에 지연이자 의무가 생긴 임금만
+        정기지급일 기준으로 남겨 두었고, 제36조가 퇴직 뒤 14일을 청산 기간으로 주기 때문이다. 연차 모듈 AL-14 의 같은 행(청산
+        금품, DI-02)과 같다. 제1항 본문 '어느 하나에 해당하는'을 들어 이른 날(지급일 다음 날)로 보는 해석도 있을 수 있으나
+        판결·고용노동부 해석은 찾지 못하였다.
       - 6%/5% 시작 `di_post_retirement_due`: statutory_14(기본) = min(정기지급일, 마지막 근무일 + 14일) 다음 날부터 — 부산고법
         2018나57479 "임금 및 퇴직금에 대한 지연손해금은 퇴직일로부터 14일이 경과한 다음 날부터 발생한다고 봄이 타당하다"(원고의
         '퇴직 다음 날~14일째 5%' 청구를 받아들이지 않음. 지연이율은 대법원 2022다200249 로 파기자판되었고 자판도 같은 기산일),
@@ -125,7 +132,7 @@ OPTIONS: dict[str, OptionSpec] = {s.key: s for s in [
     }),
     OptionSpec("di_ended_old_law_20", True,
                "구법 도래분(di_regime 이 auto 가 아니면 개정법 도래분 포함)이 퇴직(근로관계 종료) 때까지 미지급이면 "
-               "마지막 근무일 + 15일부터 20%", "DI-03"),
+               "마지막 근무일 + 15일부터 20%(정기지급일이 퇴직 뒤인 임금은 이 옵션과 무관하게 20% — DI-19)", "DI-03"),
     OptionSpec("di_redismissal_20", True,
                "재해고로 근로관계가 끝난 경우에도 위 20% 적용(대전고법 2019나13573 / 반대 서울고법 2021나2031970)",
                "DI-03"),
@@ -159,7 +166,7 @@ OPTIONS: dict[str, OptionSpec] = {s.key: s for s in [
 
 RULES: dict[str, tuple[str, str]] = {
     "DI-01": ("이율표(5%/6%/20%/소송촉진법 25→20→15→12%), 20%는 지급사유 발생일 2005. 7. 1. 이후분", "법령"),
-    "DI-02": ("퇴직 청산 금품은 마지막 근무일 + 15일부터 20%", "법령·판례확립"),
+    "DI-02": ("퇴직 청산 금품은 마지막 근무일 + 15일부터 20%(지급기일을 그보다 늦게 적거나 합의로 연장해도)", "법령·판례확립"),
     "DI-03": ("재직 중 임금: 개정법 도래분 지급일 다음 날부터 20%, 구법분은 복직이면 없음·종료면 종료일+15일부터", "법령/판례확립/불명확"),
     "DI-04": ("20% 적용 제외 사유는 존속기간만", "법령"),
     "DI-05": ("다툼 적절 시 사실심 선고일까지 20% 배제", "판례확립"),
@@ -477,7 +484,10 @@ def _after_retirement(c: Claim, inp: InterestInput) -> bool:
 
 
 def _due36(c: Claim, inp: InterestInput) -> date:
-    """20%·시효에 쓰는 지급기일(DI-19) — 정기지급일이 제36조 기한(마지막 근무일 + 14일)보다 늦으면 그 기한."""
+    """20%·시효에 쓰는 지급기일 — 제36조 기한보다 늦으면 그 기한. 청산 금품은 지급사유 발생일부터 14일이 되는 날(DI-02),
+    퇴직 뒤 정기지급일이 오는 임금은 마지막 근무일 + 14일(DI-19). 근로기준법 적용 제외 사업은 due_date 그대로."""
+    if c.settlement and not inp.lsa_not_applicable:
+        return min(c.due_date, _settle_trigger(c, inp) + timedelta(days=13))
     if not _after_retirement(c, inp):
         return c.due_date
     return min(c.due_date, inp.last_working_day + timedelta(days=14))
@@ -500,30 +510,35 @@ def _lsa20_start(c: Claim, inp: InterestInput, o: dict, regime: str, trace: list
         if trigger < LSA20_EFFECTIVE:
             return None, "지급사유 발생일이 2005. 7. 1. 전(DI-01)"
         deadline = trigger + timedelta(days=13)          # 지급사유 발생일부터 14일이 되는 날
-        start = max(c.due_date, deadline) + timedelta(days=1)
         why = "퇴직 청산 금품 14일 경과(DI-02)"
         if c.due_date < deadline:
             why += f" — 지급기일 {_fmt(c.due_date)} 다음 날부터 {_fmt(deadline)}까지는 20% 아님"
-        return start, why
-
-    due = _due36(c, inp)
-    late = (f" — 정기지급일 {_fmt(c.due_date)}이 제36조 기한 {_fmt(due)}보다 늦어 기한 다음 날부터(DI-19)"
-            if due < c.due_date else "")
-    cutoff = parse_date(o["di_new_law_cutoff"])
-    if regime == "auto" and c.due_date >= cutoff:
-        if late:
-            return due + timedelta(days=1), "퇴직 후 14일 경과(제36조·제37조 제1항)" + late
-        return c.due_date + timedelta(days=1), "개정 제37조 제1항 제2호 정기지급일 경과(DI-03, 불명확)"
+        elif c.due_date > deadline:
+            why += f" — 지급기일 {_fmt(c.due_date)}이 기한보다 늦어도 기한 다음 날부터(근로기준과-3981)"
+        return deadline + timedelta(days=1), why
 
     end = inp.last_working_day
+    if _after_retirement(c, inp):
+        # 정기지급일이 퇴직 뒤인 임금은 제36조 금품 — 구법·개정법(제1항 제1호) 모두 마지막 근무일 + 15일부터(DI-19)
+        if end + timedelta(days=1) < LSA20_EFFECTIVE:
+            return None, "지급사유 발생일이 2005. 7. 1. 전(DI-01)"
+        due = _due36(c, inp)
+        why = f"퇴직 뒤 정기지급일({_fmt(c.due_date)}) — 퇴직 후 14일 경과(제36조·제37조 제1항, DI-19)"
+        if due < c.due_date:
+            why += f" — 정기지급일이 제36조 기한 {_fmt(due)}보다 늦어 기한 다음 날부터"
+        return end + timedelta(days=15), why
+
+    cutoff = parse_date(o["di_new_law_cutoff"])
+    if regime == "auto" and c.due_date >= cutoff:
+        return c.due_date + timedelta(days=1), "개정 제37조 제1항 제2호 정기지급일 경과(DI-03, 불명확)"
+
     if end is None or not o["di_ended_old_law_20"]:
         return None, "재직(복직) 중 구법 적용분(DI-03, 2014다28305)"
     if inp.end_cause == "redismissal" and not o["di_redismissal_20"]:
         return None, "재해고로 종료 — 20% 미적용 옵션(서울고법 2021나2031970)"
     if end + timedelta(days=15) < LSA20_EFFECTIVE:
         return None, "퇴직일이 2005. 7. 1. 전(DI-01)"
-    # 지급기일(DI-19)이 마지막 근무일 + 14일을 넘지 않으므로 정기지급일과 관계없이 그 다음 날부터
-    return end + timedelta(days=15), "근로관계 종료 후 14일 경과(DI-03, 하급심 다수)" + late
+    return end + timedelta(days=15), "근로관계 종료 후 14일 경과(DI-03, 하급심 다수)"
 
 
 def _schedule(c: Claim, inp: InterestInput, o: dict, regime: str, trace: list, warnings: list) -> list[Segment]:
@@ -532,6 +547,7 @@ def _schedule(c: Claim, inp: InterestInput, o: dict, regime: str, trace: list, w
     due = _due(c, inp, o)
     start = due + timedelta(days=1)
     lsa_start, lsa_why = _lsa20_start(c, inp, o, regime, trace, warnings)
+    lsa_rule = "DI-02" if c.settlement else ("DI-19" if _after_retirement(c, inp) else "DI-03")
     excl_end = _exclusion_end(inp, o, warnings)
     sok_start = inp.service_date + timedelta(days=1) if inp.service_date else None
     cap = dec(o.get("di_claimed_rate_cap"))
@@ -554,7 +570,7 @@ def _schedule(c: Claim, inp: InterestInput, o: dict, regime: str, trace: list, w
         in_dispute = excl_end is not None and d <= excl_end
         in_other_excl = any(e.start <= d <= e.end for e in inp.exclusions)
         if lsa_start and d >= lsa_start and not in_dispute and not in_other_excl:
-            return LSA20, "근로기준법 20%", "DI-02" if c.settlement else "DI-03"
+            return LSA20, "근로기준법 20%", lsa_rule
         if sok_start and d >= sok_start and not in_dispute and (not in_other_excl or o["di_sokchok_in_exclusion"]):
             r = sokchok_rate(d, inp.first_instance_close_date)
             if r is not None:
@@ -572,13 +588,16 @@ def _schedule(c: Claim, inp: InterestInput, o: dict, regime: str, trace: list, w
         else:
             segs.append(Segment(s, e, r, rule, label))
     due36 = _due36(c, inp)
-    if due36 < c.due_date:
+    if due36 < c.due_date and c.settlement:
+        trace.append(Trace("DI-02", f"{c.label} 지급기일", _fmt(due36),
+                           f"지급기일 {_fmt(c.due_date)}이 지급사유 발생일부터 14일이 되는 날보다 늦음(근로기준과-3981)"))
+    elif due36 < c.due_date:
         trace.append(Trace("DI-19", f"{c.label} 지급기일", _fmt(due36),
                            f"정기지급일 {_fmt(c.due_date)}이 마지막 근무일 + 14일(제36조)보다 늦음"))
     if due < due36:
         trace.append(Trace("DI-19", f"{c.label} 6%/5% 시작", _fmt(start),
                            "퇴직 다음 날부터(di_post_retirement_due=day_after_retirement)"))
-    trace.append(Trace("DI-03" if not c.settlement else "DI-02", f"{c.label} 20% 판단", lsa_why))
+    trace.append(Trace(lsa_rule, f"{c.label} 20% 판단", lsa_why))
     return segs
 
 
@@ -732,6 +751,12 @@ def calculate_interest(inp: InterestInput, opts: dict, claims: list[Claim] | Non
             warnings.append(f"{c.label}: 해고예고수당이 연 20% 대상인지는 판결이 갈립니다"
                             "(원금에 넣어 20% — 대전지법 2018가합107477 / 12% — 성남지원 2023가단208164). "
                             "settlement 값으로 계산 방식을 정했는지 확인하세요.")
+        if c.settlement and c.amount > 0 and _due36(c, inp) < c.due_date:
+            warnings.append(f"{c.label}: 지급기일 {_fmt(c.due_date)}이 지급사유 발생일부터 14일이 되는 날 "
+                            f"{_fmt(_due36(c, inp))}보다 늦어 그 다음 날부터 지연손해금·20%를 셈하였습니다 — 고용노동부는 합의로 "
+                            "지급기일을 연장하였어도 지연이자 의무를 면하지 못한다고 봅니다(근로기준과-3981). 연장 합의가 있었고 20%가 "
+                            "배제되는 기간(DI-04·DI-05)이 있으면 그 기간의 6%/5% 시작일은 사람이 확인하고, 정기지급일이 있는 "
+                            "임금이면 settlement 를 false 로 넣으십시오(DI-19).")
     if inp.end_cause == "redismissal" and inp.last_working_day:
         warnings.append("재해고로 근로관계가 끝난 경우 구법 도래분 20% 적용은 확정 고법 판결이 갈립니다"
                         "(적용: 대전고법 2019나13573 / 부정: 서울고법 2021나2031970).")
@@ -746,7 +771,9 @@ def calculate_interest(inp: InterestInput, opts: dict, claims: list[Claim] | Non
 
     alternatives = {}
     cutoff = parse_date(o["di_new_law_cutoff"])
-    if regime == "auto" and any(not c.settlement and c.due_date >= cutoff for c in all_claims):
+    # 정기지급일이 퇴직 뒤인 임금은 제1항 제2호가 아니라 제1호(DI-19)라 대안과 경고가 필요 없다
+    if regime == "auto" and any(not c.settlement and c.due_date >= cutoff and not _after_retirement(c, inp)
+                                for c in all_claims):
         warnings.append("개정 근로기준법 제37조 제1항 제2호(2025. 10. 23. 시행)를 해고기간 등 다툼이 있는 임금에 적용하는 방식은 "
                         "1심 판결이 갈리고(서울북부 2026가합20004 / 서울중앙 2025가합10452 / 창원 2025구합1375) "
                         "고법·대법원 판단이 없습니다. '대안: 개정법 미적용' 결과를 함께 확인하세요.")

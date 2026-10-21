@@ -236,7 +236,8 @@ def test_정기지급일이_14일_기한_안이면_지급기일을_바꾸지_않
     lr = r.limitation[0]
     # 시효 기산일은 정기지급일 그대로, 퇴직 다음 날부터 센 이른 날만 비고에
     assert lr.start == date(2023, 11, 25) and "기산일로 봄" not in lr.note and "2026. 11. 13." in lr.note
-    assert not any(t.rule == "DI-19" for t in r.trace)
+    assert not any(t.label.endswith("지급기일") for t in r.trace)
+    assert any(t.rule == "DI-19" and t.label.endswith("20% 판단") for t in r.trace)
 
 
 def test_퇴직_다음날부터_6_5_옵션():
@@ -260,13 +261,57 @@ def test_개정법_도래분도_퇴직_뒤_정기지급일이_기한보다_늦�
     worker = {"last_working_day": "2025-12-31"}
     r = calculate_interest(load_interest({"employer_merchant": True}, worker), opts(di_exclusion_end="none"), [c])
     assert [(s.start, s.rate) for s in r.schedules[0].segments] == [(date(2026, 1, 15), Decimal(20))]
-    alt = r.alternatives["개정법 미적용"][1][0].segments
-    assert [(s.start, s.rate) for s in alt] == [(date(2026, 1, 15), Decimal(20))]
+    # 제1항 제2호를 쓰지 않으므로 '개정법 미적용' 대안과 제2호 경고가 없다
+    assert "개정법 미적용" not in r.alternatives and not any("2026가합20004" in w for w in r.warnings)
     # 근로기준법 적용 제외 사업(DI-18)은 제36조가 없어 정기지급일 그대로
     r = calculate_interest(load_interest({"employer_merchant": True, "lsa_not_applicable": True}, worker),
                            opts(di_exclusion_end="none"), [c])
     assert [(s.start, s.rate) for s in r.schedules[0].segments] == [(date(2026, 1, 26), Decimal(6))]
     assert (r.limitation[0].start, r.limitation[0].note) == (date(2026, 1, 25), "")
+
+
+def test_개정법_도래분도_퇴직_뒤_14일_안의_정기지급일은_연차_청산행과_같게_14일_경과_다음날부터_20():
+    # 마지막 근무일 2025. 12. 31., 정기지급일 2026. 1. 10.(기한 1. 14. 안) — 제1항 제2호(1. 11.)가 아니라 제1호로 1. 15.부터 20%.
+    # 연차 모듈이 같은 경우를 청산 금품(지급기일 min(지급일, 퇴직 + 14일))으로 넘긴 행과 구간이 같다
+    worker = {"last_working_day": "2025-12-31"}
+    wage = Claim("시간외수당 차액", "2025. 12.분", Decimal(1_000_000), date(2026, 1, 10))
+    leave_row = Claim("연차휴가수당", "연차휴가수당", Decimal(1_000_000), date(2026, 1, 10), settlement=True)
+    r = calculate_interest(load_interest({"employer_merchant": True}, worker), opts(di_exclusion_end="none"), [wage, leave_row])
+    expected = [(date(2026, 1, 11), Decimal(6)), (date(2026, 1, 15), Decimal(20))]
+    assert [[(s.start, s.rate) for s in sch.segments] for sch in r.schedules] == [expected, expected]
+    assert "개정법 미적용" not in r.alternatives
+    # 퇴직 전 정기지급일 임금(제2항)은 그대로 지급일 다음 날부터 20%
+    before = Claim("시간외수당 차액", "2025. 11.분", Decimal(1_000_000), date(2025, 12, 10))
+    r = calculate_interest(load_interest({"employer_merchant": True}, worker), opts(di_exclusion_end="none"), [before])
+    assert [(s.start, s.rate) for s in r.schedules[0].segments] == [(date(2025, 12, 11), Decimal(20))]
+
+
+def test_퇴직_뒤_정기지급일_임금은_구법_종료_옵션과_무관하게_20():
+    # di_ended_old_law_20·di_redismissal_20 은 퇴직 전에 정기지급일이 온 임금에만 — 퇴직 뒤 정기지급일 임금은 제36조 금품(DI-19)
+    worker = {"last_working_day": "2023-11-13"}
+    late = Claim("시간외수당 차액", "2023. 11.분", Decimal(1_000_000), date(2023, 11, 30))
+    before = Claim("시간외수당 차액", "2023. 10.분", Decimal(1_000_000), date(2023, 10, 31))
+    for o, inp in ((opts(di_exclusion_end="none", di_ended_old_law_20=False), load_interest({"employer_merchant": False}, worker)),
+                   (opts(di_exclusion_end="none", di_redismissal_20=False),
+                    load_interest({"employer_merchant": False, "end_cause": "redismissal"}, worker))):
+        r = calculate_interest(inp, o, [late, before])
+        assert [(s.start, s.rate) for s in r.schedules[0].segments] == [(date(2023, 11, 28), Decimal(20))]
+        assert {s.rate for s in r.schedules[1].segments} == {Decimal(5)}
+
+
+def test_청산금품_지급기일이_14일_기한보다_늦어도_기한_다음날부터():
+    # 합의로 지급기일을 연장해도 지연이자 의무는 면하지 못한다(고용노동부 근로기준과-3981) — 마지막 근무일 2024. 1. 31.,
+    # 지급기일을 3. 10.로 적은 퇴직금도 2. 15.부터 20%, 20%를 배제하면 6%도 2. 15.부터
+    c = Claim("퇴직금", "퇴직금", Decimal(1_000_000), date(2024, 3, 10), settlement=True)
+    worker = {"last_working_day": "2024-01-31"}
+    r = calculate_interest(load_interest({"employer_merchant": True}, worker), opts(di_exclusion_end="none"), [c])
+    assert [(s.start, s.rate) for s in r.schedules[0].segments] == [(date(2024, 2, 15), Decimal(20))]
+    assert any("근로기준과-3981" in w and "2024. 2. 14." in w for w in r.warnings)
+    assert any(t.rule == "DI-02" and t.value == "2024. 2. 14." for t in r.trace)
+    r = calculate_interest(load_interest({"employer_merchant": True, "first_instance_judgment_date": "2025-05-20"}, worker),
+                           opts(), [c])
+    assert [(s.start, s.rate) for s in r.schedules[0].segments] == [(date(2024, 2, 15), Decimal(6)), (date(2025, 5, 21), Decimal(20))]
+    assert r.limitation[0].start == date(2024, 2, 1)          # 시효 기산일은 지급사유 발생일 그대로(DI-15)
 
 
 def test_청구_이율_상한():
