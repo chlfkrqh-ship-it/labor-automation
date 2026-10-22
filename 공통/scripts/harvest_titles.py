@@ -41,6 +41,9 @@ SQUEEZE = re.compile(r"[\s·ㆍ•]+")
 LINES = re.compile(r"(?:^|\s)(\d{1,5}) \| ([^|\n]{1,40}) \| (\d{2}-\d{2}-\d{2}) \| ([^|\s]{3,80}) \| ([^|\n]{1,300}?)(?= \| |\n|$)")
 HEAD = "id\t법원\t선고일\t사건\t출처\t스니펫"
 SKIP_DIRS = ("지침발췌", "인용판결_PDF", "전환작업", "빌드")
+# 결정례 스니펫에 폼피드(0x0c) 같은 글자가 섞여 온다. 파이썬 splitlines 는 이것도 줄바꿈으로 보아 TSV 줄을 쪼개므로
+# 저장할 때 칸에서 공백으로 바꾸고, 읽을 때는 \n 으로만 나눈다(2026. 10. 22. 이승민 휴직 1차 목록 10줄)
+BREAKS = re.compile(r"[\x0b\x0c\x1c\x1d\x1e\x85  ]")
 
 
 def harvest_dir(seg):
@@ -96,7 +99,9 @@ def load_lbox_file(path):
     """LBOX 목록 줄: TSV(lbox-save), 덤프 묶음, lboxLines 출력 가운데 있는 것을 읽는다."""
     rows = []
     if path.endswith(".tsv"):
-        for ln in open(path, encoding="utf-8").read().splitlines()[1:]:
+        for ln in open(path, encoding="utf-8").read().split("\n")[1:]:
+            if not ln.strip():
+                continue
             c = (ln.split("\t") + [""] * 6)[:6]
             rows.append({"src": "LBOX", "id": c[0], "org": c[1], "date": c[2], "title": c[3], "extra": c[5], "q": c[4]})
         return rows
@@ -244,7 +249,7 @@ def lbox_save(a):
                 print("건수 다름: 적힌 %d · 읽은 %d (%s)" % (n, len(rows), f))
                 bad += 1
             for c in rows:
-                c = (c + [""] * 6)[:6]
+                c = [BREAKS.sub(" ", x) for x in (c + [""] * 6)[:6]]
                 merged.setdefault(c[0], c)
     if not merged:
         sys.exit(1)
