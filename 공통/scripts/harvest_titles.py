@@ -1,22 +1,27 @@
 # -*- coding: utf-8 -*-
 """검색 때 받아 둔 법제처·LBOX 수확 목록에서 사안 고유어가 제목에 든 줄을 다시 뽑아, 대조표·원고·검색기록에 올라 있는지 본다.
 
-`/검토의견` 4-2단계(마지막 자체 검토)의 '수확 목록 제목 다시 훑기'에 쓴다. 유사 사례 표는 작성 세션이 고른 것만 담으므로,
-받아 두고도 표에 올리지 않은 판결·회시가 마지막 검토에서도 빠진다(2026. 10. 22. HPS 업종 분류 검토의견서에서 법제처 수확에
-있던 산업안전과-2077·산재예방지원과-829 가 처음 작성과 4-2단계에서 모두 빠졌다가 재검토에서 들어갔다).
-LBOX 에는 요청을 보내지 않는다. 사건 폴더 안의 파일만 읽는다.
+`/검토의견` 4-2단계(마지막 자체 검토)와 `/서면` 8-1단계 ⑧(적정성 점검)의 '수확 목록 제목 다시 훑기'에 쓴다. 유사 사례 표는
+작성 세션이 고른 것만 담으므로, 받아 두고도 표에 올리지 않은 판결·회시가 마지막 검토에서도 빠진다(2026. 10. 22. HPS 업종 분류
+검토의견서에서 법제처 수확에 있던 산업안전과-2077·산재예방지원과-829 가 처음 작성과 4-2단계에서 모두 빠졌다가 재검토에서 들어갔다).
+LBOX 에는 요청을 보내지 않는다. 넘긴 폴더 안의 파일만 읽는다.
 
-    python -B 공통/scripts/harvest_titles.py scan "{사건 폴더}" --낱말 발전소 정비 위탁 [--lbox "{파일}" …] [--out "{사건 폴더}/작업/수확목록_재확인.md"]
-    python -B 공통/scripts/harvest_titles.py lbox-save "{결과 파일}" [… ] --out "{사건 폴더}/작업/LBOX_목록.tsv"
+    python -B 공통/scripts/harvest_titles.py scan "{폴더}" --낱말 발전소 "발전+정비" [--lbox "{파일}" …] [--out "{폴더}/작업/수확목록_재확인.md"]
+    python -B 공통/scripts/harvest_titles.py lbox-save "{결과 파일}" [… ] --out "{폴더}/작업/LBOX_목록.tsv"
+
+  {폴더}는 검토의견이면 사건 폴더(`1_검토의견/사건/{의뢰인}_{검토내용}`), 서면이면 그 라운드 폴더(`4_서면작성/사건/{사건명}/라운드N`)이다.
 
 scan
-  - 법제처: 사건 폴더 아래 모든 `법제처_목록.json`(lawgo.py harvest 가 쓴 것)의 줄. 제목(사건명·안건명)에서 찾는다.
-  - LBOX: 사건 폴더 아래 `LBOX_목록.tsv`(lbox-save 가 쓴 것)와 --lbox 로 준 파일. --lbox 에는 lbox-save 의 결과 파일이나
+  - 법제처: 폴더 아래 모든 `법제처_목록.json`(lawgo.py harvest 가 쓴 것. `법제처_양정` 처럼 나눈 수확 폴더도)의 줄.
+    제목(사건명·안건명)에서 찾는다.
+  - LBOX: 폴더 아래 `LBOX_목록.tsv`(lbox-save 가 쓴 것)와 --lbox 로 준 파일. --lbox 에는 lbox-save 의 결과 파일이나
     `lboxLines` 출력이 남은 세션 결과 파일(tool-results 의 .txt, 세션 기록 .jsonl)을 줄 수 있다. 사건명과 스니펫에서 찾는다.
   - 낱말은 공백과 가운뎃점을 무시하고 찾는다('유지보수'로 '유지·보수'도 걸린다). '발전+정비'처럼 + 로 이으면 둘 다 든 줄만
     걸린다. '정비'·'위탁'처럼 다른 분야 제목(도시정비, 민간위탁)에도 흔한 낱말은 홀로 쓰지 말고 + 로 묶는다.
-  - 기록: 사건 폴더의 .md(법제처 수확 폴더·지침발췌·인용판결_PDF 아래는 뺀다)에 그 줄의 사건번호·문서번호가 있는지.
-  - 본문: 법제처 줄은 `법제처_본문_*.md`·`법제처/본문/*.md` 머리에 그 번호가 있는지. LBOX 줄은 알 수 없어 '—'.
+  - 기록: 폴더의 .md·.docx(원고·서면초안·대조표·검색기록·사건상태·제출본 등. 이름이 '법제처'로 시작하는 수확 폴더·파일과
+    지침발췌·인용판결_PDF·전환작업·빌드 아래는 뺀다)에 그 줄의 사건번호·문서번호가 있는지.
+  - 본문: 법제처 줄은 '법제처'로 시작하는 수확 폴더 안 .md(법제처_본문_*.md, 따로 받은 본문/) 머리에 그 번호가 있는지.
+    LBOX 줄은 알 수 없어 '—'.
   결과는 기록에 없는 줄부터 표로 낸다. 종료 코드는 늘 0 이다(판정은 사람이 한다).
 
 lbox-save
@@ -35,7 +40,12 @@ sys.stdout.reconfigure(encoding="utf-8")
 SQUEEZE = re.compile(r"[\s·ㆍ•]+")
 LINES = re.compile(r"(?:^|\s)(\d{1,5}) \| ([^|\n]{1,40}) \| (\d{2}-\d{2}-\d{2}) \| ([^|\s]{3,80}) \| ([^|\n]{1,300}?)(?= \| |\n|$)")
 HEAD = "id\t법원\t선고일\t사건\t출처\t스니펫"
-SKIP_DIRS = ("법제처", "지침발췌", "인용판결_PDF", "전환작업", "빌드")
+SKIP_DIRS = ("지침발췌", "인용판결_PDF", "전환작업", "빌드")
+
+
+def harvest_dir(seg):
+    """lawgo.py harvest 가 쓴 수확 폴더('법제처', '법제처_양정', '법제처_재검증' 등)."""
+    return seg.startswith("법제처")
 
 
 def sq(t):
@@ -131,19 +141,34 @@ def number_key(r):
     return k
 
 
+def docx_text(path):
+    import zipfile
+    try:
+        with zipfile.ZipFile(path) as z:
+            xml = "".join(z.read(n).decode("utf-8", "replace") for n in z.namelist()
+                          if n in ("word/document.xml", "word/footnotes.xml"))
+    except (zipfile.BadZipFile, OSError, KeyError):
+        return ""
+    return re.sub(r"<[^>]+>", "", xml)
+
+
 def record_text(case):
     parts = []
-    for f in glob.glob(os.path.join(case, "**", "*.md"), recursive=True):
+    for f in glob.glob(os.path.join(case, "**", "*.md"), recursive=True) + glob.glob(os.path.join(case, "**", "*.docx"), recursive=True):
         rel = os.path.relpath(f, case).replace("\\", "/")
-        if any(seg in SKIP_DIRS for seg in rel.split("/")[:-1]) or os.path.basename(f).startswith("수확목록_재확인"):
+        dirs, base = rel.split("/")[:-1], os.path.basename(f)
+        if any(seg in SKIP_DIRS or harvest_dir(seg) for seg in dirs) or base.startswith(("수확목록_재확인", "법제처_", "~$")):
             continue
-        parts.append(open(f, encoding="utf-8", errors="replace").read())
+        parts.append(docx_text(f) if f.endswith(".docx") else open(f, encoding="utf-8", errors="replace").read())
     return sq("\n".join(parts))
 
 
 def body_heads(case):
     heads = []
-    for f in glob.glob(os.path.join(case, "**", "법제처_본문_*.md"), recursive=True) + glob.glob(os.path.join(case, "**", "법제처", "본문", "*.md"), recursive=True):
+    for f in glob.glob(os.path.join(case, "**", "*.md"), recursive=True):
+        rel = os.path.relpath(f, case).replace("\\", "/")
+        if not any(harvest_dir(seg) for seg in rel.split("/")[:-1]):
+            continue
         for ln in open(f, encoding="utf-8", errors="replace"):
             if ln.startswith("## "):
                 heads.append(sq(ln))
@@ -193,7 +218,7 @@ def scan(a):
               sum(1 for r in miss if r["기록"] == "없음" and r["본문"] == "받음"), sum(1 for r in miss if r["기록"] == "번호 없음")),
            ""]
     if not lbox_files:
-        out += ["LBOX 목록 파일이 없다. 조종 탭에 모은 목록이 남아 있으면 `lboxUnread`로, 없으면 검색기록의 검색어로 다시 수확해 본다(`/검토의견` 4-2단계).", ""]
+        out += ["LBOX 목록 파일이 없다. 조종 탭에 모은 목록이 남아 있으면 `lboxUnread`로, 없으면 검색기록의 검색어로 다시 수확해 본다(`/검토의견` 4-2단계, `/서면` 8-1단계 ⑧).", ""]
     for title, part in (("기록에 없는 줄(본문을 읽고 반영하거나 유사 사례 표에 미반영 이유를 적는다)", miss),
                         ("기록에 있는 줄", [r for r in hits if r["기록"] == "있음"])):
         out += ["## %s" % title, "", "| 출처 | 사건번호·문서번호 | 일자 | 기관·법원 | 제목 | 걸린 낱말 | 기록 | 본문 |", "|---|---|---|---|---|---|---|---|"]
