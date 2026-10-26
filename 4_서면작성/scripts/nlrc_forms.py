@@ -33,12 +33,19 @@ git 에 올리지 않는다(.gitignore 가 hwp·hwpx 를 형식으로 막는다)
  - 지정서는 표 하나가 한 면을 채우고 직인 그림이 면에 고정되어 있다. 사건 글이 두 줄이 되면 표가 통째로
    다음 면으로 넘어가므로, 한 면을 넘으면 사건 문단의 장평을 5%씩 줄여 한 줄에 맞춘다.
  - 참석자 줄은 병합된 '당사자 지위' 칸이 함께 늘어나도록 가운데 줄 아래에 넣는다.
+
+참석자 명단의 제출자 도장(2026. 10. 26. 담당 노무사 "제출자 최락보인건 내 도장 저번에 보여준거 찍어주면 됨"):
+ - 지시표의 `참석자명단.도장` 에 적은 그림(투명 PNG)을 '(서명 또는 날인)' 위에 글 앞으로 찍는다. 사람의 도장이어서
+   OneDrive·git 에 두지 않고 PC마다 `%LOCALAPPDATA%\\노동사건자동화\\도장\\` 에 둔다. 비우면 찍지 않는다.
+ - 그림은 제출자 줄 위의 날짜 문단에 맨다(문단 기준 위치는 그 문단 위쪽으로 올라가지 못한다). PDF 로 내보내 그림과
+   '(서명 또는 날인)'의 자리를 재고 어긋난 만큼 옮기기를 되풀이한다(선임신고서 양식에 직인을 넣을 때와 같은 방법).
 """
 from __future__ import annotations
 
 import argparse
 import io
 import json
+import os
 import re
 import shutil
 import sys
@@ -60,6 +67,11 @@ HP = 'http://www.hancom.co.kr/hwpml/2011/paragraph'
 ATTENDEE_SIDE_TEXT = {'근로자': '[  ] 근 로 자', '노동조합': '[  ] 노동조합', '사용자': '[  ] 사 용 자'}
 FIRST_ATTENDEE_ROW = 7          # 양식에서 참석자 첫 줄의 칸 이름(C7·D7·E7)
 BLANK = '〔'
+# 제출자 개인 도장 그림. 사람의 도장이어서 OneDrive·git·사건 폴더에 두지 않고 PC마다 이 폴더에 둔다
+SEAL_DIR = Path(os.environ.get('LOCALAPPDATA') or Path.home() / 'AppData' / 'Local') / '노동사건자동화' / '도장'
+SEAL_MM = 13.0                  # 2026. 10. 22. 이승민 의견진술신청서의 '(서명 또는 인)'에 찍은 크기
+SEAL_DROP = 2.0                 # 도장 가운데를 '(서명 또는 날인)' 줄 가운데보다 이만큼(점) 아래에 둔다
+SIGN_MARK = '(서명 또는 날인)'
 
 
 class FormError(Exception):
@@ -157,6 +169,22 @@ def appointment_ops(spec: dict) -> list[tuple]:
     return ops
 
 
+def seal_file(part: dict) -> Path | None:
+    """참석자 명단 제출자의 도장 그림. 지시표에 '도장'이 없으면 찍지 않는다."""
+    name = (part.get('도장') or '').strip()
+    if not name:
+        return None
+    if '/' in name or '\\' in name:
+        raise FormError("참석자명단의 '도장'에는 파일 이름만 적습니다(그림은 %s 에 둔다): %r" % (SEAL_DIR, name))
+    filer = (part.get('제출자') or '').replace(' ', '')
+    if filer and filer not in Path(name).stem:
+        raise FormError("제출자(%s)와 도장(%s)이 다릅니다. 제출자의 도장으로 바꾸거나 도장을 비웁니다." % (part['제출자'], name))
+    path = SEAL_DIR / name
+    if not path.is_file():
+        raise FormError('도장 그림이 이 PC 에 없습니다: %s (다른 PC 의 같은 자리에서 옮겨 두거나, 지시표의 도장을 비우면 찍지 않는다)' % path)
+    return path
+
+
 def expected_texts(spec: dict, kind: str) -> list[str]:
     """만든 문서에 들어 있어야 할 글."""
     if kind == '지정서':
@@ -214,7 +242,7 @@ def replace_all(hwp, old: str, new: str) -> None:
 
 
 def find_first(hwp, text: str) -> bool:
-    hwp.MovePos(2)                                  # 문서 처음
+    hwp.MovePos(2, 0, 0)                            # 문서 처음. 집 PC 한글은 인자를 다 주어야 한다(2026. 10. 26.)
     ps = hwp.HParameterSet.HFindReplace
     hwp.HAction.GetDefault('RepeatFind', ps.HSet)
     ps.FindString = text
@@ -371,18 +399,71 @@ def read_saved_cells(path: Path) -> tuple[dict[tuple[int, int], str], int]:
     return cells, int(table.get('rowCnt'))
 
 
+def seal_position(pdf: Path):
+    """PDF 첫 면에서 (도장 그림 자리, '(서명 또는 날인)' 자리) — 점 단위."""
+    import pymupdf
+    side = SEAL_MM * 72 / 25.4
+    with pymupdf.open(str(pdf)) as doc:
+        page = doc[0]
+        seals = [pymupdf.Rect(i['bbox']) for i in page.get_image_info() if abs(pymupdf.Rect(i['bbox']).width - side) < 3]
+        marks = page.search_for(SIGN_MARK)
+    if len(seals) != 1 or len(marks) != 1:
+        raise FormError('도장 자리를 재지 못했습니다: 그림 %d개, %r %d곳' % (len(seals), SIGN_MARK, len(marks)))
+    return seals[0], marks[0]
+
+
+def seal_gap(pdf: Path) -> tuple[float, float]:
+    """도장 가운데가 바라는 자리('(서명 또는 날인)' 가운데에서 SEAL_DROP 아래)에서 벗어난 만큼(점)."""
+    seal, mark = seal_position(pdf)
+    return ((mark.x0 + mark.x1) / 2 - (seal.x0 + seal.x1) / 2,
+            (mark.y0 + mark.y1) / 2 + SEAL_DROP - (seal.y0 + seal.y1) / 2)
+
+
+def stamp_seal(hwp, png: Path, anchor: str, pdf: Path) -> None:
+    """도장 그림을 날짜 문단(anchor)에 매어 글 앞으로 넣고 '(서명 또는 날인)' 위로 옮긴다."""
+    if not find_first(hwp, anchor):
+        raise FormError('도장을 맬 날짜 문단을 찾지 못했습니다: %r' % anchor)
+    hwp.HAction.Run('Cancel')
+    hwp.HAction.Run('MoveParaBegin')
+    ctrl = hwp.InsertPicture(str(png), True, 1, False, False, 0, SEAL_MM, SEAL_MM)
+    if ctrl is None:
+        raise FormError('도장 그림을 넣지 못했습니다.')
+    side = int(round(SEAL_MM / 25.4 * 7200))          # HWPUNIT
+
+    def place(x: float, y: float) -> None:
+        # InsertPicture 의 크기 인자로는 크기가 바뀌지 않아 Properties 에 직접 넣는다(2026. 10. 22. 이승민 사건에서 확인)
+        p = ctrl.Properties
+        for key, value in (('TreatAsChar', 0), ('TextWrap', 3), ('VertRelTo', 2), ('VertAlign', 0), ('VertOffset', int(y)),
+                           ('HorzRelTo', 3), ('HorzAlign', 0), ('HorzOffset', int(x)), ('AllowOverlap', 1),
+                           ('Width', side), ('Height', side)):
+            p.SetItem(key, value)
+        ctrl.Properties = p
+
+    x = y = 0.0
+    place(x, y)
+    for _ in range(6):
+        hwp.SaveAs(str(pdf), 'PDF', '')
+        dx, dy = seal_gap(pdf)
+        if abs(dx) < 0.8 and abs(dy) < 0.8:
+            return
+        x, y = x + dx * 100, y + dy * 100              # 1점 = 100 HWPUNIT
+        place(x, y)
+    raise FormError('도장 자리를 맞추지 못했습니다.')
+
+
 def build_attendees(spec: dict, round_dir: Path) -> None:
     """참석자 명단: 별지 제12호서식의 칸을 칸 이름으로 찾아 채운다. 네 명을 넘으면 줄을 늘린다."""
     part = spec.get('참석자명단') or {}
     if not part.get('일시'):
         raise FormError("참석자명단의 '일시'가 비어 있습니다.")
+    seal = seal_file(part)
     people = part.get('참석자') or []
     rows = max(4, len(people))
     side_text = ATTENDEE_SIDE_TEXT[spec['우리쪽']]
     checked = side_text.replace('[  ]', '[√]')
     template = template_path('참석자명단')
     tmp = work_dir()
-    work, saved, pdf = tmp / 'work.hwpx', tmp / 'out.hwpx', tmp / 'out.pdf'
+    work, saved, pdf, seal_copy = tmp / 'work.hwpx', tmp / 'out.hwpx', tmp / 'out.pdf', tmp / 'seal.png'
     shutil.copyfile(template, work)
     hwp = open_hwp()
     try:
@@ -410,12 +491,16 @@ def build_attendees(spec: dict, round_dir: Path) -> None:
         if part.get('제출자'):
             replace_all(hwp, '제출자               ', '제출자  %s  ' % part['제출자'])
         replace_all(hwp, '○○(지방)노동위원회위원장', spec['노동위원회'] + '위원장')
+        if seal:
+            shutil.copyfile(seal, seal_copy)             # 한글은 임시 폴더의 사본을 읽는다(양식과 같다)
+            stamp_seal(hwp, seal_copy, part.get('제출일') or '년       월       일', pdf)
         pages = hwp.PageCount
         hwp.SaveAs(str(saved), 'HWPX', '')
         hwp.SaveAs(str(pdf), 'PDF', '')
     finally:
         close_hwp(hwp)
         work.unlink(missing_ok=True)
+        seal_copy.unlink(missing_ok=True)
 
     cells_saved, row_count = read_saved_cells(saved)
     problems = []
@@ -436,6 +521,13 @@ def build_attendees(spec: dict, round_dir: Path) -> None:
         problems.append('표의 줄 수 %d (바란 것 %d)' % (row_count, 8 + rows))
     if pages != 1:
         problems.append('한글 면수 %d (참석자가 많으면 한 면을 넘는다. 줄 높이를 손본다)' % pages)
+    if seal:
+        try:
+            dx, dy = seal_gap(pdf)
+            if abs(dx) > 1.5 or abs(dy) > 1.5:
+                problems.append('도장이 %r 자리에서 (%.1f, %.1f)점 벗어남' % (SIGN_MARK, dx, dy))
+        except FormError as exc:
+            problems.append(str(exc))
     deliver(spec, '참석자명단', round_dir, saved, pdf, problems)
 
 

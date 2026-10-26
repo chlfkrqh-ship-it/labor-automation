@@ -101,6 +101,9 @@ class SpecTests(unittest.TestCase):
         self.assertEqual(data['선임신고서']['신고인'], '법무법인 평안')   # 새로 더하는 담당자가 아니라 이미 선임된 대리인
         self.assertEqual(data['참석자명단']['참석자'], [])
         self.assertIn('○', data['사건'])                                 # 본보기에는 실제 사건번호를 적지 않는다
+        seal = data['참석자명단']['도장']                                  # 그림 자체는 PC마다 따로 둔다. 본보기에는 이름만
+        self.assertEqual(Path(seal).name, seal)
+        self.assertIn(data['참석자명단']['제출자'].replace(' ', ''), Path(seal).stem)
 
     def test_build_without_any_part_fails(self):
         data = sample()
@@ -236,6 +239,41 @@ class AppointmentTests(unittest.TestCase):
             nlrc_forms.appointment_ops(sample(당사자={'이름': '주식회사 가나다', '주소': ''}))
         with self.assertRaisesRegex(FormError, '신고인'):
             nlrc_forms.appointment_ops(sample(선임신고서={'담당': '노무사 최락보', '신고인': ''}))
+
+
+class SealTests(unittest.TestCase):
+    """참석자 명단 제출자의 도장. 그림은 사람의 도장이어서 저장소·OneDrive 밖(PC마다 %LOCALAPPDATA%)에 둔다."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.original = nlrc_forms.SEAL_DIR
+        nlrc_forms.SEAL_DIR = Path(self.tmp.name)
+
+    def tearDown(self):
+        nlrc_forms.SEAL_DIR = self.original
+        self.tmp.cleanup()
+
+    def test_seal_is_optional(self):
+        self.assertIsNone(nlrc_forms.seal_file({'제출자': '최 락 보'}))
+        self.assertIsNone(nlrc_forms.seal_file({'제출자': '최 락 보', '도장': ' '}))
+
+    def test_missing_seal_names_where_to_put_it(self):
+        part = {'제출자': '최 락 보', '도장': '최락보_인.png'}
+        with self.assertRaisesRegex(FormError, '도장 그림이 이 PC 에 없습니다'):
+            nlrc_forms.seal_file(part)
+        (Path(self.tmp.name) / '최락보_인.png').write_bytes(b'\x89PNG')
+        self.assertEqual(nlrc_forms.seal_file(part), Path(self.tmp.name) / '최락보_인.png')
+
+    def test_seal_must_belong_to_the_filer_and_be_a_bare_name(self):
+        (Path(self.tmp.name) / '최락보_인.png').write_bytes(b'\x89PNG')
+        with self.assertRaisesRegex(FormError, '제출자'):
+            nlrc_forms.seal_file({'제출자': '강 민 석', '도장': '최락보_인.png'})
+        for path in (r'C:\도장\최락보_인.png', '도장/최락보_인.png'):
+            with self.assertRaisesRegex(FormError, '파일 이름만'):
+                nlrc_forms.seal_file({'제출자': '최 락 보', '도장': path})
+
+    def test_seal_folder_is_outside_the_repository(self):
+        self.assertNotIn(str(ROOT), str(self.original))
 
 
 class SavedTableTests(unittest.TestCase):
