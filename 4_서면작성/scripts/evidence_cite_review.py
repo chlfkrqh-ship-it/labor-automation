@@ -501,7 +501,7 @@ def round_of(md: Path) -> Path:
 
 def brief_pdf_of(md: Path):
     out = md.resolve().parent
-    pdfs = sorted((p for p in out.glob('*.pdf') if '초안' in p.name or '수정안' in p.name),
+    pdfs = sorted((p for p in out.glob('*.pdf') if '초안' in p.name or '수정안' in p.name or re.search(r'_Rev_\d+', p.name)),
                   key=lambda p: p.stat().st_mtime, reverse=True)
     return pdfs[0] if pdfs else None
 

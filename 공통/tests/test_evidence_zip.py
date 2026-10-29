@@ -39,7 +39,7 @@ class EvidenceZipTests(unittest.TestCase):
         self.assertEqual(evidence_zip.main([str(self.root), '--확인']), 0)
 
     def test_version_suffixes_are_removed(self):
-        for stem, base in (('(홍길동) 준비서면_1차 수정안', '(홍길동) 준비서면'), ('(이케아) 검토의견서_최종', '(이케아) 검토의견서'),
+        for stem, base in (('(홍길동) 준비서면_1차 수정안', '(홍길동) 준비서면'), ('(한전) 준비서면_Rev_1', '(한전) 준비서면'), ('(이케아) 검토의견서_최종', '(이케아) 검토의견서'),
                            ('(박준선) 항소이유서_초안', '(박준선) 항소이유서'), ('(김경민) 소장', '(김경민) 소장')):
             with self.subTest(stem=stem):
                 self.assertEqual(evidence_zip.VERSION.sub('', stem), base)
