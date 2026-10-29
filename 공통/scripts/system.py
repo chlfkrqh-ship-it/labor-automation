@@ -40,6 +40,8 @@ GUIDE_SETS = {
     # 배당 메일과 후속 메일을 가른 뒤 검토의견 절차를 그대로 탄다.
     '배당확인': COMMON + CITE + ['1_검토의견/CLAUDE.md', '.claude/commands/배당확인.md', '.claude/commands/검토의견.md',
                             '공통/사건상태.md'] + LBOX,
+    # 하루치 메일·팀즈를 사건 폴더에 받아 넣고 기록만 한다. 인용하는 산출물이 없어 자체검토·LBOX 지침은 읽지 않는다.
+    '메일반영': COMMON + ['.claude/commands/메일반영.md', '공통/사건상태.md'],
     '판례검색': COMMON + CITE + ['2_판례검색/CLAUDE.md', '.claude/commands/판례검색.md'] + LBOX,
     '서면보강': COMMON + CITE + ['3_서면보강/CLAUDE.md', '.claude/commands/서면보강.md'] + LBOX,
     # 서면 하나가 입구다. 반박 구성과 노동위 기록 추출은 자료에 따라 켜는 갈래이며
@@ -66,7 +68,7 @@ GUIDE_SETS = {
 # 사건부호. '2019년3월'처럼 날짜가 사건번호로 잡히지 않도록 쓰이는 부호만 적는다(긴 것을 앞에).
 # .claude/skills/lbox-검색/SKILL.md 의 JS 사본('사건부호')도 같은 목록이어야 한다(공통/tests/test_system.py 가 대조한다).
 CASE_TYPES = ('다카|다라|재다|재두|재누|구합|구단|구소|가합|가단|가소|고합|고단|고정|카합|카단|카기|부해|부노|헌가|헌바|헌마|헌라|헌사|헌아|'
-              '다|두|누|구|나|노|도|마|머|그|스|므|르|브|재|허|후|추|초|모|오|트|즈|느|드|흐|카|라|사|자|차|파')
+              '다|두|누|구|나|노|도|마|머|그|스|므|르|브|재|허|후|추|초|모|로|오|트|즈|느|드|흐|카|라|사|자|차|파')
 # 부호 앞뒤의 공백 하나는 허용한다('2018노 3955'). 비교할 때는 공백을 지운다.
 CASE_NUMBER = r'(?<!\d)\d{2,4}\s?(?:' + CASE_TYPES + r')\s?\d{1,7}(?!\d)'
 
@@ -250,7 +252,7 @@ class System:
                    if not self.path(f).is_file()]
         commands = {p.stem for p in self.path('.claude/commands').glob('*.md')}
         required = {'검토의견', '판례검색', '서면보강', '서면', '증거정리', '증거발췌', '문체검증',
-                    '노동위서류', '녹취', '손배계산', '손배검산', '자체검토', '배당확인'}
+                    '노동위서류', '녹취', '손배계산', '손배검산', '자체검토', '배당확인', '메일반영'}
         missing.extend('.claude/commands/' + n + '.md' for n in sorted(required - commands))
         skill_errors = []
         for p in self.path('.claude/skills').glob('*/SKILL.md'):
