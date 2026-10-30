@@ -1,5 +1,8 @@
 {
   "model": "opus[1m]",
+  "env": {
+    "CLAUDE_CODE_EFFORT_LEVEL": "max"
+  },
   "cleanupPeriodDays": 10,
   "desktopSessionCleanupPeriodDays": 10,
   "permissions": {
