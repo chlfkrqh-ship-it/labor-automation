@@ -501,7 +501,10 @@ def round_of(md: Path) -> Path:
 
 def brief_pdf_of(md: Path):
     out = md.resolve().parent
-    pdfs = sorted((p for p in out.glob('*.pdf') if '초안' in p.name or '수정안' in p.name or re.search(r'_Rev_\d+', p.name)),
+    # 같은 폴더의 PT·합본은 서면이 아니다(2026. 10. 31. GGM 답변서(2) 대조표 머리에 PT 이름이 찍혔다)
+    pdfs = sorted((p for p in [*out.glob('*.pdf'), *out.glob('제출/*.pdf')]
+                   if ('초안' in p.name or '수정안' in p.name or re.search(r'_Rev_\d+', p.name))
+                   and 'PT' not in p.name and '합본' not in p.name),
                   key=lambda p: p.stat().st_mtime, reverse=True)
     return pdfs[0] if pdfs else None
 

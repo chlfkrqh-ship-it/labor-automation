@@ -91,6 +91,14 @@ POINTER = ('이처럼', '이와 같이', '이에 따를 때', '이러한', '이�
            '그런데', '실제로', '이와 달리', '그리고', '반면', '그렇다면', '마찬가지로', '참고로',
            '이와 관련하여', '이에 대하여', '이 점은', '예를 들어')
 NESTED = re.compile(r'\([^()]*\([^()]*\)[^()]*\)')
+# 문단 첫머리의 같은 연결어를 잇달아 쓰지 않는다. 제목·캡션·그림을 사이에 두어도 같다(SKILL.md '문단·문장 이음',
+# 2026. 10. 31. GGM 답변서(2) 담당자 "더욱이를 두번이나 반복"). 앞 문단과의 관계를 드러내는 말만 본다.
+OPENING = re.compile(r'^(그러나|나아가|더욱이|또한|한편|이처럼|따라서|실제로|마찬가지로|오히려|무엇보다|반면|결국|그런데'
+                     r'|이와 관련하여|구체적으로|특히|다만|그럼에도|이에|즉|가사|참고로)(?![가-힣])')
+# 결론만 말하는 한 줄 문단. 근거를 다음 문단으로 떼지 않고 온전한 문장으로 합친다(SKILL.md '문단·문장 이음').
+SHORT_PARAGRAPH = 45
+# 논리를 줄인 표현과 담당자가 고치게 한 표현(SKILL.md '문단·문장 이음', 2026. 10. 31. 같은 서면). 인용 원문일 수 있어 참고로 센다.
+STIFF = re.compile(r'\d+번 줄|그 판단에서|말은 성립하지|그 절차가 아닙니다|끝내 말하지 못|그 전제부터 성립')
 # 제출처('… 귀중' 줄)로 절차를 가른다. 본문에서 노동위원회 판정을 인용하는 것과 다르다.
 VENUE_LABOR = re.compile(r'노동위원회\s*귀중')
 LITIGATION_AGENT = re.compile(r'소송대리인')
@@ -210,12 +218,23 @@ def check(path: Path):
                        'detail': detail, 'text': text[:70]})
 
     previous_cited = False
+    previous_opening = None
     for line, text, body in blocks:
         if not body:                      # 보완 메모는 제출용 본문이 아니다
             previous_cited = False
             continue
         own = FOOTNOTE.sub('', text)      # 각주에 옮긴 판결 원문은 문체 검사 대상이 아니다
         sentences = prose(text)
+        stripped = own.strip()
+        if SENTENCE.search(sentences) and not HEADING_LINE.match(stripped) and not CAPTION_BLOCK.match(stripped):
+            opening = OPENING.match(stripped)
+            if opening and opening[1] == previous_opening:
+                add(violations, '같은 연결어 연달아', line, text, opening[1])
+            previous_opening = opening[1] if opening else None
+            if len(stripped) <= SHORT_PARAGRAPH and not stripped.startswith('이하에서'):
+                add(notes, '짧은 선언 문단', line, text, '%d자' % len(stripped))
+        for hit in set(m[0] for m in STIFF.finditer(own)):
+            add(notes, '어색한 표현', line, text, hit)
         for hit in set(BANNED.findall(own)):
             add(violations, '금지 낱말', line, text, hit)
         for hit in set(m[0] for m in DRAMA.finditer(own)):
