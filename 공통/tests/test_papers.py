@@ -101,6 +101,15 @@ class PapersTests(unittest.TestCase):
         self.assertEqual(first['초록'], '목적 장시간 노동과 뇌졸중의 관계를 본다.')   # 소제목 태그는 띄어 쓴다
         self.assertEqual(first['주소'], 'https://europepmc.org/article/MED/1')
 
+    def test_epmc_abstract_keeps_text_after_a_less_than_sign(self):
+        item = epmc_item(1)
+        item['abstractText'] = ('<h4>Results</h4>Sick leave rose (p < 0.001, RR<2) and a<b and c>d, '
+                                'R<sup>2</sup> 0.4.<h4 class="x">Conclusions</h4>One in ten.')
+        self.replies = [{'hitCount': 1, 'resultList': {'result': [item]}}]
+        abstract = papers.epmc_search('x', limit=1)['rows'][0]['초록']
+        self.assertEqual(abstract, 'Results Sick leave rose (p < 0.001, RR<2) and a<b and c>d, '
+                                   'R 2 0.4. Conclusions One in ten.')
+
     def test_epmc_search_stops_when_cursor_repeats_or_page_is_empty(self):
         self.replies = [{'hitCount': 1, 'nextCursorMark': '*', 'resultList': {'result': [epmc_item(1)]}}]
         result = papers.epmc_search('x', limit=20)

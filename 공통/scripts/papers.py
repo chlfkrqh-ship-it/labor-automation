@@ -32,6 +32,7 @@ from pathlib import Path
 EPMC_BASE = 'https://www.ebi.ac.uk/europepmc/webservices/rest'
 OPENALEX_WORKS = 'https://api.openalex.org/works'
 DELAY = 0.3             # 호출 사이 간격(초)
+TAG = re.compile(r'</?[A-Za-z][A-Za-z0-9]*(?:\s+[\w:-]+="[^"]*")*\s*/?>')    # 'p < 0.001' 의 부등호는 태그가 아니다
 OPENER = urllib.request.urlopen
 CALLS = {'n': 0}
 
@@ -118,7 +119,7 @@ def epmc_row(item):
         '권호면': ', '.join(x for x in (issue, item.get('pageInfo')) if x),
         '논문유형': ((item.get('pubTypeList') or {}).get('pubType')) or [],
         '무료공개': item.get('isOpenAccess') == 'Y',
-        '초록': re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', item.get('abstractText') or '')).strip(),
+        '초록': re.sub(r'\s+', ' ', TAG.sub(' ', item.get('abstractText') or '')).strip(),
         '주소': f"https://europepmc.org/article/{item.get('source')}/{item.get('id')}" if item.get('id') else None,
     }
 
