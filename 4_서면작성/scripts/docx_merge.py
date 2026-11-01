@@ -61,7 +61,7 @@ from docx.oxml.ns import qn
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import docx_restyle, docx_footnotes, docx_normalize  # noqa: E402
 
-CAPTION_RE = re.compile(r"^\[(?:(?:갑|을가|을나|을|사|노|증)\s*제\d+호증[^\]]*|[^\]]*(?:준비서면|참고서면|답변서|이유서|판결)[^\]]*)\]$")
+CAPTION_RE = re.compile(r"^\[(?:(?:갑|을가|을나|을|사|노|증)\s*제\d+호증[^\]]*|[^\]]*(?:준비서면|참고서면|답변서|이유서|판결|논문)[^\]]*)\]$")
 KEY_RE = re.compile(r"^\[(갑|을가|을나|을|사|노|증)\s*제(\d+)호증(?:의\s*(\d+))?")
 IMG_RE = re.compile(r"^!\[[^\]]*\]\(([^)]+)\)$")
 EV_RE = re.compile(r'^(갑|을가|을나|을|사|노|증) 제\d+호증')
