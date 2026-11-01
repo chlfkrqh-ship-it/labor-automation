@@ -145,7 +145,7 @@ LBOX 통합검색은 **띄어 쓴 낱말이 네 개까지면 모두 들어 있�
 | 근로복지공단 심사결정서 | `https://simsacase.comwel.or.kr` | 검색 `/service/searchList?q=검색어&pageIndex=1&pageUnit=1000`, 원문 `/service/dataView?id=심사사건번호` |
 | 산재판례 | `https://sanjaecase.comwel.or.kr` | 법제처 `harvest --kinds 판례 --source 근로복지공단산재판례 --body` 로 본문까지 받는다 |
 | 재심사위원회 재결 | 법제처 | `harvest --kinds 산재재심사 --query 재결 --limit 1000 --texts 1000` 으로 전부 받아 받은 파일에서 찾는다. 본문검색은 본문에 있는 낱말도 잘 걸리지 않는다(2026. 11. 1. 931건) |
-| 감사원 심사청구 재결 | `https://www.bai.go.kr/bai/exClaims/exClaims/list` | 공단 메뉴의 '감사원심사청구 재결 사례'. 검색 방법은 아직 재 보지 않았다 |
+| 감사원 심사청구 재결 | `https://www.bai.go.kr/bai/exClaims/exClaims/list` | 공단 메뉴의 '감사원심사청구 재결 사례'. 검색어 칸은 제목·쟁점 문구에 걸린다(`요양기간` 23건, `적응장애` 0건). 본문은 첨부파일이다 |
 | 행정심판 재결 | `https://simpan.go.kr/eas/aa/ah/300/list.do` | 공단 메뉴의 '행정심판 재결 사례'. 검색 방법은 아직 재 보지 않았다 |
 | 직업환경연구원 전문조사 사례 | `https://www.comwel.or.kr/lab-lung/noti/spec.jsp` | 유형(폐암, 악성 중피종, 백혈병, 림프종, 기타 암, 호흡기계 질병 등)·제목·내용·조사년도로 찾는다. 2026. 11. 1. 995건 |
 
