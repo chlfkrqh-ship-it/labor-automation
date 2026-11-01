@@ -20,7 +20,9 @@
  - 하한은 처음 넣은 크기(폭 15cm, 세로 최대 14cm, docx_merge.py) 대비 --하한(기본 0.7)이다. 그림 속 글자가 읽히는 선을 지킨다.
    하한이 모자라 그대로 둔 그림은 '이 그림만 줄이면 얼마까지'를 알려 준다. 그림을 열어 글자가 커서 더 줄여도 읽히면 그 그림에만
    --그림하한 "캡션 일부=값" 으로 낮추어 다시 돌린다(한영대 사건은 말풍선 글자가 큰 캡처를 0.66 까지 줄였다).
- - 앞 면에 각주가 있으면 각주가 면 아래를 차지하므로 빈 곳으로 보지 않는다.
+ - 앞 면에 각주가 있으면 각주 구분선까지를 그 면의 아래 끝으로 보고 그 위의 빈 높이를 잰다. 예전에는 각주가 면 아래를 차지한다고
+   보아 빈 곳으로 세지 않았는데, 각주가 있는 면에서 10cm 넘게 비어도 '크게 빈 곳이 없다'고 알렸다(2026. 11. 1. 이승민 심사청구
+   담당 노무사 "발췌그림때문에 공백이 너무 남는 문제는 조금 해소 부탁").
  - 바꾸는 것은 그림의 표시 크기(wp:extent, a:ext)와 1단계의 keepNext 뿐이다. 글자·그림 파일·캡션은 건드리지 않고 변경 내용
    추적에도 남지 않는다. 검토본(변경 추적본)에 돌리면 클린본은 그 검토본에서 다시 만든다(목차 쪽 번호도 그때 맞춘다).
  - OneDrive 밖(%TEMP%/figure_fit)의 사본에서 고치고 확인한 뒤에 원래 자리에 쓴다. 고치기 전 파일은 docx_merge.py 처럼
@@ -152,8 +154,16 @@ def 본문범위(root):
     return int(mar.get(W + 'top')) / 20, h - int(mar.get(W + 'bottom')) / 20
 
 
+def 각주선(pg, 위, 아래, 줄들):
+    """각주 구분선(본문 폭의 3분의 1쯤 되는 짧은 가로줄이고 그 아래에 글이 있는 것)의 높이. 없으면 None."""
+    선들 = [d['rect'].y0 for d in pg.get_drawings()
+            if 100 <= d['rect'].width <= 200 and d['rect'].height < 2 and 위 < d['rect'].y0 < 아래]
+    선들 = [y for y in 선들 if any(z[0] >= y - 1 for z in 줄들)]
+    return min(선들) if 선들 else None
+
+
 def 면분석(pdf_path, 위, 아래):
-    """(면들, 발췌들, 캡션 앞 간격). 면마다 {'bottom': 보이는 것의 아래 끝, 'first': 위 끝}.
+    """(면들, 발췌들, 캡션 앞 간격). 면마다 {'bottom': 각주를 뺀 보이는 것의 아래 끝, 'first': 위 끝, 'foot': 각주 구분선 높이 또는 None}.
     발췌들은 캡션이 바로 위에 있는 그림(잇달은 그림은 하나로)마다 {'k': 면 번호, 'cap': 캡션 글, 'cap_top', 'top', 'bottom'}."""
     import pymupdf
     d = pymupdf.open(pdf_path)
@@ -196,8 +206,10 @@ def 면분석(pdf_path, 위, 아래):
             if 앞:
                 앞간격.append(cap_top - max(앞))
         보임 = [z[0] for z in 줄들] + [a for a, _ in 뭉치]
-        면들.append({'bottom': max([z[1] for z in 줄들] + [b for _, b in 뭉치] + [위]),
-                     'first': min(보임) if 보임 else None})
+        선 = 각주선(pg, 위, 아래, 줄들)
+        본문줄 = [z for z in 줄들 if 선 is None or z[1] <= 선]
+        면들.append({'bottom': max([z[1] for z in 본문줄] + [b for _, b in 뭉치] + [위]),
+                     'first': min(보임) if 보임 else None, 'foot': 선})
     return 면들, 발췌들, (statistics.median(앞간격) if 앞간격 else 기본간격)
 
 
@@ -223,7 +235,7 @@ def 계획(면들, 발췌들, 간격, 아래, 여력, 보탬=None, 제외=()):
         k = f['k']
         if n in 제외 or k == 0 or 면들[k]['first'] is None or abs(면들[k]['first'] - f['cap_top']) > 1:
             continue                                 # 캡션이 면 머리에 있지 않다
-        남은 = 아래 - 면들[k - 1]['bottom']
+        남은 = (면들[k - 1].get('foot') or 아래) - 면들[k - 1]['bottom']
         if 남은 <= 최소빈자리:
             continue
         필요 = 간격 + (f['bottom'] - f['cap_top']) + 보탬.get(n, 0.0) + 여유

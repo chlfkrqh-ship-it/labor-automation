@@ -185,6 +185,27 @@ class 계획(unittest.TestCase):
 
 
 class 면분석(unittest.TestCase):
+    def test_각주가_있는_면은_구분선까지를_아래_끝으로_본다(self):
+        import pymupdf
+        with tempfile.TemporaryDirectory() as d:
+            pdf = os.path.join(d, 't.pdf')
+            doc = pymupdf.open()
+            p1 = doc.new_page(width=595, height=842)
+            p1.insert_text((72, 300), 'Body line', fontsize=11)
+            p1.draw_line((72, 700), (216, 700))                  # 각주 구분선
+            p1.insert_text((72, 720), 'Footnote', fontsize=9)
+            p2 = doc.new_page(width=595, height=842)
+            p2.insert_text((72, 300), 'Body line', fontsize=11)
+            p2.draw_line((72, 500), (497, 500))                  # 본문 폭의 줄은 구분선이 아니다
+            p2.insert_text((72, 700), 'Body end', fontsize=11)
+            doc.save(pdf)
+            doc.close()
+            면들, _, _ = ff.면분석(pdf, 127.6, 757.0)
+        self.assertAlmostEqual(면들[0]['foot'], 700, delta=1)
+        self.assertLess(면들[0]['bottom'], 310)
+        self.assertIsNone(면들[1]['foot'])
+        self.assertGreater(면들[1]['bottom'], 695)
+
     def test_PDF_에서_캡션과_그림을_짝짓는다(self):
         import pymupdf
         from PIL import Image
