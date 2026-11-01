@@ -18,9 +18,10 @@ API마다 따로 활용신청해야 한다.** 신청하지 않은 API는 '등록
     python 공통/scripts/datago.py 사업장 --이름 "법무법인 평안" --상세
     python 공통/scripts/datago.py msds 벤젠
     python 공통/scripts/datago.py msds 71-43-2
-    python 공통/scripts/datago.py msds-detail 000100 --절 2 8 11 15 --out 결과.json
+    python 공통/scripts/datago.py msds-detail 001008 --절 2 8 11 15 --out 결과.json
 """
 import argparse
+import html
 import json
 import os
 import re
@@ -310,9 +311,10 @@ def workplaces(*, name=None, bno=None, detail=False, latest_only=False, limit=24
             '요약': 요약, 'rows': rows}
 
 
-MSDS_BASE = 'http://msds.kosha.or.kr/openapi/service/msdschem'   # data.go.kr 15001197 명세의 요청 주소. 클라우드에서는 닿지 않는다
-MSDS_SERVICE = '한국산업안전보건공단_물질안전보건자료(MSDS)'
-MSDS_KINDS = {'국문명': '0', 'CAS': '1', 'UN': '2', 'KE': '3', 'EN': '4'}   # chemlist 의 searchCnd
+# data.go.kr 15157612 명세의 주소. 옛 주소(msds.kosha.or.kr/openapi)는 Accept JSON 에 406, http 에 '등록되지 않은 키'를 낸다(2026. 11. 1. 실측)
+MSDS_BASE = 'https://apis.data.go.kr/B552468/msdschem1'
+MSDS_SERVICE = '한국산업안전보건공단_물질안전보건자료 조회 서비스'
+MSDS_KINDS = {'국문명': '0', 'CAS': '1', 'UN': '2', 'KE': '3', 'EN': '4'}   # getChemList001 의 searchCnd
 MSDS_SECTIONS = {1: '화학제품과 회사에 관한 정보', 2: '유해성·위험성', 3: '구성성분의 명칭 및 함유량', 4: '응급조치 요령',
                  5: '폭발·화재시 대처방법', 6: '누출 사고시 대처방법', 7: '취급 및 저장방법', 8: '노출방지 및 개인보호구',
                  9: '물리화학적 특성', 10: '안정성 및 반응성', 11: '독성에 관한 정보', 12: '환경에 미치는 영향',
@@ -323,7 +325,7 @@ MSDS_FIELDS = {'chemNameKor': '물질명', 'casNo': 'CAS', 'unNo': 'UN', 'keNo':
 
 
 def msds_kind(term):
-    """검색어 모양으로 검색 방식을 고른다. CAS 71-43-2, UN 1114, KE-02380, EN 200-753-7, 그 밖은 국문명."""
+    """검색어 모양으로 검색 방식을 고른다. CAS 71-43-2, UN 1114, KE-02380, EN 200-753-7, 그 밖은 국문명(영문명도 이 방식으로 찾힌다)."""
     t = re.sub(r'\s+', '', term).upper()
     if re.fullmatch(r'\d{2,7}-\d{2}-\d', t):
         return 'CAS'
@@ -343,6 +345,8 @@ def msds_row(item):
     row = {MSDS_FIELDS.get(k, k): v for k, v in item.items()}
     if '갱신일' in row:
         row['갱신일'] = ymd(row['갱신일']) or row['갱신일']
+    if isinstance(row.get('내용'), str):      # 부등호가 한 번 더 이스케이프되어 'LD50 &gt;2000' 으로 온다(2026. 11. 1. 실측)
+        row['내용'] = html.unescape(row['내용'])
     return row
 
 
@@ -370,7 +374,7 @@ def msds_search(term, *, kind=None, limit=20, key=None):
     word = term.strip() if kind == '국문명' else re.sub(r'\s+', '', term).upper()
     if kind == 'UN':
         word = re.sub(r'^UN', '', word)
-    rows, total = msds_list('chemlist', {'searchWrd': word, 'searchCnd': MSDS_KINDS[kind]}, key, limit)
+    rows, total = msds_list('getChemList001', {'searchWrd': word, 'searchCnd': MSDS_KINDS[kind]}, key, limit)
     return {'검색어': term, '검색방식': kind, '전체': total, '받은건수': len(rows), '호출': CALLS['n'], 'rows': rows}
 
 
@@ -393,7 +397,12 @@ def msds_detail(chem_id, *, sections=MSDS_DEFAULT, key=None):
     key = key_value(key)
     content = {}
     for n in sections:
-        content[f'{n}. {MSDS_SECTIONS[n]}'] = msds_list(f'chemdetail{n:02d}', {'chemId': chem_id}, key, 1000)[0]
+        # 상세는 쪽 나누기 없이 한 번에 온다. numOfRows·pageNo 를 무시하고 totalCount 도 없다(2026. 11. 1. 실측)
+        data = call_get(f'{MSDS_BASE}/getChemDetail{n:02d}1', {'chemId': chem_id}, key, service=MSDS_SERVICE)
+        content[f'{n}. {MSDS_SECTIONS[n]}'] = [msds_row(it) for it in nps_items(data, 'MSDS')[0]]
+    # 없는 번호나 앞의 0을 뺀 번호(1008)도 정상 코드와 빈 목록으로 온다(2026. 11. 1. 실측)
+    if not any(content.values()):
+        raise DataGoError(f'chemId {chem_id} 로 받은 내용이 없습니다. msds 결과의 chemId 를 앞의 0까지 그대로 넣으십시오.')
     return {'chemId': chem_id, '절': sections, '호출': CALLS['n'], '내용': content,
             '안내': 'MSDS 는 물질의 유해성 참고자료이다. 실제 노출(농도·기간·작업)은 작업환경측정 결과와 역학조사로 따로 본다.'}
 
@@ -428,12 +437,12 @@ def main():
     s.add_argument('--limit', type=int, default=24, help='받을 최대 줄 수(기본 24). 한 사업장이 월마다 한 줄이라 24면 두 사업장의 1년치이다')
     s.add_argument('--out', help='결과를 JSON 파일로 쓴다')
     s = subs.add_parser('msds', help='화학물질을 MSDS 목록에서 찾는다(한국산업안전보건공단). 결과의 chemId 를 msds-detail 에 넣는다')
-    s.add_argument('term', help='국문 물질명(일부도 된다) 또는 CAS·UN·KE·EN 번호. 영문명은 CAS 번호로 찾는다')
+    s.add_argument('term', help='물질명(국문·영문, 일부도 된다) 또는 CAS·UN·KE·EN 번호')
     s.add_argument('--방식', dest='kind', choices=list(MSDS_KINDS), help='검색 방식. 비우면 검색어 모양으로 고른다')
     s.add_argument('--limit', type=int, default=20, help='받을 최대 줄 수(기본 20)')
     s.add_argument('--out', help='결과를 JSON 파일로 쓴다')
-    s = subs.add_parser('msds-detail', help='MSDS 의 절별 내용을 받는다(기본 2·8·11·15절, 절마다 1회 이상 호출)')
-    s.add_argument('chem_id', help='msds 결과의 chemId')
+    s = subs.add_parser('msds-detail', help='MSDS 의 절별 내용을 받는다(기본 2·8·11·15절, 절마다 1회 호출)')
+    s.add_argument('chem_id', help='msds 결과의 chemId(앞의 0까지 그대로)')
     s.add_argument('--절', dest='sections', nargs='+', default=list(MSDS_DEFAULT),
                    help='받을 절 번호(1~16). all 이면 16절 모두')
     s.add_argument('--out', help='결과를 JSON 파일로 쓴다')

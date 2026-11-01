@@ -57,7 +57,7 @@ class DataGoTests(unittest.TestCase):
     def opener(self, request, timeout=None):
         url = urllib.parse.urlsplit(request.full_url)
         self.calls.append({**dict(urllib.parse.parse_qsl(url.query)), 'path': url.path,
-                           'method': request.get_method()})
+                           'url': f'{url.scheme}://{url.netloc}{url.path}', 'method': request.get_method()})
         if request.data is None:                     # 국민연금은 GET 이다
             payload = self.nps.pop(0)
             text = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
@@ -261,14 +261,15 @@ class DataGoTests(unittest.TestCase):
     # --- 한국산업안전보건공단 MSDS ---
 
     @staticmethod
-    def msds_xml(items, total=None, code='00'):
-        """포털 명세 꼴의 XML 응답. 값은 XML 로 이스케이프한다."""
+    def msds_xml(items, total=None, code='00', paged=True):
+        """포털 명세 꼴의 XML 응답. 값은 XML 로 이스케이프한다. 상세(paged=False)에는 쪽 칸과 totalCount 가 없다."""
         body = ''.join('<item>' + ''.join(f'<{k}>{escape(str(v))}</{k}>' for k, v in it.items()) + '</item>'
                        for it in items)
-        return ('<?xml version="1.0" encoding="UTF-8"?><response><header>'
+        counts = (f'<totalCount>{len(items) if total is None else total}</totalCount>'
+                  '<pageNo>1</pageNo><numOfRows>100</numOfRows>') if paged else ''
+        return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><response><header>'
                 f'<resultCode>{code}</resultCode><resultMsg>NORMAL SERVICE.</resultMsg></header>'
-                f'<body><items>{body}</items><numOfRows>100</numOfRows><pageNo>1</pageNo>'
-                f'<totalCount>{len(items) if total is None else total}</totalCount></body></response>')
+                f'<body><items>{body}</items>{counts}</body></response>')
 
     def test_msds_kind_reads_the_shape_of_the_term(self):
         for term, kind in (('71-43-2', 'CAS'), ('7440-43-9', 'CAS'), (' 71-43-2 ', 'CAS'), ('UN1114', 'UN'),
@@ -278,20 +279,21 @@ class DataGoTests(unittest.TestCase):
 
     def test_msds_search_sends_condition_and_names_fields(self):
         datago.set_key('키')
-        self.nps = [self.msds_xml([
-            {'chemId': '000100', 'chemNameKor': '벤젠', 'casNo': '71-43-2', 'unNo': '1114', 'keNo': 'KE-02150',
-             'enNo': '200-753-7', 'lastDate': '20240501', 'newField': '그대로'},
-            {'chemId': '001234', 'chemNameKor': '에틸벤젠', 'casNo': '100-41-4', 'lastDate': '2023-11-02'}], total=2)]
+        self.nps = [self.msds_xml([                    # 2026. 11. 1. 실측 응답의 칸
+            {'casNo': '71-43-2', 'chemId': '001008', 'chemNameKor': '벤젠', 'enNo': '200-753-7', 'keNo': 'KE-02150',
+             'koshaConfirm': '', 'lastDate': '2025-09-17', 'openYn': '', 'unNo': '1114', 'newField': '그대로'},
+            {'chemId': '001089', 'chemNameKor': '에틸벤젠', 'casNo': '100-41-4', 'lastDate': '20250808'}], total=2)]
         result = datago.msds_search('벤젠')
         call = self.calls[0]
-        self.assertEqual((call['path'], call['method']), ('/openapi/service/msdschem/chemlist', 'GET'))
+        # 옛 주소(msds.kosha.or.kr/openapi)는 Accept JSON 에 406, http 에 '등록되지 않은 키'를 냈다(2026. 11. 1. 실측)
+        self.assertEqual((call['url'], call['method']), ('https://apis.data.go.kr/B552468/msdschem1/getChemList001', 'GET'))
         self.assertEqual((call['searchWrd'], call['searchCnd'], call['numOfRows'], call['pageNo']), ('벤젠', '0', '20', '1'))
         self.assertEqual((result['검색방식'], result['전체'], result['받은건수']), ('국문명', 2, 2))
         첫, 둘 = result['rows']
         self.assertEqual((첫['chemId'], 첫['물질명'], 첫['CAS'], 첫['UN'], 첫['KE'], 첫['EN'], 첫['갱신일']),
-                         ('000100', '벤젠', '71-43-2', '1114', 'KE-02150', '200-753-7', '2024-05-01'))
+                         ('001008', '벤젠', '71-43-2', '1114', 'KE-02150', '200-753-7', '2025-09-17'))
         self.assertEqual(첫['newField'], '그대로')             # 명세에 없는 칸도 버리지 않는다
-        self.assertEqual(둘['갱신일'], '2023-11-02')
+        self.assertEqual(둘['갱신일'], '2025-08-08')
 
     def test_msds_numbers_are_sent_without_prefix_or_spaces(self):
         datago.set_key('키')
@@ -308,45 +310,59 @@ class DataGoTests(unittest.TestCase):
         result = datago.msds_search('없는물질')
         self.assertEqual((result['전체'], result['rows']), (0, []))
 
-    def test_msds_detail_pages_each_section_and_keeps_unknown_fields(self):
-        """절마다 따로 부르고, 한 쪽에 다 오지 않으면 다음 쪽을 받는다."""
+    def test_msds_detail_calls_each_section_once_and_keeps_unknown_fields(self):
+        """절마다 한 번 부르면 다 온다. 쪽 칸을 보내지 않고 totalCount 도 오지 않는다(2026. 11. 1. 실측)."""
         datago.set_key('키')
-        줄 = lambda n, 이름, 내용: {'lev': '1', 'msdsItemCode': f'B{n:02d}', 'msdsItemNameKor': 이름, 'itemDetail': 내용,
-                                   'upMsdsItemCode': 'B'}
-        self.nps = [self.msds_xml([줄(1, '유해성·위험성 분류', '발암성 : 구분1A'), 줄(2, '신호어', '위험')], total=3),
-                    self.msds_xml([줄(3, '유해·위험문구', 'H350 암을 일으킬 수 있음 & 노출 < 1 ppm')], total=3),
-                    self.msds_xml([줄(4, '국내규정', 'TWA 0.5 ppm')]),
-                    self.msds_xml([줄(5, '발암성', 'IARC 1')]),
-                    self.msds_xml([줄(6, '산업안전보건법에 의한 규제', '특수건강진단대상물질')])]
-        result = datago.msds_detail('000100')
-        self.assertEqual([c['path'].rsplit('/', 1)[1] for c in self.calls],
-                         ['chemdetail02', 'chemdetail02', 'chemdetail08', 'chemdetail11', 'chemdetail15'])
-        self.assertEqual([c['pageNo'] for c in self.calls[:2]], ['1', '2'])
-        self.assertTrue(all(c['chemId'] == '000100' and c['numOfRows'] == '100' for c in self.calls))
+        줄 = lambda n, 이름, 내용: {'itemDetail': 내용, 'lev': '2', 'msdsItemCode': f'B{n:02d}', 'msdsItemNameKor': 이름,
+                                   'ordrIdx': str(n), 'upMsdsItemCode': 'B'}
+        제목줄 = {'lev': '1', 'msdsItemCode': 'B', 'msdsItemNameKor': '유해성·위험성 분류', 'ordrIdx': '0', 'upMsdsItemCode': 'A'}
+        self.nps = [self.msds_xml([제목줄, 줄(1, '발암성', '구분1A'), 줄(2, '유해·위험문구', 'H350 암을 일으킬 수 있음 & 노출 < 1 ppm')],
+                                  paged=False),
+                    self.msds_xml([줄(4, '국내규정', 'TWA 0.5 ppm')], paged=False),
+                    self.msds_xml([줄(5, '발암성', 'IARC 1'), 줄(7, '경구', 'LD50 &gt;2000 ㎎/㎏')], paged=False),
+                    self.msds_xml([줄(6, '산업안전보건법에 의한 규제', '특수건강진단대상물질')], paged=False)]
+        result = datago.msds_detail('001008')
+        self.assertEqual([c['path'] for c in self.calls],
+                         [f'/B552468/msdschem1/getChemDetail{n}1' for n in ('02', '08', '11', '15')])
+        self.assertTrue(all(c['chemId'] == '001008' and 'numOfRows' not in c and 'pageNo' not in c for c in self.calls))
         self.assertEqual(list(result['내용']), ['2. 유해성·위험성', '8. 노출방지 및 개인보호구', '11. 독성에 관한 정보', '15. 법적 규제현황'])
         유해성 = result['내용']['2. 유해성·위험성']
         self.assertEqual(len(유해성), 3)
-        self.assertEqual((유해성[0]['단계'], 유해성[0]['항목코드'], 유해성[0]['항목'], 유해성[0]['내용']),
-                         ('1', 'B01', '유해성·위험성 분류', '발암성 : 구분1A'))
+        self.assertNotIn('내용', 유해성[0])                     # 위 단계의 줄에는 itemDetail 이 없다
+        self.assertEqual((유해성[1]['단계'], 유해성[1]['항목코드'], 유해성[1]['항목'], 유해성[1]['내용']),
+                         ('2', 'B01', '발암성', '구분1A'))
         self.assertEqual(유해성[2]['내용'], 'H350 암을 일으킬 수 있음 & 노출 < 1 ppm')
-        self.assertEqual(유해성[0]['upMsdsItemCode'], 'B')
+        self.assertEqual((유해성[1]['upMsdsItemCode'], 유해성[1]['ordrIdx']), ('B', '1'))
+        self.assertEqual(result['내용']['11. 독성에 관한 정보'][1]['내용'], 'LD50 >2000 ㎎/㎏')   # 한 번 더 이스케이프되어 온다
         self.assertEqual(result['내용']['15. 법적 규제현황'][0]['내용'], '특수건강진단대상물질')
         self.assertIn('작업환경측정', result['안내'])
 
+    def test_msds_detail_with_no_content_is_an_error_not_an_empty_result(self):
+        """없는 번호나 앞의 0을 뺀 번호(1008)도 정상 코드와 빈 목록으로 온다(2026. 11. 1. 실측)."""
+        datago.set_key('키')
+        self.nps = [self.msds_xml([], paged=False) for _ in range(4)]
+        with self.assertRaisesRegex(datago.DataGoError, '앞의 0까지'):
+            datago.msds_detail('1008')
+        # 내용이 없는 절이 일부면 오류가 아니다
+        self.nps = [self.msds_xml([], paged=False), self.msds_xml([{'lev': '1', 'itemDetail': '자료없음'}], paged=False)]
+        self.assertEqual(datago.msds_detail('001008', sections=[3, 8])['내용']['3. 구성성분의 명칭 및 함유량'], [])
+
     def test_msds_detail_all_sections_and_bad_input(self):
         datago.set_key('키')
-        self.nps = [self.msds_xml([]) for _ in range(16)]
-        result = datago.msds_detail('000100', sections=['ALL'])
+        한줄 = self.msds_xml([{'lev': '1', 'itemDetail': '자료없음'}], paged=False)
+        self.nps = [한줄 for _ in range(16)]
+        result = datago.msds_detail('001008', sections=['ALL'])
         self.assertEqual(result['절'], list(range(1, 17)))
-        self.assertEqual(self.calls[-1]['path'], '/openapi/service/msdschem/chemdetail16')
+        self.assertEqual(self.calls[0]['path'], '/B552468/msdschem1/getChemDetail011')
+        self.assertEqual(self.calls[-1]['path'], '/B552468/msdschem1/getChemDetail161')
         self.calls.clear()
-        self.nps = [self.msds_xml([]), self.msds_xml([])]
-        self.assertEqual(datago.msds_detail('000100', sections=['8', '2', '8'])['절'], [8, 2])
+        self.nps = [한줄, 한줄]
+        self.assertEqual(datago.msds_detail('001008', sections=['8', '2', '8'])['절'], [8, 2])
         self.assertEqual(len(self.calls), 2)
         self.calls.clear()
         for bad in ([17], ['x'], [0]):
             with self.assertRaises(datago.DataGoError):
-                datago.msds_detail('000100', sections=bad)
+                datago.msds_detail('001008', sections=bad)
         with self.assertRaises(datago.DataGoError):
             datago.msds_detail(' ')
         self.assertEqual(self.calls, [])
@@ -360,7 +376,7 @@ class DataGoTests(unittest.TestCase):
             datago.msds_search('벤젠')
         message = str(caught.exception)
         self.assertIn('활용신청', message)
-        self.assertIn('물질안전보건자료(MSDS)', message)
+        self.assertIn('물질안전보건자료 조회 서비스', message)
         self.assertNotIn('국민연금', message)
         # 새 꼴의 봉투는 밑줄 대신 띄어 쓴다
         self.nps = [self.msds_xml([], code='30').replace('NORMAL SERVICE.', 'SERVICE KEY IS NOT REGISTERED ERROR.')]
@@ -376,9 +392,9 @@ class DataGoTests(unittest.TestCase):
 
     def test_msds_cli_writes_detail_and_prints_counts(self):
         datago.set_key('키')
-        self.nps = [self.msds_xml([{'lev': '1', 'msdsItemNameKor': '국내규정', 'itemDetail': 'TWA 0.5 ppm'}])]
+        self.nps = [self.msds_xml([{'lev': '1', 'msdsItemNameKor': '국내규정', 'itemDetail': 'TWA 0.5 ppm'}], paged=False)]
         out = Path(self.tmp.name) / '사건' / 'msds.json'
-        with mock.patch.object(sys, 'argv', ['datago.py', 'msds-detail', '000100', '--절', '8', '--out', str(out)]), \
+        with mock.patch.object(sys, 'argv', ['datago.py', 'msds-detail', '001008', '--절', '8', '--out', str(out)]), \
              mock.patch('sys.stdout', new_callable=io.StringIO) as printed:
             self.assertEqual(datago.main(), 0)
         saved = json.loads(out.read_text(encoding='utf-8'))
@@ -387,7 +403,7 @@ class DataGoTests(unittest.TestCase):
         self.assertEqual(shown['항목 수'], {'8. 노출방지 및 개인보호구': 1})
         self.assertNotIn('내용', shown)
 
-        self.nps = [self.msds_xml([{'chemId': '000100', 'chemNameKor': '벤젠', 'casNo': '71-43-2'}])]
+        self.nps = [self.msds_xml([{'chemId': '001008', 'chemNameKor': '벤젠', 'casNo': '71-43-2'}])]
         with mock.patch.object(sys, 'argv', ['datago.py', 'msds', '71-43-2']), \
              mock.patch('sys.stdout', new_callable=io.StringIO) as printed:
             self.assertEqual(datago.main(), 0)
