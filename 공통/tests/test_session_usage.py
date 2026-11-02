@@ -99,6 +99,35 @@ class UsageTest(unittest.TestCase):
         self.assertIn("'노정일': 도구 입력 1회, 담당자 말 1회", 글)
         self.assertIn('요금 나눔', 글)
 
+    def test_cost_is_counted_from_tokens_and_model_prices(self):
+        """앱이 남긴 비용 기록은 세션 중간 값이거나 비어 있어(2026. 11. 3. 집 PC) 토큰과 단가로 셈한다."""
+        u = {'input_tokens': 1_000_000, 'output_tokens': 1_000_000, 'cache_read_input_tokens': 1_000_000, 'cache_creation_input_tokens': 2_000_000,
+             'cache_creation': {'ephemeral_1h_input_tokens': 1_000_000, 'ephemeral_5m_input_tokens': 1_000_000}}
+        v = su.값('claude-opus-5-5', u)
+        self.assertEqual({k: round(x, 2) for k, x in v.items()}, {'입력': 4.0, '캐시 쓰기': 13.0, '캐시 읽기': 0.2, '출력': 20.0})
+        self.assertAlmostEqual(sum(su.값('claude-opus-5-5', {**u, 'speed': 'fast'}).values()), 2 * sum(v.values()))
+        self.assertAlmostEqual(su.값('claude-opus-5-5', {'cache_creation_input_tokens': 1_000_000})['캐시 쓰기'], 8.0)   # 나눔이 없으면 1시간 값
+        self.assertAlmostEqual(su.값('claude-haiku-5-5', {'input_tokens': 200_000})['입력'], 0.1)                       # 10만 토큰 넘는 요청
+        self.assertIsNone(su.값('claude-unknown-9', u))
+        f = self.put('s1', [*말('일'), *응답(1, 1_000_000, 0, 1_000_000)])
+        buf = io.StringIO()
+        with redirect_stdout(buf), mock.patch.dict(os.environ, {'CLAUDE_CODE_SESSION_ID': 'other'}):
+            su.main(['--폴더', str(self.d)])
+        self.assertIn('비용 $28.00(토큰으로 셈)', buf.getvalue())       # 캐시 쓰기 1시간 100만 $8 + 출력 100만 $20
+
+    def test_the_measuring_session_is_left_out(self):
+        """2026. 11. 3. 사용량을 세라는 요청문에 사건 이름이 들어 그 세션이 사건 작업으로 잡혔다."""
+        self.put('지금', [*말('노정일 셈'), *응답(1, 10, 0, 1)])
+        self.put('부탁', [*말('`python -B 공통/scripts/session_usage.py --낱말 노정일` 돌려 줘'), *응답(1, 10, 0, 1)])
+        self.put('일', [*말('노정일 서면'), *응답(1, 10, 0, 1)])
+        buf = io.StringIO()
+        with redirect_stdout(buf), mock.patch.dict(os.environ, {'CLAUDE_CODE_SESSION_ID': '지금'}):
+            su.main(['--낱말', '노정일', '--폴더', str(self.d)])
+        글 = buf.getvalue()
+        self.assertIn('세션 1개', 글)
+        self.assertIn('지금 세션', 글)
+        self.assertIn('사용량을 센 세션', 글)
+
     def test_this_session_must_be_opus_5_5_at_max_effort(self):
         self.put('s1', [*말('하자보완'), *응답(1, 10, 0, 1)])
         self.put('s2', [*말('하자보완'), *응답(1, 10, 0, 1, 모델='claude-sonnet-5-5')])
