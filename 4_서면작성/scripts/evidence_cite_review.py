@@ -308,7 +308,7 @@ class Exhibit:
             if j.name == 'pages.json':
                 for no, e in json.loads(j.read_text(encoding='utf-8')).items():
                     if int(no) in need and int(no) not in got:
-                        got[int(no)] = {'src': '문자인식', 'units': [tuple((u[0], tuple(u[1]))) for u in e['units']],
+                        got[int(no)] = {'src': e.get('src') or '문자인식', 'units': [tuple((u[0], tuple(u[1]))) for u in e['units']],
                                         'png': str(c / e['png'])}
                 continue
             for k2, e in enumerate(_read_ocr_json(j), 1):
