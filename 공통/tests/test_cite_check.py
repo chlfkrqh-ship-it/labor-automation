@@ -89,6 +89,19 @@ class CiteCheckTest(unittest.TestCase):
         self.write("대조표.md", HEAD + ROW + own.replace("| — |\n", "| `원문.md` |\n"))
         self.assertGreaterEqual(self.run_check()["불일치"], 1)
 
+    def test_shimri_in_table_but_not_in_target(self):
+        """확정 칸이 심리불속행인 상급심을 산출물이 '판결로 확정'으로 적으면 잡는다(2026. 11. 2. 이케아 각주 16번)."""
+        row = ROW.replace("| 대법원 판결 |", "| 대법원 2022다1234 심리불속행 기각으로 확정 |")
+        self.write("대조표.md", HEAD + row)
+        self.write("산출물.md", "서울고등법원 판결(대법원 2022다1234 판결로 확정). " + TARGET)
+        res = cite_check.check(self.p("대조표.md"), [self.p("산출물.md")])
+        self.assertEqual(res["불일치"], 1)
+        self.assertIn("심리불속행이 없다", res["내용"][0])
+        self.write("산출물.md", "서울고등법원 판결(대법원 2022다1234 심리불속행 기각으로 확정). " + TARGET)
+        self.assertEqual(cite_check.check(self.p("대조표.md"), [self.p("산출물.md")])["불일치"], 0)
+        self.write("산출물.md", TARGET)      # 상급심을 적지 않은 글(서면 등)은 건드리지 않는다
+        self.assertEqual(cite_check.check(self.p("대조표.md"), [self.p("산출물.md")])["불일치"], 0)
+
     def test_statute_and_dates_are_not_case_numbers(self):
         self.assertEqual(cite_check.cases("근로기준법 제60조제5항, 제76조의3, 2026년10월31일, 11일분, 99두202, 2022가단23572"), {"99두202", "2022가단23572"})
 

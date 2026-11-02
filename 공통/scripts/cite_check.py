@@ -9,6 +9,7 @@
   2) 그 파일에 사건번호(문서번호)와 선고일(회시일)이 있는가
   3) 산출물에 그 사건번호와 선고일, 대조표의 본문 문장이 그대로 있는가
   4) 산출물에 나오는 사건번호 가운데 대조표에 줄이 없는 것
+  5) '확정' 칸에 심리불속행으로 적은 대법원 번호가 산출물에 나오면 그 곁에 '심리불속행'이 있는가
 원문이 LBOX 보관함·화면에만 있어 파일이 없는 줄은 '원문' 칸에 '보관함 일치'나 '화면 확인'이라고 적혀 있으면 그렇게 세고,
 없으면 원문 미확인으로 알린다. 불일치가 하나라도 있으면 종료 코드 1, 원문 미확인만 있으면 0 이다(보고에 따로 적는다).
 번호 칸에 '참고(이 사건)'·'참고(대상 서면)'이라고 적고 원문 문장과 원문 칸을 비운 줄은 사건을 가리키기만 하는 줄이다(표지의 사건번호,
@@ -77,6 +78,14 @@ def pieces(quote):
     """줄임표로 끊은 조각. 따옴표와 짧은 조각은 버린다."""
     out = [norm(p).strip("'\"") for p in re.split(r"…|\.\.\.", quote)]
     return [p for p in out if len(p) >= 6]
+
+
+def upper_courts(cell):
+    """'확정' 칸의 대법원 사건번호와, 그 번호에 심리불속행 표기가 붙었는지. [(번호, 참·거짓)]."""
+    out = []
+    for c in re.findall(r"대법원\s*(?:(?:19|20)\d{2}\.\s*\d{1,2}\.\s*\d{1,2}\.\s*선고\s*)?((?:19|20)?\d{2}[가-힣]{1,3}\d{1,7})", cell):
+        out.append((c, bool(re.search(r"%s.{0,15}심리불속행|심리불속행.{0,15}%s" % (c, c), cell))))
+    return out
 
 
 def in_order(text, parts):
@@ -155,6 +164,9 @@ def check(table_path, targets):
             miss = in_order(n, pieces(r.get("본문 문장", "")))
             if miss:
                 bad += 1; notes.append("불일치: 산출물에 없는 본문 문장 조각 '%s…'(%s)" % (miss[:30], os.path.basename(p)))
+            for c, says in upper_courts(r.get("확정", "")):      # 확정 칸이 심리불속행인 상급심을 산출물이 다르게 적었는지(적지 않은 글은 건드리지 않는다)
+                if says and c in n and not re.search(r"%s.{0,15}심리불속행|심리불속행.{0,15}%s" % (c, c), n):
+                    bad += 1; notes.append("불일치: 산출물의 대법원 %s 확정 표기에 심리불속행이 없다(%s)" % (c, os.path.basename(p)))
         lines.append(("%s — %s" % (name, " / ".join(notes) if notes else "일치")))
     # 4) 대조표에 줄이 없는 사건번호
     known = set()
