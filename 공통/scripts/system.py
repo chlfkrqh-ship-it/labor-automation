@@ -250,8 +250,22 @@ class System:
                 result.append(p)
         return sorted(result), sorted(skipped)
 
+    def broken_refs(self):
+        """지침·명령이 부르는 스크립트와 명령 파일이 실제로 있는지 본다. 이름을 바꾸고 지침을 고치지 않은 것을 잡는다(2026. 11. 3. `/하자보완`)."""
+        guides = [*self.path('.claude/commands').glob('*.md'), *self.path('.claude/skills').glob('*/SKILL.md'),
+                  self.path('CLAUDE.md'), *self.root.glob('*/CLAUDE.md'), *self.path('공통').glob('*.md')]
+        out = []
+        for p in guides:
+            if not p.is_file():
+                continue
+            for ref in re.findall(r'(?<![\w/{}.-])((?:공통|\d_[가-힣]+)/(?:scripts|engine)/[\w.-]+\.(?:py|ps1|bat)|\.claude/commands/[가-힣\w-]+\.md)',
+                                  p.read_text(encoding='utf-8-sig')):
+                if not self.path(ref).is_file():
+                    out.append(f'{self.rel(p)} → {ref}')
+        return sorted(set(out))
+
     def check(self):
-        """필수 지침과 명령어가 있고 스킬 머리말이 바른지 본다."""
+        """필수 지침과 명령어가 있고, 지침이 부르는 파일이 있고, 스킬 머리말이 바른지 본다."""
         missing = [f for f in ('CLAUDE.md', '공통/운영.md', '공통/사건상태.md', '공통/브라우저.md', '공통/자체검토.md')
                    if not self.path(f).is_file()]
         commands = {p.stem for p in self.path('.claude/commands').glob('*.md')}
@@ -266,7 +280,8 @@ class System:
                 skill_errors.append(self.rel(p))
             elif re.search(r'^name:\s*(.+)$', match[1], re.M)[1].strip() != p.parent.name:
                 skill_errors.append(self.rel(p))
-        return {'missing': missing, 'skill_errors': skill_errors, 'ok': not missing and not skill_errors}
+        broken = self.broken_refs()
+        return {'missing': missing, 'skill_errors': skill_errors, 'broken_refs': broken, 'ok': not missing and not skill_errors and not broken}
 
     def budget(self, only=None, record=False):
         """명령어별 지침 분량과 중복·고아 지침을 보고한다.

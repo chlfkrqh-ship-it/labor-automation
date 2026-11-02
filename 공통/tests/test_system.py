@@ -206,6 +206,17 @@ class SystemTests(unittest.TestCase):
         self.put('.claude/skills/잘못/SKILL.md', '---\nname: 다른이름\ndescription: 절차\n---\n')
         self.assertEqual(self.system.check()['skill_errors'], ['.claude/skills/잘못/SKILL.md'])
 
+    def test_check_finds_scripts_the_guides_call_but_do_not_exist(self):
+        """이름을 바꾸거나 지운 스크립트를 지침이 계속 부르면 그 단계에서 세션이 멈춘다(2026. 11. 3. `/하자보완`)."""
+        self.put('.claude/commands/서면.md', '`python -B 공통/scripts/없는것.py` 와 `4_서면작성/scripts/있는것.py`, `.claude/commands/없는명령.md`')
+        self.put('4_서면작성/scripts/있는것.py', '')
+        self.put('공통/자체검토.md', '사건 폴더의 `작업/빌드/공통/scripts/도구.py` 는 시스템 파일이 아니다')
+        self.assertEqual(self.system.broken_refs(), ['.claude/commands/서면.md → .claude/commands/없는명령.md', '.claude/commands/서면.md → 공통/scripts/없는것.py'])
+        self.assertFalse(self.system.check()['ok'])
+        self.put('공통/scripts/없는것.py', '')
+        self.put('.claude/commands/없는명령.md', '---\ndescription: 절차\n---\n절차')
+        self.assertEqual(self.system.broken_refs(), [])
+
     def test_budget_reports_without_capping_guides(self):
         self.put('CLAUDE.md', '가' * 10)
         self.put('공통/운영.md', '나' * 10)

@@ -81,7 +81,7 @@ git --git-dir=$GD config core.bare false
 git --git-dir=$GD config core.worktree "$env:OneDrive\노동사건자동화"
 ```
 
-매번 `--git-dir` 을 치지 않도록 래퍼 하나를 둔다(`공통/scripts/g.ps1` 정도). `g status`, `g add -A`, `g commit`, `g push` 로 쓴다.
+매번 `--git-dir` 을 치지 않도록 래퍼 하나를 둔다(`공통/scripts/g.bat`). `g status`, `g add -A`, `g commit`, `g push` 로 쓴다.
 
 두 PC는 **git 으로도 동기화되고 OneDrive 로도 동기화된다.** 시스템 파일이 두 경로로 오가면 혼란스러우므로, 아래 둘 중 하나를 정해야 한다.
 
@@ -148,7 +148,7 @@ git --git-dir=$GD config core.worktree "$env:OneDrive\노동사건자동화"
 |---|---|
 | 1. `.gitignore` 보강, 혼입 134건 제외 | **완료** |
 | 2. 외부 호스팅 가부 | **사용자 판단으로 진행** (본인 소유 시스템) |
-| 3. `.git` 분리 설정, 래퍼 3개 | **완료** (`g.bat`, `g.ps1`, `repo-setup.ps1`) |
+| 3. `.git` 분리 설정, 래퍼 2개 | **완료** (`g.bat`, `repo-setup.ps1`) |
 | 4. 첫 커밋 | **완료** — `023d3b7`, 471개 파일 47,750줄 |
 | 5. **GitHub private 저장소 생성·연결** | **남음** ← 사용자가 저장소를 만들고 주소를 주면 연결한다 |
 | 6. 문서 갱신(`README.md`·`CLAUDE.md`·`시작하기.md`) | 남음 |
