@@ -200,6 +200,63 @@ def 틀(자: 자리, k: str, p: Path, units: list, 앞선: str = '') -> str:
     return '\n'.join(줄) + '\n'
 
 
+def 뿌리() -> Path:
+    """다른 사건의 기록을 찾을 저장소 뿌리(시험에서는 EVIDENCE_READ_ROOT 로 바꾼다)."""
+    return Path(os.environ.get('EVIDENCE_READ_ROOT') or Path(__file__).resolve().parents[2])
+
+
+def 다른_기록(자: '자리') -> dict:
+    """저장소 안 다른 사건·자료의 읽기 기록. 해시 → [기록 파일]. 같은 파일을 두 번 읽지 않으려는 것이다."""
+    out = {}
+    for pat in ('*/사건/*/증거관리/호증읽기/*.md', '1_검토의견/사건/*/작업/자료읽기/*.md'):
+        for f in sorted(뿌리().glob(pat)):
+            if f.parent.resolve() == 자.기록.resolve():
+                continue
+            try:
+                h = 기록_읽기(f.read_text(encoding='utf-8'))['해시']
+            except OSError:
+                continue
+            if h:
+                out.setdefault(h, []).append(f)
+    return out
+
+
+def 옮겨_오기(자: '자리', k: str, p: Path, units: list, 원본: Path) -> str | None:
+    """같은 파일(해시)을 다른 사건에서 모든 면 읽어 둔 기록이 있으면 면별 내용과 읽은 방식을 옮긴 기록을 만든다.
+    쟁점에 닿는 문구는 사건마다 다르므로 비워 두고, 옮겨 온 기록의 문구는 참고로 아래에 둔다."""
+    t = 원본.read_text(encoding='utf-8')
+    r = 기록_읽기(t)
+    if not set(units) <= r['채운'] or not r['방식']:
+        return None
+    rel = nfc(str(p.relative_to(자.사건))) if 자.사건 in p.parents else nfc(str(p))
+    try:
+        출처 = nfc(str(원본.resolve().relative_to(뿌리().resolve())))
+    except ValueError:
+        출처 = nfc(str(원본))
+    수 = f'{len(units)}면' if units and isinstance(units[0], int) else f'{len(units)}개'
+    면별 = [re.sub(r'^(\s*-\s*[^:]+?:\s*)', r'\1(옮김) ', l) if re.match(r'^\s*-', l) else l for l in 절(t, '면별 내용') if l.strip()]
+    줄 = [f'# {자.제목(k)} 읽기 기록', '',
+          f'파일: {rel}', f'해시: {r["해시"]} · {수}', f'만든 날: {dt.date.today().isoformat()}',
+          f'옮겨 온 기록: {출처} (같은 파일이다. 그 사건에서 읽은 면별 내용을 참고로 옮겼다. 그 사건이 읽은 방식: {r["방식"]})',
+          '읽은 방식: ', '',
+          '<!-- 다른 사건에서 같은 파일을 읽은 기록이다. 그 사건의 쟁점을 놓고 쓴 것이므로 이 사건 쟁점을 놓고 면마다 다시 읽고, '
+          '맞으면 "(옮김)"만 지우고 모자라면 고친다. 읽은 방식과 쟁점에 닿는 문구는 이 사건에서 새로 적는다. -->', '',
+          '## 면별 내용', ''] + 면별 + ['', '## 쟁점에 닿는 문구(원문 그대로, 면)', '', '- ', '',
+          '## 옮겨 온 기록의 쟁점 문구(그 사건의 것. 이 사건 쟁점으로 다시 고른다)', ''] + [f'- {x}' for x in r['문구']] + ['']
+    return '\n'.join(줄) + '\n'
+
+
+def 그림면_적기(f: Path, 그림: dict):
+    """기록 머리의 '그림으로 볼 면:' 줄을 지금 면별 글의 표시로 맞춘다."""
+    t = f.read_text(encoding='utf-8')
+    줄 = '그림으로 볼 면: ' + (', '.join(f'{no}면({why})' for no, why in sorted(그림.items())) if 그림 else '없음')
+    if re.search(r'^그림으로 볼 면:.*$', t, re.M):
+        t = re.sub(r'^그림으로 볼 면:.*$', 줄, t, count=1, flags=re.M)
+    else:
+        t = re.sub(r'^(만든 날:.*)$', lambda m: m.group(1) + '\n' + 줄, t, count=1, flags=re.M)
+    f.write_text(t, encoding='utf-8')
+
+
 def 절(text: str, 머리: str) -> list:
     """'## 머리' 로 시작하는 절의 줄."""
     out, 안 = [], False
@@ -216,24 +273,32 @@ def 기록_읽기(text: str) -> dict:
     파일 = re.search(r'^파일:[ \t]*(.+)$', text, re.M)          # 줄을 넘어 다음 줄을 값으로 읽지 않는다
     해 = re.search(r'^해시:[ \t]*([0-9a-f]{6,40})', text, re.M)
     방식 = re.search(r'^읽은 방식:[ \t]*(.*)$', text, re.M)
-    채운, 빈칸 = set(), set()
+    채운, 빈칸, 옮김 = set(), set(), set()
+
+    def 셈(내용: str, 단위: set):
+        내용 = 내용.strip()
+        if 내용.startswith('(옮김)'):          # 다른 사건 기록에서 옮긴 줄은 이 사건에서 다시 읽기 전까지 빈 줄이다
+            옮김.update(단위)
+            빈칸.update(단위)
+        else:
+            (채운 if 내용 not in 빈말 else 빈칸).update(단위)
+
     for line in 절(text, '면별 내용'):
         line = line.strip()
         m = 면_줄.match(line)
         if m:
-            a, b = int(m.group(1)), int(m.group(2) or m.group(1))
-            (채운 if m.group(3).strip() not in 빈말 else 빈칸).update(range(a, b + 1))
+            셈(m.group(3), set(range(int(m.group(1)), int(m.group(2) or m.group(1)) + 1)))
             continue
         m = 단위_줄.match(line)
         if m:
-            (채운 if m.group(3).strip() not in 빈말 else 빈칸).add(f'[{m.group(1)}] {nfc(m.group(2))}')
+            셈(m.group(3), {f'[{m.group(1)}] {nfc(m.group(2))}'})
             continue
         m = 전체_줄.match(line)
         if m:
-            (채운 if m.group(1).strip() not in 빈말 else 빈칸).add('전체')
+            셈(m.group(1), {'전체'})
     문구 = [l.strip()[1:].strip() for l in 절(text, '쟁점에 닿는 문구') if l.strip().startswith('-')]
     return {'파일': 파일.group(1).strip() if 파일 else '', '해시': 해.group(1) if 해 else '',
-            '방식': (방식.group(1).strip() if 방식 else ''), '채운': 채운, '빈칸': 빈칸 - 채운,
+            '방식': (방식.group(1).strip() if 방식 else ''), '채운': 채운, '빈칸': 빈칸 - 채운, '옮김': 옮김 - 채운,
             '문구': [x for x in 문구 if x]}
 
 
@@ -247,6 +312,8 @@ def 문제들(자: 자리, k: str, p: Path) -> list:
         out.append(f"기록한 뒤 파일이 바뀜(기록 {r['해시'] or '없음'}) — `make --다시 {k}` 로 새로 짜고 다시 읽는다")
     units = 단위들(p)
     빈 = [u for u in units if u not in r['채운']]
+    if r['옮김']:
+        out.append(f"다른 사건 기록에서 옮긴 줄 {len(r['옮김'])}개 — 이 사건 쟁점을 놓고 그 면을 다시 읽어 고치거나 확인한 뒤 '(옮김)'을 지운다")
     if 빈:
         면 = [u for u in 빈 if isinstance(u, int)]
         그밖 = [u for u in 빈 if not isinstance(u, int)]
@@ -254,34 +321,135 @@ def 문제들(자: 자리, k: str, p: Path) -> list:
         out.append(f'읽지 않았거나 비운 단위 {len(빈)}/{len(units)}: {말}')
     if not r['방식'] or r['방식'] in 빈말:
         out.append("'읽은 방식'이 비었다(글자층·문자인식·그림 가운데 실제로 본 방식과 그림으로 본 면)")
+    else:
+        m = re.search(r'^그림으로 볼 면:[ \t]*(.*)$', f.read_text(encoding='utf-8'), re.M)
+        볼 = {int(x) for x in re.findall(r'(\d+)면', m.group(1))} if m else set()
+        못본 = sorted(볼 - 그림_본_면(r['방식'], len(units)))
+        if 못본:
+            out.append(f"그림으로 볼 면 {면_표시(못본)}면을 그림으로 본 기록이 없다('읽은 방식'에 '그림 {'·'.join(map(str, 못본[:5]))}면'처럼 적는다)")
     if not r['문구']:
         out.append("'쟁점에 닿는 문구'가 비었다(원문 그대로와 면. 없으면 '없음')")
     return out
 
 
 # ---------------------------------------------------------------- 면별 글
-def 글_쓰기(자: 자리, k: str, p: Path, use_ocr: bool) -> str:
+def 그림_비율(page) -> float:
+    """글자층 면에서 그림(사진·도표)이 차지하는 넓이 비율."""
+    try:
+        area = abs(page.rect)
+        return min(1.0, sum(abs(_ecr.pymupdf.Rect(i['bbox']) & page.rect) for i in page.get_image_info()) / area) if area else 0.0
+    except Exception:
+        return 0.0
+
+
+def 줄_꼴(t: str) -> str:
+    return re.sub(r'\s+', ' ', t).strip()
+
+
+def 표_줄(page, units: list) -> tuple:
+    """글자층 면의 표를 칸을 살려 옮긴다. (표 밖의 줄, [표 줄]). 표를 찾지 못하면 줄을 그대로 둔다."""
+    try:
+        tabs = [t for t in page.find_tables().tables if t.row_count >= 2 and t.col_count >= 2]
+    except Exception:
+        return [줄_꼴(t) for t, _ in units if 줄_꼴(t)], []
+    if not tabs:
+        return [줄_꼴(t) for t, _ in units if 줄_꼴(t)], []
+    boxes = [_ecr.pymupdf.Rect(t.bbox) for t in tabs]
+    밖 = [줄_꼴(t) for t, b in units if 줄_꼴(t)
+          and not any(r.contains(_ecr.pymupdf.Point((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)) for r in boxes)]
+    표 = []
+    for i, t in enumerate(tabs, 1):
+        표.append(f'[표 {i}]')
+        for row in t.extract():
+            표.append('| ' + ' | '.join(줄_꼴(c or '').replace('|', '｜') for c in row) + ' |')
+    return 밖, 표
+
+
+def 숫자표_같나(줄들: list) -> bool:
+    """문자인식 면이 숫자 표(대장·명세)로 보이는가. 칸이 섞여 읽히므로 그림으로 본다."""
+    숫자줄 = 0
+    for t in 줄들:
+        toks = t.split()
+        if len(toks) >= 3 and sum(bool(re.fullmatch(r'[\d,.\-:/()%원]+', x)) for x in toks) / len(toks) >= 0.6:
+            숫자줄 += 1
+    return 숫자줄 >= 8 or (줄들 and 숫자줄 / len(줄들) >= 0.4 and 숫자줄 >= 3)
+
+
+def 글_쓰기(자: 자리, k: str, p: Path, use_ocr: bool) -> tuple:
+    """면별 글을 쓴다. 돌려주는 것: (알림, {그림으로 볼 면: 까닭}).
+
+    읽는 비용을 줄이되 글은 하나도 빼지 않는다. ① 여러 면에 되풀이되는 줄(문자 모음의 머리·꼬리, 대장의 칸 이름)은 머리에
+    번호를 붙여 한 번 적고, 면마다 그 면에 든 되풀이 줄의 번호를 적는다(어느 면에 어느 줄이 있는지 그대로 남는다).
+    ② 글자층 면의 표는 칸을 살려 옮긴다. ③ 글로 읽기 어려운 면(글자가 거의 없음, 문자인식 품질 낮음, 숫자 표로 보이는 스캔 면,
+    사진·도표가 큰 면)만 '그림으로 볼 면'으로 표시한다. 그 면은 반드시 그림으로 열고, 기록의 '읽은 방식'에 면 번호를 적는다."""
     if p.suffix.lower() != '.pdf':
-        return ''
+        return '', {}
     캐시 = 자.글
     ocr_dirs = [str(x) for x in 자.사건.glob('라운드*/작업/증거인용검토/ocr')] + [str(캐시 / 'ocr')]
     ex = _ecr.Exhibit(자.이름(k), p, 캐시, ocr_dirs=ocr_dirs, use_ocr=use_ocr)
-    줄, 없음 = [], []
+    면들, 그림 = [], {}
     try:
         ex.prepare(range(1, len(ex) + 1))
         for no in range(1, len(ex) + 1):
             e = ex.pages.get(no) or {'src': '글자 없음', 'units': []}
-            글 = '\n'.join(t for t, _ in e['units'])
+            src = e['src']
+            if src.startswith('글자층'):
+                줄들, 표 = 표_줄(ex.doc[no - 1], e['units'])
+            else:
+                줄들, 표 = [줄_꼴(t) for t, _ in e['units'] if 줄_꼴(t)], []
+            글 = ' '.join(줄들 + 표)
             if len(re.sub(r'\s', '', 글)) < 20:
-                없음.append(no)
-            줄.append(f'=== {no}면 ({e["src"]}) ===\n{글}\n')
+                그림[no] = '글자 거의 없음'
+            elif src.startswith('문자인식') and _ecr.quality(글) < 0.55:
+                그림[no] = '문자인식 품질 낮음'
+            elif src.startswith('문자인식') and 숫자표_같나(줄들):
+                그림[no] = '숫자 표(칸 맞춤)'
+            elif src.startswith('글자층(적음)'):
+                그림[no] = '글자 적음'
+            elif src.startswith('글자층') and 그림_비율(ex.doc[no - 1]) >= 0.25:
+                그림[no] = '사진·도표 있음'
+            면들.append((no, src, 줄들, 표))
     finally:
         ex.close()
     for png in 캐시.glob('ocr/*/*.png'):      # 글만 쌓고 그림은 남기지 않는다
         png.unlink()
+    n = len(면들)
+    번호 = {}
+    if n >= 4:
+        셈 = {}
+        for _, _, 줄들, _ in 면들:
+            for t in set(줄들):
+                셈[t] = 셈.get(t, 0) + 1
+        기준 = max(3, -(-n // 2))
+        for t in sorted((t for t, c in 셈.items() if c >= 기준 and len(t) >= 4), key=lambda t: -셈[t]):
+            번호[t] = len(번호) + 1
+    머리 = [f'# {자.제목(k)} 면별 글 — {nfc(p.name)}', '',
+            f'{n}면. 그림으로 볼 면: ' + (', '.join(f'{no}면({why})' for no, why in sorted(그림.items())) if 그림 else '없음')]
+    if 번호:
+        머리 += ['', f'## 여러 면에 되풀이되는 줄 {len(번호)}개 — 면마다 [되풀이 줄: 번호]로 적는다(그 면에 그 줄이 있다는 뜻)', '']
+        머리 += [f'- R{i}: {t}' for t, i in sorted(번호.items(), key=lambda x: x[1])]
+    본문 = []
+    for no, src, 줄들, 표 in 면들:
+        if 번호:
+            든 = sorted({번호[t] for t in 줄들 if t in 번호})
+            줄들 = [t for t in 줄들 if t not in 번호] + ([f'[되풀이 줄: {", ".join(f"R{i}" for i in 든)}]'] if 든 else [])
+        표시 = f' — 그림으로 볼 면({그림[no]})' if no in 그림 else ''
+        본문.append(f'=== {no}면 ({src}){표시} ===\n' + '\n'.join(줄들 + 표) + '\n')
     자.글_파일(k).parent.mkdir(parents=True, exist_ok=True)
-    자.글_파일(k).write_text(f'# {자.제목(k)} 면별 글 — {nfc(p.name)}\n\n' + '\n'.join(줄), encoding='utf-8')
-    return f'글자 거의 없는 면 {면_표시(없음)} — 그림으로 본다' if 없음 else ''
+    자.글_파일(k).write_text('\n'.join(머리) + '\n\n' + '\n'.join(본문), encoding='utf-8')
+    return (f'그림으로 볼 면 {면_표시(sorted(그림))}' if 그림 else ''), 그림
+
+
+def 그림_본_면(방식: str, 전체: int) -> set:
+    """'읽은 방식'에서 그림으로 본 면. '그림 3·7면', '그림 3, 7~9면', '그림 전 면'."""
+    본 = set()
+    for m in re.finditer(r'그림(?:으로)?\s*(?:본\s*면)?\s*:?\s*(전\s*면|모든\s*면|[\d\s,·ㆍ~\-]+)', 방식):
+        g = m.group(1)
+        if re.match(r'(전|모든)\s*면', g):
+            return set(range(1, 전체 + 1))
+        for a, b in re.findall(r'(\d+)\s*(?:[~\-]\s*(\d+))?', g):
+            본.update(range(int(a), int(b or a) + 1))
+    return 본
 
 
 # ---------------------------------------------------------------- 명령
@@ -322,7 +490,8 @@ def cmd_make(a) -> int:
                 옛글.rename(자.글_파일(새[0]))
             옮김.append(f'{k_old} → {새[0]}')
     다시 = set(a.다시 or [])
-    새로, 바뀜, 알림 = [], [], []
+    새로, 바뀜, 알림, 옮겨옴 = [], [], [], []
+    색인 = 다른_기록(자)
     for k in sorted(목록, key=호증_정렬):
         p, f = 목록[k], 자.기록_파일(k)
         if f.is_file():
@@ -335,16 +504,23 @@ def cmd_make(a) -> int:
                 else:
                     바뀜.append(k)
         else:
-            f.write_text(틀(자, k, p, 단위들(p)), encoding='utf-8')
-            새로.append(k)
-        if not a.no_text and (k in 새로 or not 자.글_파일(k).is_file()):
-            msg = 글_쓰기(자, k, p, not a.no_ocr)
+            units = 단위들(p)
+            t = next((x for x in (옮겨_오기(자, k, p, units, g) for g in 색인.get(현재해시[k], [])) if x), None)
+            f.write_text(t or 틀(자, k, p, units), encoding='utf-8')
+            (옮겨옴 if t else 새로).append(k)
+        if not a.no_text and (k in 새로 or k in 옮겨옴 or not 자.글_파일(k).is_file()):
+            msg, 그림 = 글_쓰기(자, k, p, not a.no_ocr)
+            if p.suffix.lower() == '.pdf':
+                그림면_적기(f, 그림)
             if msg:
                 알림.append(f'{자.제목(k)}: {msg}')
         print(f'{자.제목(k)} — {nfc(p.name)}', flush=True)
-    print(f'기록 틀 새로 {len(새로)}건, 옮김 {len(옮김)}건, 파일이 바뀐 기록 {len(바뀜)}건 → {자.기록}')
+    print(f'기록 틀 새로 {len(새로)}건, 다른 사건 기록에서 옮겨 옴 {len(옮겨옴)}건(쟁점 문구만 채운다), 번호 따라 옮김 {len(옮김)}건, '
+          f'파일이 바뀐 기록 {len(바뀜)}건 → {자.기록}')
     for s in 옮김:
         print('  옮김: ' + s)
+    for k in 옮겨옴:
+        print(f'  옮겨 옴: {자.제목(k)} — 같은 파일을 다른 사건에서 읽은 기록')
     for k in 바뀜:
         print(f'  바뀜: {자.제목(k)} — `make --다시 {k}` 로 새로 짠다')
     for s in 알림:

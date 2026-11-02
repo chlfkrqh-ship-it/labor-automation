@@ -14,7 +14,10 @@
   판례 대조      인용이 있으면 작업/인용대조표.md 가 있고 cite_check.py 불일치 0
   판례 검색 기록 LBOX 목록(작업/LBOX_목록.tsv)·법제처 목록·작업/검색기록.md 가 있다(찾은 것을 남겼는가)
   찾은 판례 다시 훑기  작업/수확목록_재확인.md 의 낱말로 harvest_titles.py scan 을 다시 돌려, 걸린 줄이 모두 원고·대조표·검색기록에 있다
-  판결문 PDF     본문 인용 판결이 있으면 참고자료/인용판결_PDF 가 있고 cite_pdf_check.py 문제 0, '사람 판정' 표가 본문 인용 줄마다 찼다
+  대조표 칸      본문 인용 줄마다 자리·주문·결론·다른 사유·전제·확정·원문이 찼고, 판결이 아닌 자료(판정·재결·행정해석)는 원문 파일이 있으며,
+                 미확정·확인 못한 판결은 7일 안에 다시 본 날짜가 있다(미확정 줄은 '참고'로 따로 보인다)
+  판결문 PDF     본문 인용 판결이 있으면 참고자료/인용판결_PDF 가 있고 cite_pdf_check.py 문제 0, '사람 판정' 표가 본문 인용 줄마다
+                 판단 부분인지·방향·사안 비교까지 찼고, '주의'(앞 글에 주장·원심·인정사실) 줄은 비고가 있다
   증거 인용      증거 인용이 있으면 작업/증거인용검토/ 의 review.json 이 초안보다 새것이고 notes.json 에 인용마다 판정이 있다
   증거 파악      evidence_read.py check — 모든 호증의 전 면 읽기 기록이 찼고 파일이 그 뒤 바뀌지 않았다
   빠진 문구      evidence_words.py --확인 — 쟁점 낱말 대조표가 있고, 서면이 인용하지 않은 면마다 '판단'이 있다
@@ -34,6 +37,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import os
 import re
@@ -132,24 +136,69 @@ def 빈_판정(path: Path, 칸말: tuple) -> tuple:
     return 빈, 전체
 
 
-def 사람판정_빈(table: Path, report: Path) -> list:
-    """대조표의 본문 인용 줄(cite_pdf_check 가 보는 줄) 가운데 '사람 판정' 표에 판단·방향이 없는 줄 번호."""
+def 본문_줄(table: Path) -> list:
+    """대조표의 본문 인용 줄(번호 칸에 '참고'·'뺌'이 없는 줄)."""
     sys.path.insert(0, str(SC))
     import cite_check
-    rows = [r for r in cite_check.table_rows(str(table))
-            if not any(w in r.get('번호', '') for w in ('참고', '뺌')) and '법원' in r.get('사건 표시', '')]
-    want = [r.get('번호', '').strip() for r in rows]
+    return [r for r in cite_check.table_rows(str(table)) if not any(w in r.get('번호', '') for w in ('참고', '뺌'))]
+
+
+def 사람판정_빈(table: Path, report: Path) -> list:
+    """판결 본문 인용 줄(cite_pdf_check 가 보는 줄)마다 '사람 판정' 표에 판단 부분인지·방향·사안 비교가 있는지,
+    'PDF 의 자리'에 '주의'(앞 글에 주장·원심·인정사실 등)가 붙은 줄은 비고가 있는지. 빠진 줄을 '줄(빠진 칸)'로 돌려준다."""
+    want = [r.get('번호', '').strip() for r in 본문_줄(table) if '법원' in r.get('사건 표시', '')]
     if not report.is_file():
-        return want
+        return [f'{n}(표 없음)' for n in want]
     판정 = {}
     for head, rs in 표들(절_글(report.read_text(encoding='utf-8'), '사람 판정')):
+        def 칸(말):
+            return next((i for i, h in enumerate(head) if 말 in h), None)
         i줄 = next((i for i, h in enumerate(head) if h in ('줄', '번호') or h.startswith('줄')), 0)
-        i판단 = next((i for i, h in enumerate(head) if '판단' in h), None)
-        i방향 = next((i for i, h in enumerate(head) if '방향' in h), None)
+        칸들 = {'판단 부분인지': 칸('판단'), '방향': 칸('방향'), '사안 비교': 칸('사안')}
+        i자리, i비고 = 칸('자리'), 칸('비고')
         for r in rs:
-            ok = all(i is not None and r[i].strip() for i in (i판단, i방향))
-            판정[r[i줄].strip()] = 판정.get(r[i줄].strip(), False) or ok
-    return [n for n in want if not 판정.get(n)]
+            빠짐 = [이름 for 이름, i in 칸들.items() if i is None or not r[i].strip()]
+            if i자리 is not None and '주의' in r[i자리] and (i비고 is None or not r[i비고].strip()):
+                빠짐.append('비고(주의 줄)')
+            판정[r[i줄].strip()] = 빠짐
+    return [f"{n}({', '.join(판정[n]) if n in 판정 else '줄 없음'})" for n in want if 판정.get(n, ['줄 없음'])]
+
+
+def 날짜들(cell: str) -> list:
+    out = []
+    for y, m, d in re.findall(r'(20\d{2})\s*[.\-]\s*(\d{1,2})\s*[.\-]\s*(\d{1,2})', cell):
+        try:
+            out.append(dt.date(int(y), int(m), int(d)))
+        except ValueError:
+            pass
+    return out
+
+
+def 대조표_칸(table: Path, 오늘=None) -> tuple:
+    """본문 인용 줄의 칸이 다 찼는지(실존·해석·확정을 뒷받침하는 칸). (막힘 말들, 미확정 줄들)
+
+    - 자리·주문·결론·다른 사유·전제·확정·원문 칸이 비지 않았다(공통/자체검토.md 3절)
+    - 판결이 아닌 자료(결정례·재결·행정해석)는 원문 파일이 있다. '화면 확인'만으로는 실존과 문언을 다시 맞댈 수 없다
+      (판결은 판결문 PDF 를 cite_pdf_check.py 가 맞댄다)
+    - 확정 칸이 미확정·확인 못함이면 넘기기 전 7일 안에 다시 본 날짜가 있다"""
+    오늘 = 오늘 or dt.date.today()
+    막, 미확정 = [], []
+    for r in 본문_줄(table):
+        n = r.get('번호', '').strip() or r.get('사건 표시', '')[:20]
+        빈 = [h for h in ('자리', '주문·결론', '다른 사유·전제', '확정', '원문') if not r.get(h, '').strip()]
+        if 빈:
+            막.append(f"{n}: {'·'.join(빈)} 칸이 비었다")
+        원문 = r.get('원문', '')
+        파일 = re.findall(r'`([^`]+)`', 원문)
+        if '법원' not in r.get('사건 표시', '') and not any((table.parent / f).exists() or (ROOT / f).exists() for f in 파일):
+            막.append(f"{n}: 원문 파일이 없다(법제처 본문이나 화면 글을 파일로 받아 '원문' 칸에 경로를 적는다)")
+        확정 = r.get('확정', '')
+        if re.search(r'미확정|미확인|확인 못|모름|계속 중|상고 중|항소 중', 확정):
+            본날 = max(날짜들(확정), default=None)
+            미확정.append(f"{n} {r.get('사건 표시', '')[:40]} — {확정[:40]}")
+            if not 본날 or (오늘 - 본날).days > 7:
+                막.append(f"{n}: 확정되지 않았거나 확인하지 못한 판결은 넘기기 전에 다시 보고 본 날짜를 적는다(마지막 {본날 or '날짜 없음'})")
+    return 막, 미확정
 
 
 def 인용_있나(text: str) -> bool:
@@ -211,11 +260,14 @@ def 판례(res: 결과, 대상: Path, table: Path, pdfdir: Path, 폴더: Path):
             res.add('판례 대조', '해당 없음', '사건번호 없음')
         return
     res.run('판례 대조', [SC / 'cite_check.py', table, '--target', 대상], '불일치 0')
+    막, 미확정 = 대조표_칸(table)
+    res.add('대조표 칸(실존·해석·확정)', '막힘' if 막 else '통과', '; '.join(막[:12]) if 막 else '본문 인용 줄의 칸이 모두 찼다')
+    if 미확정:
+        res.add('미확정·확인 못한 판결', '참고', '보고에 적고 제출 전에 다시 본다: ' + '; '.join(미확정[:8]))
     검색_완결(res, 폴더)
     sys.path.insert(0, str(SC))
     import cite_check
-    본문줄 = [r for r in cite_check.table_rows(str(table))
-           if not any(w in r.get('번호', '') for w in ('참고', '뺌')) and '법원' in r.get('사건 표시', '')]
+    본문줄 = [r for r in 본문_줄(table) if '법원' in r.get('사건 표시', '')]
     if not 본문줄:
         res.add('판결문 PDF', '해당 없음', '본문 인용 판결 없음')
         return
@@ -225,8 +277,8 @@ def 판례(res: 결과, 대상: Path, table: Path, pdfdir: Path, 폴더: Path):
     report = table.parent / '판결원문_PDF대조.md'
     if res.run('판결문 PDF', [SC / 'cite_pdf_check.py', table, pdfdir, '--out', report, '--target', 대상], '문제 0') == 0:
         빈 = 사람판정_빈(table, report)
-        res.add('판결 판단 부분·방향', '막힘' if 빈 else '통과',
-                (f"'사람 판정' 표에 판단 부분인지·방향이 없는 줄: {', '.join(빈)} ({report})") if 빈 else f'{len(본문줄)}줄 판정')
+        res.add('판결 판단 부분·방향·사안 비교', '막힘' if 빈 else '통과',
+                (f"'사람 판정' 표에서 빈 줄: {', '.join(빈[:12])} ({report})") if 빈 else f'{len(본문줄)}줄 판정')
 
 
 # ---------------------------------------------------------------- 서면
