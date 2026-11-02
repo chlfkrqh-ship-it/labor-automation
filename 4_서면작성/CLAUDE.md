@@ -192,7 +192,7 @@ python 4_서면작성/scripts/docx_merge.py "<출력>/서면_프레임.docx" "<�
 | 본문에 `[[각주:` 표시가 남지 않았는지 | `python 4_서면작성/scripts/docx_footnotes.py <파일> --check` |
 | 금지 낱말·접속부사 쉼표·대괄호 메모·문체 실측치 | `python 4_서면작성/scripts/style_check.py <파일>` |
 | 인용한 호증이 목록에 있는지, 판례기록이 있는지 | `python 4_서면작성/scripts/citation_check.py <파일>` |
-| 모든 호증을 전 면 읽고 면마다 기록했는지, 면마다 끝까지 열어 본 확인표가 있는지(`.claude/commands/증거정리.md` 3단계) | `python -B 4_서면작성/scripts/evidence_read.py check <사건 폴더>`(그림으로 볼 면은 `… 그림 <사건 폴더> --호증 {호증키}` 로 연다) |
+| 모든 호증을 전 면 읽고 면마다 기록했는지, 면마다(압축·엑셀·문서는 단위의 덩이·그림마다) 끝까지 열어 본 확인표가 있는지(`.claude/commands/증거정리.md` 3단계) | `python -B 4_서면작성/scripts/evidence_read.py check <사건 폴더>`(그림으로 볼 면과 문서 안 그림은 `… 그림 <사건 폴더> --호증 {호증키}` 로 연다) |
 | 쟁점 낱말이 호증의 어느 면에 있고 서면이 그 면을 인용하였는지(`.claude/commands/서면.md` 6-1단계) | `python -B 4_서면작성/scripts/evidence_words.py <사건 폴더> --낱말 {낱말들}` → 판단을 적은 뒤 `--확인` |
 | 심문회의 예상 질의답변의 모양(제목, 넣지 않는 절, 묻는 이·답하는 이 표시, 회색 메모, 정렬. `.claude/commands/예상질의.md`) | `python -B 4_서면작성/scripts/qna_check.py <파일>` |
 | 넘기기 전 마지막 관문: 위 검사와 판정 칸을 모두 했는지(`공통/자체검토.md` 4-1절 6.) | `python -B 공통/scripts/final_check.py <사건 폴더> [--라운드 N] [--대상 <docx>]` |
