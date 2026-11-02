@@ -3,10 +3,11 @@
 호증마다 단위(PDF 면, 그림, 압축파일 안 파일, 엑셀 시트)별 빈 줄이 있는 틀을 만드는지, 모든 단위를 채우지 않으면 check 가
 막는지, '같음'·'반복'만 적은 줄을 빈 줄로 세는지, 기록한 뒤 파일이 바뀌면 막는지, 번호를 다시 매기면 기록을 옮기는지 본다.
 압축·엑셀·워드·한글(hwpx)·메일 호증도 단위마다 글 덩이·면·그림의 확인표가 있어야 지나가는지 본다(OtherFormatsTest).
-문자인식(Windows)은 돌리지 않는다(--no-ocr).
+세션 기록으로 읽은 줄을 재는 실측과 스캔 표의 줄 복원도 본다. 문자인식(Windows)은 돌리지 않는다(--no-ocr).
 """
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import re
@@ -97,6 +98,9 @@ def run(*args):
 class EvidenceReadTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        실측 = mock.patch.object(er, '실측_문제', return_value=[])      # 실측은 MeasuredReadingTest 가 본다
+        실측.start()
+        self.addCleanup(실측.stop)
         self.case = Path(self.tmp.name) / 'GGM_정직'
         self.ours = self.case / '라운드1' / '우리증거'
         self.ours.mkdir(parents=True)
@@ -254,6 +258,9 @@ class CheaperReadingTest(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        실측 = mock.patch.object(er, '실측_문제', return_value=[])
+        실측.start()
+        self.addCleanup(실측.stop)
         self.root = Path(self.tmp.name)
         self.case = self.root / '4_서면작성' / '사건' / 'GGM_정직'
         self.ours = self.case / '라운드1' / '우리증거'
@@ -374,6 +381,9 @@ class ProofOfReadingTest(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        실측 = mock.patch.object(er, '실측_문제', return_value=[])
+        실측.start()
+        self.addCleanup(실측.stop)
         self.case = Path(self.tmp.name) / '한전_태양광'
         self.ours = self.case / '라운드1' / '우리증거'
         self.ours.mkdir(parents=True)
@@ -460,6 +470,260 @@ class ProofOfReadingTest(unittest.TestCase):
         code, out = run('그림', self.case, '--호증', '을106', '--out', Path(self.tmp.name) / '그림')
         self.assertEqual(sorted(p.name for p in (Path(self.tmp.name) / '그림' / '을106').glob('*.png')),
                          ['01조각.png', '02조각.png', '03조각.png', '04조각.png'])
+
+
+def 세션(폴더: Path, 이름: str, 호출들):
+    """세션 기록 한 개를 쓴다. 호출들: (도구, 입력, 결과). 앱이 남기는 꼴과 같게 줄마다 메시지 하나이다."""
+    폴더.mkdir(parents=True, exist_ok=True)
+    줄 = []
+    for i, (도구, 입력, 결과) in enumerate(호출들):
+        k = f'toolu_{이름}_{i}'
+        줄.append({'type': 'assistant', 'message': {'id': f'm{i}', 'content': [{'type': 'tool_use', 'id': k, 'name': 도구, 'input': 입력}]}})
+        줄.append({'type': 'user', 'message': {'content': [{'type': 'tool_result', 'tool_use_id': k, 'content': 결과}]}})
+    (폴더 / f'{이름}.jsonl').write_text('\n'.join(json.dumps(x, ensure_ascii=False) for x in 줄) + '\n', encoding='utf-8')
+
+
+def 줄번호(글_):
+    """읽기 도구의 결과 꼴."""
+    return '\n'.join(f'{i}\t{l}' for i, l in enumerate(글_.splitlines(), 1))
+
+
+그림결과 = [{'type': 'image', 'source': {'type': 'base64', 'data': 'AAAA'}}]
+
+
+class MeasuredReadingTest(unittest.TestCase):
+    """확인표는 거른 줄과 함께 찍으면 옮겨 적을 수 있으므로 세션 기록으로 잰다(2026. 11. 3. 담당 노무사 "뭔가 여전히 증거는 대충 읽는 느낌이 있네")."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.case = self.root / '4_서면작성' / '사건' / 'GGM_정직'
+        self.ours = self.case / '라운드1' / '우리증거'
+        self.ours.mkdir(parents=True)
+        self.기록 = self.root / '세션기록'
+        self.기록.mkdir()
+        self.env = mock.patch.dict(os.environ, {'EVIDENCE_READ_ROOT': str(self.root)})
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def 글파일(self, key):
+        return self.case / '증거관리' / '호증글자' / f'{key}.txt'
+
+    def rec(self, key):
+        return self.case / '증거관리' / '호증읽기' / f'{key}.md'
+
+    def 채움(self, key, 면수, 방식='글자층 전 면'):
+        """칸과 확인표를 모두 채운다. check 가 실측만 남기게 한다."""
+        t = self.rec(key).read_text(encoding='utf-8').replace('읽은 방식: \n', f'읽은 방식: {방식}\n')
+        for n in range(1, 면수 + 1):
+            t = t.replace(f'- {n}면: \n', f'- {n}면: {n}면 내용 확인표 {tok(self.case, key, n)}\n')
+        self.rec(key).write_text(t.replace('면)\n\n- \n', '면)\n\n- 없음\n', 1), encoding='utf-8')
+
+    def 실측(self, *더):
+        return run('실측', self.case, '--기록폴더', self.기록, *더)
+
+    def 읽음(self, key, 글_=None):
+        return ('Read', {'file_path': str(self.글파일(key))}, 줄번호(글_ if 글_ is not None else self.글파일(key).read_text(encoding='utf-8')))
+
+    def 문자(self, n=3):
+        make_pdf(self.ours / '사 제6호증 문자.pdf', [글 + f'{i}면 고유 문구입니다' for i in range(1, n + 1)])
+        run('make', self.case, '--no-ocr')
+        self.채움('사6', n)
+
+    def test_filled_record_with_codes_but_no_measurement_is_blocked(self):
+        self.문자()
+        code, out = run('check', self.case)
+        self.assertEqual(code, 1)
+        self.assertIn('실제로 읽은 기록(실측)이 없다', out)
+        self.assertNotIn('확인표가 없거나', out)
+
+    def test_reading_the_whole_text_passes_and_leaves_a_line(self):
+        self.문자()
+        세션(self.기록, '세션1', [self.읽음('사6')])
+        code, out = self.실측()
+        self.assertEqual(code, 0, out)
+        t = self.rec('사6').read_text(encoding='utf-8')
+        self.assertRegex(t, r'(?m)^실측: \d{4}-\d\d-\d\d · 줄 (\d+)/\1 · 그림 없음 · 글 [0-9a-f]{12} · 세션 세션1$')
+        self.assertEqual(run('check', self.case)[0], 0)
+
+    def test_view_only_writes_nothing(self):
+        self.문자()
+        세션(self.기록, '세션1', [self.읽음('사6')])
+        code, out = self.실측('--보기')
+        self.assertEqual(code, 0, out)
+        self.assertIn('보기만', out)
+        self.assertNotIn('실측:', self.rec('사6').read_text(encoding='utf-8'))
+
+    def test_filtered_lines_with_codes_do_not_pass(self):
+        """한전 을 제105호증의10 처럼 거른 줄만 찍되 확인표 줄을 함께 찍으면 확인표는 맞아도 실측이 막는다."""
+        self.문자()
+        전체 = self.글파일('사6').read_text(encoding='utf-8')
+        고른 = '\n'.join(l for l in 전체.splitlines() if '고유 문구' in l or '확인표' in l)
+        세션(self.기록, '세션1', [('Bash', {'command': f'python 거르기.py "{self.글파일("사6")}"'}, 고른)])
+        code, out = self.실측()
+        self.assertEqual(code, 1)
+        self.assertIn('덜 읽은 면 1~3', out)
+        self.assertNotIn('실측:', self.rec('사6').read_text(encoding='utf-8'))
+        self.assertEqual(run('check', self.case)[0], 1)
+
+    def test_first_page_only_does_not_pass(self):
+        self.문자()
+        첫면 = self.글파일('사6').read_text(encoding='utf-8').split('=== 2면')[0]   # 첫 면만 읽은 것(GGM 사 제6호증)
+        세션(self.기록, '세션1', [self.읽음('사6', 첫면)])
+        code, out = self.실측()
+        self.assertEqual(code, 1)
+        self.assertIn('덜 읽은 면 2~3', out)
+
+    def test_lines_are_counted_across_sessions_but_not_from_subagents(self):
+        self.문자()
+        앞, 뒤 = self.글파일('사6').read_text(encoding='utf-8').split('=== 2면')
+        세션(self.기록, '세션1', [self.읽음('사6', 앞)])
+        세션(self.기록 / '세션1' / 'subagents', 'agent-1', [self.읽음('사6', '=== 2면' + 뒤)])
+        self.assertEqual(self.실측()[0], 1)                                        # 하위 작업이 읽은 것은 세지 않는다
+        세션(self.기록, '세션2', [self.읽음('사6', '=== 2면' + 뒤)])
+        code, out = self.실측()
+        self.assertEqual(code, 0, out)
+        self.assertIn('세션 세션1·세션2', self.rec('사6').read_text(encoding='utf-8'))
+
+    def test_repeated_lines_must_be_read_at_the_head_too(self):
+        make_pdf(self.ours / '사 제7호증 문자.pdf', [글 + f'{n}일 실천사항 점검표를 확인하고 이상이 있으면 즉시 보고합니다' for n in range(1, 7)])
+        run('make', self.case, '--no-ocr')
+        전체 = self.글파일('사7').read_text(encoding='utf-8')
+        self.assertIn('- R1: ', 전체)
+        세션(self.기록, '세션1', [self.읽음('사7', '=== 1면' + 전체.split('=== 1면', 1)[1])])      # 면만 읽고 머리의 되풀이 줄은 안 읽음
+        self.assertEqual(self.실측()[0], 1)
+        세션(self.기록, '세션1', [self.읽음('사7')])
+        self.assertEqual(self.실측()[0], 0)
+
+    def test_changed_text_needs_another_measurement(self):
+        self.문자()
+        세션(self.기록, '세션1', [self.읽음('사6')])
+        self.실측()
+        self.assertEqual(run('check', self.case)[0], 0)
+        f = self.글파일('사6')
+        f.write_text(f.read_text(encoding='utf-8') + '\n=== 4면 (글자층) ===\n새로 들어온 줄입니다\n', encoding='utf-8')
+        code, out = run('check', self.case)
+        self.assertEqual(code, 1)
+        self.assertIn('면별 글이 바뀌었다', out)
+        self.assertEqual(self.실측()[0], 1)                                         # 새 줄을 읽기 전에는 통과하지 못한다
+        세션(self.기록, '세션2', [self.읽음('사6')])
+        self.assertEqual(self.실측()[0], 0)
+        self.assertEqual(run('check', self.case)[0], 0)
+
+    def test_flagged_page_needs_its_own_image_not_a_contact_sheet(self):
+        make_pdf(self.ours / '사 제4호증 급여.pdf', [글 + '급여 안내', '서명'])
+        run('make', self.case, '--no-ocr')
+        self.assertIn('그림으로 볼 면: 2면(글자 거의 없음)', self.글파일('사4').read_text(encoding='utf-8'))
+        self.채움('사4', 2, '글자층 1면, 그림 2면')
+        세션(self.기록, '세션1', [self.읽음('사4'), ('Read', {'file_path': str(self.case / '증거관리' / '모음그림.png')}, 그림결과)])
+        code, out = self.실측()
+        self.assertEqual(code, 1)
+        self.assertIn('한 장씩 열지 않은 그림 2면', out)
+        폴더 = self.root / '그림'
+        self.assertEqual(run('그림', self.case, '--호증', '사4', '--out', 폴더)[0], 0)
+        낱장 = 폴더 / '사4' / '002면.png'
+        self.assertTrue(낱장.is_file())
+        세션(self.기록, '세션1', [self.읽음('사4'), ('Read', {'file_path': str(낱장)}, 그림결과)])
+        code, out = self.실측()
+        self.assertEqual(code, 0, out)
+        self.assertIn('그림 2면', self.rec('사4').read_text(encoding='utf-8'))
+        self.assertEqual(run('check', self.case)[0], 0)
+
+    def test_pdf_pages_read_directly_count_as_images(self):
+        make_pdf(self.ours / '사 제4호증 급여.pdf', [글 + '급여 안내', '서명', 글 + '끝'])
+        run('make', self.case, '--no-ocr')
+        세션(self.기록, '세션1', [self.읽음('사4'), ('Read', {'file_path': str(self.ours / '사 제4호증 급여.pdf'), 'pages': '2-2'}, 그림결과)])
+        self.assertEqual(self.실측('--호증', '사4')[0], 0)
+
+    def test_image_exhibit_all_pieces_and_files_that_cannot_be_measured(self):
+        d = pymupdf.open()
+        pg = d.new_page(width=300, height=900)
+        pg.insert_text((20, 60), '대화 갈무리', fontsize=12, fontname='korea')
+        pg.get_pixmap(dpi=72).save(str(self.ours / '사 제2호증 대화.png'))
+        (self.ours / '사 제5호증 메모.docx').write_bytes(b'PK')
+        (self.ours / '사 제8호증 깨진 사진.jpg').write_bytes(b'\xff\xd8\xff')
+        run('make', self.case, '--no-ocr')
+        self.assertIn('실측', run('check', self.case, '--호증', '사5')[1])          # 문서도 면별 글이 있으므로 잰다(2026. 11. 3. 압축·엑셀·문서 확인표)
+        self.assertNotIn('실측', run('check', self.case, '--호증', '사8')[1])       # 열리지 않는 그림도 재지 않는다
+        self.assertIn('실측', run('check', self.case, '--호증', '사2')[1])
+        폴더 = self.root / '그림'
+        run('그림', self.case, '--호증', '사2', '--out', 폴더)
+        조각들 = sorted((폴더 / '사2').glob('*조각.png'))
+        self.assertEqual(len(조각들), 3)                                            # 900 높이는 폭의 1.4배로 세 조각이다
+        세션(self.기록, '세션1', [('Read', {'file_path': str(조각들[0])}, 그림결과)])
+        code, out = self.실측('--호증', '사2')
+        self.assertEqual(code, 1)
+        self.assertIn('한 장씩 열지 않은 그림 2조각', out)
+        세션(self.기록, '세션1', [('Read', {'file_path': str(x)}, 그림결과) for x in 조각들])
+        code, out = self.실측('--호증', '사2')
+        self.assertEqual(code, 0, out)
+        self.assertIn('그림 3조각', self.rec('사2').read_text(encoding='utf-8'))
+
+
+class RowRestoreTest(unittest.TestCase):
+    """스캔 표의 칸 조각을 줄로 되돌린다(2026. 11. 3. 한전 을 제105호증의10: 면마다 칸 조각 700여 개가 한 줄씩 나왔다)."""
+
+    칸 = ['2020-07-16', '14:03:21', '30,000', '1,250,000', '입금', '홍길동', '타행이체', '농협']
+
+    def 조각(self, 기울기=0.0, 줄수=12, 줄간=30):
+        out = []
+        for r in range(줄수):
+            for c, t in enumerate(self.칸):
+                x = 50 + c * 150
+                y = 100 + r * 줄간 + 기울기 * x
+                out.append((f'{t}{r}', (x, y, x + 60, y + 12)))
+        return out
+
+    def 줄(self, r):
+        return '| ' + ' | '.join(f'{t}{r}' for t in self.칸) + ' |'
+
+    def test_fragments_become_rows_without_losing_any(self):
+        rows = er.줄_복원(self.조각())
+        self.assertEqual(len(rows), 12)
+        self.assertEqual(rows[3], self.줄(3))
+        self.assertEqual(sorted(x for r in rows for x in re.split(r'\s*\|\s*', r) if x), sorted(t for t, _ in self.조각()))
+
+    def test_tilted_scan(self):
+        rows = er.줄_복원(self.조각(기울기=0.03, 줄간=20))                         # 끝에서 끝까지 한 줄 넘게 기운 스캔
+        self.assertEqual(len(rows), 12)
+        self.assertEqual(rows[5], self.줄(5))
+
+    def test_plain_text_is_not_a_table(self):
+        글줄 = [(f'{i}번째 문장은 한 줄로 온전히 읽혔습니다', (50, 100 + i * 30, 900, 112 + i * 30)) for i in range(30)]
+        self.assertFalse(er.표_모양(er.줄_복원(글줄)))
+        self.assertFalse(er.표_모양(er.줄_복원(self.조각(줄수=2))))                 # 조각이 적으면 표로 보지 않는다
+        self.assertTrue(er.표_모양(er.줄_복원(self.조각())))
+
+    def test_make_writes_rows_for_scanned_pages_and_keeps_rotation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            case = Path(tmp) / 'GGM_정직'
+            ours = case / '라운드1' / '우리증거'
+            ours.mkdir(parents=True)
+            d = pymupdf.open()
+            d.new_page(width=400, height=800)
+            d.save(ours / '사 제9호증 계좌내역.pdf')
+            캐시 = case / '증거관리' / '호증글자' / 'ocr' / '사9'
+            캐시.mkdir(parents=True)
+            (캐시 / 'pages.json').write_text(json.dumps({'1': {'png': 'p001.png', 'src': '문자인식(270도 돌림)', 'units': self.조각(기울기=0.01)}},
+                                                        ensure_ascii=False), encoding='utf-8')
+            with mock.patch.dict(os.environ, {'EVIDENCE_READ_ROOT': tmp}):
+                run('make', case, '--no-ocr')
+                글파일 = case / '증거관리' / '호증글자' / '사9.txt'
+                t = 글파일.read_text(encoding='utf-8')
+                self.assertIn('문자인식(270도 돌림)', t)                            # 칸마다 따로 읽혀 숫자 표로 잡히지 않아도 줄로 돌린다
+                self.assertIn(self.줄(3), t)
+                self.assertEqual(er.글_읽기(t)[2], {1: 270})
+                # 누운 스캔은 돌린 대로 세워 그린다
+                run('그림', case, '--호증', '사9', '--면', 1, '--out', Path(tmp) / '그림')
+                pix = pymupdf.Pixmap(str(Path(tmp) / '그림' / '사9' / '001면.png'))
+                self.assertGreater(pix.width, pix.height)
+                # 면별 글만 다시 낸다
+                글파일.write_text('옛 글', encoding='utf-8')
+                run('make', case, '--no-ocr', '--글다시', '사9')
+                self.assertIn(self.줄(3), 글파일.read_text(encoding='utf-8'))
 
 
 W_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
@@ -596,6 +860,9 @@ class OtherFormatsTest(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        실측 = mock.patch.object(er, '실측_문제', return_value=[])      # 실측은 OtherFormatsMeasuredTest 가 본다
+        실측.start()
+        self.addCleanup(실측.stop)
         self.case = Path(self.tmp.name) / 'GGM_정직'
         self.ours = self.case / '라운드1' / '우리증거'
         self.ours.mkdir(parents=True)
@@ -723,8 +990,21 @@ class OtherFormatsTest(unittest.TestCase):
         (캐시 / 'pages.json').write_text('{"1": {"units": [["앞 파일의 문자인식 글", [0, 0, 10, 10]]], "png": "p001.png"}}', encoding='utf-8')
         (캐시 / '파일해시.txt').write_text('deadbeef0000', encoding='utf-8')
         run('make', self.case, '--no-ocr', '--호증', '사6')
-        self.assertNotIn('앞 파일의 문자인식 글', self.text('사6'))
-        self.assertEqual((캐시 / '파일해시.txt').read_text(encoding='utf-8') if 캐시.is_dir() else '', er.해시(self.ours / '사 제6호증 스캔.pdf') if 캐시.is_dir() else '')
+        self.assertNotIn('앞 파일의 문자인식 글', self.text('사6'))                   # 다른 파일의 표지가 붙은 캐시는 버린다
+        # 표지가 없는 옛 캐시는 쓰되, 기록한 뒤 파일이 바뀌면 버린다
+        캐시.mkdir(parents=True, exist_ok=True)
+        (캐시 / 'pages.json').write_text('{"1": {"units": [["옛 캐시의 문자인식 글", [0, 0, 10, 10]]], "png": "p001.png"}}', encoding='utf-8')
+        (캐시 / '파일해시.txt').unlink(missing_ok=True)
+        run('make', self.case, '--no-ocr', '--호증', '사6', '--글다시', '사6')
+        self.assertIn('옛 캐시의 문자인식 글', self.text('사6'))
+        self.assertEqual((캐시 / '파일해시.txt').read_text(encoding='utf-8'), er.해시(self.ours / '사 제6호증 스캔.pdf'))
+        (캐시 / '파일해시.txt').unlink()
+        d = pymupdf.open()
+        d.new_page()
+        d.new_page()
+        d.save(self.ours / '사 제6호증 스캔.pdf')                                     # 같은 번호에 다른 파일
+        run('make', self.case, '--no-ocr', '--다시', '사6')
+        self.assertNotIn('옛 캐시의 문자인식 글', self.text('사6'))
 
     @unittest.skipUnless(er._et.soffice(), 'LibreOffice 가 없다')
     def test_old_word_file_and_emf_picture_go_through_libreoffice(self):
@@ -746,6 +1026,67 @@ class OtherFormatsTest(unittest.TestCase):
         code, out = run('그림', self.case, '--호증', '사10', '--out', Path(self.tmp.name) / '그림')
         self.assertEqual(code, 0, out)
         self.assertEqual([p.name for p in (Path(self.tmp.name) / '그림' / '사10').glob('*.png')], ['001_01조각.png'])
+
+
+class OtherFormatsMeasuredTest(unittest.TestCase):
+    """압축·엑셀·문서도 확인표만 옮겨서는 지나가지 못하고 세션 기록으로 잰다(확인표만 grep 해 옮기는 길을 막는다)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.case = self.root / '4_서면작성' / '사건' / 'GGM_정직'
+        self.ours = self.case / '라운드1' / '우리증거'
+        self.ours.mkdir(parents=True)
+        self.기록 = self.root / '세션기록'
+        self.기록.mkdir()
+        self.env = mock.patch.dict(os.environ, {'EVIDENCE_READ_ROOT': str(self.root)})
+        self.env.start()
+        with zipfile.ZipFile(self.ours / '사 제3호증 자료 묶음.zip', 'w') as z:
+            z.writestr('a.png', png_bytes(300, 700, '대화'))
+            z.writestr('b.pdf', pdf_bytes([글 + '1면 고유 문구', 글 + '2면 고유 문구']))
+            z.writestr('c.docx', docx_bytes([('image1.png', png_bytes(400, 300, '현장 사진'))]))
+        run('make', self.case, '--no-ocr')
+        채우기(self.case, '사3', 기대표(self.case, '사3'))
+        self.글파일 = self.case / '증거관리' / '호증글자' / '사3.txt'
+        self.그림폴더 = self.root / '그림'
+        run('그림', self.case, '--호증', '사3', '--out', self.그림폴더)
+
+    def tearDown(self):
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def 그림_열기(self):
+        return [('Read', {'file_path': str(f)}, 그림결과) for f in sorted((self.그림폴더 / '사3').glob('*.png'))]
+
+    def test_codes_alone_are_not_enough_and_reading_everything_passes(self):
+        self.assertEqual(sorted(p.name for p in (self.그림폴더 / '사3').glob('*.png')), ['001_01조각.png', '001_02조각.png', '003_01조각.png'])
+        code, out = run('check', self.case)
+        self.assertEqual(code, 1)
+        self.assertIn('실제로 읽은 기록(실측)이 없다', out)
+        self.assertNotIn('확인표가 없거나', out)
+        전체 = self.글파일.read_text(encoding='utf-8')
+        고른 = '\n'.join(l for l in 전체.splitlines() if '확인표' in l)          # 확인표 줄만 찍어 옮긴 것
+        세션(self.기록, '세션1', [('Bash', {'command': f'grep 확인표 "{self.글파일}"'}, 고른)] + self.그림_열기())
+        code, out = run('실측', self.case, '--기록폴더', self.기록)
+        self.assertEqual(code, 1)
+        self.assertIn('덜 읽은 단위 [파일] b.pdf, [파일] c.docx', out)
+        (self.기록 / '세션1.jsonl').unlink()
+        세션(self.기록, '세션2', [('Read', {'file_path': str(self.글파일)}, 줄번호(전체))])        # 글은 다 읽고 그림은 안 엶
+        code, out = run('실측', self.case, '--기록폴더', self.기록)
+        self.assertEqual(code, 1)
+        self.assertIn('한 장씩 열지 않은 그림 3장', out)
+        세션(self.기록, '세션3', self.그림_열기())
+        code, out = run('실측', self.case, '--기록폴더', self.기록)
+        self.assertEqual(code, 0, out)
+        self.assertRegex(self.case.joinpath('증거관리', '호증읽기', '사3.md').read_text(encoding='utf-8'),
+                         r'(?m)^실측: \d{4}-\d\d-\d\d · 줄 (\d+)/\1 · 그림 3장 · 글 [0-9a-f]{12} · 세션 ')
+        self.assertEqual(run('check', self.case)[0], 0)
+        run('make', self.case, '--no-ocr', '--글다시', '사3')                       # 면별 글을 다시 내면(글판이 같아 내용은 같다) 표시가 맞으면 그대로
+        self.assertEqual(run('check', self.case)[0], 0)
+        self.글파일.write_text(self.글파일.read_text(encoding='utf-8') + '\n덧붙은 줄', encoding='utf-8')
+        code, out = run('check', self.case)
+        self.assertEqual(code, 1)
+        self.assertIn('실측한 뒤 면별 글이 바뀌었다', out)
 
 
 class TextPiecesTest(unittest.TestCase):

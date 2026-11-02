@@ -105,6 +105,7 @@ class BriefGateTest(unittest.TestCase):
         t = t.replace('- 2면: ', f'- 2면: 안전 문자 확인표 {확인["2"]}').replace('- 3면: ', f'- 3면: 시험 기기 사용 금지 확인표 {확인["3"]}')
         t = t.replace('면)\n\n- \n', '면)\n\n- 3면 "작업 중 시험 기기 사용 금지"\n')
         rec.write_text(t, encoding='utf-8')
+        er.실측_적기(rec, f"실측: 시험 · 글 {er.해시(self.case / '증거관리' / '호증글자' / '사6.txt')}")      # 재는 일은 test_evidence_read 가 본다
         REAL_RUN([ROOT / '4_서면작성/scripts/evidence_words.py', self.case, '--낱말', '시험', '--no-ocr'])
         표 = self.r / '작업' / '쟁점낱말_대조.md'
         표.write_text(re.sub(r'(?m)^(\| 사 제6호증 .*\|) +\|$', r'\1 본문 1항에 씀 |', 표.read_text(encoding='utf-8')), encoding='utf-8')
