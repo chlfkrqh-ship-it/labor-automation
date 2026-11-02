@@ -16,6 +16,9 @@ OneDrive 가 맞춰 두지만, 이어 쓰는 대화는 그것을 모른다. `.cl
 다만 대화 기록에 사용자가 끊은 표시가 있거나 3시간이 지났으면 끊긴 응답으로 보고 알린다.
 30분 넘게 쉬었으면 `receive.py --auto` 로 시스템 파일도 받는다.
 
+prompt 는 담당자가 결과를 지적한 것으로 보이는 메시지('왜', '빠뜨', '틀렸', '재발' 등)를 `공통/사건/_지적기록/{PC}.jsonl` 에 적는다.
+매일 자정 `/하자보완` 이 그 기록을 읽고 지적이 지침·검사로 옮겨졌는지 본다(2026. 11. 2. 담당 노무사 "매일 자정에 자체 하자보완 시스템").
+
 어떤 오류가 나도 종료 코드 0 으로 끝나 메시지를 막지 않는다. 출력은 ASCII JSON 이다(Windows 콘솔 인코딩과 무관).
 """
 from __future__ import annotations
@@ -244,6 +247,29 @@ def on_prompt(data: dict, root: Path, sdir: Path, now: float | None = None, rece
     return compose(changes, cur, since, caveat, got)
 
 
+# 담당자가 결과를 지적한 메시지(`/하자보완` 이 밤에 읽고 지침·검사로 옮겨졌는지 본다). 지나치게 넓어도 밤에 가려 읽으므로 놓치지 않는 쪽을 택한다
+지적말 = re.compile(r'왜|빠뜨|빠졌|빠진|놓쳤|놓친|틀렸|틀린|잘못|다시\s*(?:해|봐|보|확인|검토)|재발|지침화|지침\s*(?:반영|마련|으로)|'
+                 r'이상하|이상해|아니잖|아닌데|퀄리티|엉망|개판|누락|오류|실수|의문|이해할 수 없|하자|제대로|생경|어색')
+
+
+def log_feedback(data: dict, root: Path, now: float | None = None) -> Path | None:
+    """지적으로 보이는 메시지를 `공통/사건/_지적기록/{PC}.jsonl` 에 한 줄 덧붙인다(git 밖, OneDrive 로 두 PC가 함께 본다).
+    `공통/사건/` 이 없는 곳(클라우드 세션)에서는 적지 않는다."""
+    text = data.get('prompt')
+    base = root / '공통' / '사건'
+    if not isinstance(text, str) or not base.is_dir() or not 지적말.search(text):
+        return None
+    import socket
+    pc = re.sub(r'[^\w.-]', '_', os.environ.get('COMPUTERNAME') or socket.gethostname() or 'PC')
+    path = base / '_지적기록' / f'{pc}.jsonl'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row = {'시각': datetime.fromtimestamp(time.time() if now is None else now).isoformat(timespec='minutes'), 'PC': pc, 'session': data.get('session_id'),
+           'cwd': data.get('cwd'), '글': text[:2000]}
+    with open(path, 'a', encoding='utf-8') as f:
+        f.write(json.dumps(row, ensure_ascii=False) + '\n')
+    return path
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('mode', choices=['stop', 'prompt'])
@@ -266,6 +292,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.mode == 'stop':
             on_stop(data, args.root, sdir)
         else:
+            try:
+                log_feedback(data, args.root)
+            except Exception:                           # 기록하지 못해도 메시지는 막지 않는다
+                pass
             out = on_prompt(data, args.root, sdir)
     except Exception as exc:                            # 훅은 메시지를 막지 않는다
         if args.mode == 'prompt':

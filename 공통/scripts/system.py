@@ -42,6 +42,8 @@ GUIDE_SETS = {
                             '공통/사건상태.md'] + LBOX,
     # 하루치 메일·팀즈를 사건 폴더에 받아 넣고 기록만 한다. 인용하는 산출물이 없어 자체검토·LBOX 지침은 읽지 않는다.
     '메일반영': COMMON + ['.claude/commands/메일반영.md', '공통/사건상태.md'],
+    # 매일 자정 시스템 시험·최종 관문·그날 지적의 반영을 본다. 인용하는 산출물을 쓰지 않으므로 자체검토·문체 지침은 읽지 않는다.
+    '하자보완': COMMON + ['.claude/commands/하자보완.md'],
     '판례검색': COMMON + CITE + ['2_판례검색/CLAUDE.md', '.claude/commands/판례검색.md'] + LBOX,
     '서면보강': COMMON + CITE + ['3_서면보강/CLAUDE.md', '.claude/commands/서면보강.md'] + LBOX,
     # 서면 하나가 입구다. 반박 구성과 노동위 기록 추출은 자료에 따라 켜는 갈래이며
@@ -254,7 +256,7 @@ class System:
                    if not self.path(f).is_file()]
         commands = {p.stem for p in self.path('.claude/commands').glob('*.md')}
         required = {'검토의견', '판례검색', '서면보강', '서면', '증거정리', '증거발췌', '문체검증',
-                    '노동위서류', '예상질의', '녹취', '손배계산', '손배검산', '자체검토', '배당확인', '메일반영'}
+                    '노동위서류', '예상질의', '녹취', '손배계산', '손배검산', '자체검토', '배당확인', '메일반영', '하자보완'}
         missing.extend('.claude/commands/' + n + '.md' for n in sorted(required - commands))
         skill_errors = []
         for p in self.path('.claude/skills').glob('*/SKILL.md'):
