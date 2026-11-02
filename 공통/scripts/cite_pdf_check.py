@@ -98,12 +98,14 @@ def check(table, pdfdir, targets=None):
             for c in cases(n):
                 files.setdefault(c, os.path.join(pdfdir, n))
     tgt = None if targets is None else [norm(read_target(p)) for p in targets]
-    used, bad, lines, body, cache = set(), 0, [], [], {}
+    used, bad, lines, body, cache, skel = set(), 0, [], [], {}, []
     for r in rows:
         mark, no = r.get("사건 표시", ""), r.get("번호", "")
         nums = sorted(cases(mark), key=mark.find)
         path = next((files[c] for c in nums if c in files), None)
         body.append("## %s — %s" % (no, mark))
+        row_skel = {"줄": no, "판결": nums[0] if nums else mark[:30], "자리": "", "주의": []}
+        skel.append(row_skel)
         if not nums or not path:
             bad += 1; body += ["- **PDF 없음**", ""]; lines.append("%s — PDF 없음" % no); continue
         used.add(path)
@@ -136,6 +138,9 @@ def check(table, pdfdir, targets=None):
                 before = re.sub(r"\s+", " ", flat[max(0, a - 6000):a])
                 heads = HEAD.findall(before)
                 warn = [w for w in WARN if w in before[-300:]]
+                if not row_skel["자리"]:
+                    row_skel["자리"] = "%s · %s" % (part_label(sq, k), heads[-1].strip()[:40] if heads else "항목 머리 못 찾음")
+                row_skel["주의"] += [w for w in warn if w not in row_skel["주의"]]
                 body += ["- 찾음(%s): %s…" % (part_label(sq, k), p[:50]),
                          "  - 가까운 항목 머리: %s" % (heads[-1].strip()[:70] if heads else "(찾지 못함)"),
                          "  - 앞 글: …%s" % before[-220:],
@@ -151,7 +156,48 @@ def check(table, pdfdir, targets=None):
     extra = sorted(os.path.basename(p) for p in set(files.values()) - used)
     if extra:
         body += ["## 대조표 본문 줄이 가리키지 않는 PDF", ""] + ["- `%s`" % n for n in extra] + [""]
-    return {"줄": len(rows), "판결": len(used), "문제": bad, "내용": lines, "보고서": body}
+    return {"줄": len(rows), "판결": len(used), "문제": bad, "내용": lines, "보고서": body, "틀": skel}
+
+
+JUDGE_HEAD = ["줄", "판결", "PDF 의 자리", "판단 부분인지", "방향", "사안 비교", "비고"]
+
+
+def judge_section(old, skel):
+    """'사람 판정' 절. 있으면 그대로 두되 본문 인용 줄마다 줄이 있게 하고 '사안 비교' 칸을 더한다. 없으면 틀을 만든다.
+    판단 부분인지·방향·사안 비교(사실관계가 우리 사건과 같은 점·다른 점)는 작성 세션이 PDF 를 읽고 채운다. 'PDF 의 자리'에
+    '주의'가 붙은 줄(앞 글에 주장·원심·인정사실 등)은 비고에 판단 부분이라고 본 까닭을 적는다(공통/자체검토.md 4-1절 4.)."""
+    head, rows, rest = None, [], []
+    for line in (old or "").splitlines()[1:]:
+        s = line.strip()
+        if s.startswith("|"):
+            cells = [c.strip() for c in s.strip("|").split("|")]
+            if head is None:
+                head = cells
+            elif not all(re.fullmatch(r":?-+:?", c) for c in cells if c):
+                rows.append(cells + [""] * (len(head) - len(cells)))
+        elif s and head is None and not s.startswith("판단 부분인지(판결요지"):      # 머리 안내는 새로 쓴다
+            rest.append(line)
+    if head is None:
+        head = list(JUDGE_HEAD)
+    if not any("사안" in h for h in head):
+        at = next((i for i, h in enumerate(head) if "비고" in h), len(head))
+        head.insert(at, "사안 비교")
+        rows = [r[:at] + [""] + r[at:] for r in rows]
+    have = {r[0].strip() for r in rows if r}
+    for x in skel:
+        if x["줄"].strip() not in have:
+            row = [""] * len(head)
+            vals = {"줄": x["줄"], "판결": x["판결"],
+                    "PDF 의 자리": x["자리"] + (" — 주의: 앞 글에 %s" % "·".join(x["주의"]) if x["주의"] else "")}
+            for i, h in enumerate(head):
+                row[i] = vals.get(h, "")
+            rows.append(row)
+    out = ["## 사람 판정", "",
+           "판단 부분인지(판결요지·이유 중 판단인지), 방향(우리 주장과 같은지), 사안 비교(사실관계가 우리 사건과 같은 점·다른 점)를 PDF 를 읽고 채운다. "
+           "'주의'가 붙은 줄은 비고에 판단 부분이라고 본 까닭을 적는다.", ""] + rest
+    out += ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
+    out += ["| " + " | ".join(c.replace("|", "｜") for c in r) + " |" for r in rows]
+    return "\n" + "\n".join(out) + "\n"
 
 
 def main():
@@ -166,9 +212,11 @@ def main():
     res = check(a.table, a.pdfdir, a.target)
     keep = ""
     if os.path.isfile(out):      # 작성 세션이 적은 '사람 판정' 절은 다시 만들어도 남긴다
-        old = open(out, encoding="utf-8").read()
+        with open(out, encoding="utf-8") as f:
+            old = f.read()
         k = old.find("\n## 사람 판정")
         keep = old[k:] if k >= 0 else ""
+    keep = judge_section(keep.strip("\n"), res["틀"])     # 본문 인용 줄마다 판정 줄을 두고 '사안 비교' 칸을 더한다
     head = ["# 판결문 PDF 원본 대조", "",
             "대조표 `%s` 의 본문 인용 %d줄(판결 %d건)을 `%s` 의 판결문 PDF 와 맞댄 결과이다(문제 %d건). "
             "판단 부분인지와 결론 방향은 작성 세션이 PDF 를 직접 읽어 끝의 '사람 판정' 표에 적는다(공통/자체검토.md 4-1절 4.)."

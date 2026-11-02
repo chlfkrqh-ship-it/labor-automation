@@ -18,7 +18,10 @@ spec = importlib.util.spec_from_file_location('evidence_words', ROOT / '4_서면
 ew = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ew)
 
-글 = '대표이사 상생안전 문자 안내입니다 '
+글 = ('대표이사 상생안전 문자 안내입니다 오늘도 안전한 하루 되십시오\n'       # 글자층이 넉넉한 면(80자 넘게)
+     '현장의 모든 구성원은 안전 수칙을 지켜 주시기 바랍니다\n'
+     '작업 전후 점검표를 확인하고 이상이 있으면 즉시 보고합니다\n'
+     '보호구를 갖추고 정해진 통로로만 다닙니다\n')
 
 
 def make_pdf(path: Path, pages):

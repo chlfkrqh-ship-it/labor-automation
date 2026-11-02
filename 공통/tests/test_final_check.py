@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 from pathlib import Path
 import tempfile
 import time
@@ -30,7 +31,10 @@ def load(name, rel):
 fc = load('final_check', '공통/scripts/final_check.py')
 er = load('evidence_read_for_fc', '4_서면작성/scripts/evidence_read.py')
 REAL_RUN = fc.RUN
-글 = '대표이사 상생안전 문자 안내입니다 '
+글 = ('대표이사 상생안전 문자 안내입니다 오늘도 안전한 하루 되십시오\n'       # 글자층이 넉넉한 면(80자 넘게)
+     '현장의 모든 구성원은 안전 수칙을 지켜 주시기 바랍니다\n'
+     '작업 전후 점검표를 확인하고 이상이 있으면 즉시 보고합니다\n'
+     '보호구를 갖추고 정해진 통로로만 다닙니다\n')
 
 
 def make_pdf(path: Path, pages):
@@ -88,7 +92,7 @@ class BriefGateTest(unittest.TestCase):
         rec.write_text(t, encoding='utf-8')
         REAL_RUN([ROOT / '4_서면작성/scripts/evidence_words.py', self.case, '--낱말', '스피', '--no-ocr'])
         표 = self.r / '작업' / '쟁점낱말_대조.md'
-        표.write_text(표.read_text(encoding='utf-8').replace('| 글자층(적음) |  |', '| 글자층(적음) | 본문 1항에 씀 |'), encoding='utf-8')
+        표.write_text(re.sub(r'(?m)^(\| 사 제6호증 .*\|) +\|$', r'\1 본문 1항에 씀 |', 표.read_text(encoding='utf-8')), encoding='utf-8')
         맞대기 = self.r / '작업' / '상대주장_맞대기.md'
         맞대기.write_text('| 서면 위치 | 우리 문장 | 상대 서면 면과 원문 | 판정 |\n|---|---|---|---|\n| 1항 | 사 제6호증 3면에 있다 | 1면 찾아볼 수 없습니다 | 답이 됨 |\n',
                           encoding='utf-8')
@@ -163,7 +167,39 @@ class CaseLawGateTest(unittest.TestCase):
         report = self.d / '판결원문_PDF대조.md'
         report.write_text('# 대조\n\n## 사람 판정\n\n| 줄 | 판결 | PDF 의 자리 | 판단 부분인지 | 방향 | 비고 |\n|---|---|---|---|---|---|\n'
                           '| 1 | 2019두1 | 이유 2. | 판단 | 같음 | |\n| 2 | 2020누1 | 이유 3. |  | 같음 | |\n', encoding='utf-8')
-        self.assertEqual(fc.사람판정_빈(table, report), ['2'])
+        self.assertEqual(fc.사람판정_빈(table, report), ['1(사안 비교)', '2(판단 부분인지, 사안 비교)'])
+        report.write_text('# 대조\n\n## 사람 판정\n\n| 줄 | 판결 | PDF 의 자리 | 판단 부분인지 | 방향 | 사안 비교 | 비고 |\n|---|---|---|---|---|---|---|\n'
+                          '| 1 | 2019두1 | 본문 · 2. 원고의 주장 — 주의: 앞 글에 주장 | 판단 | 같음 | 양정 다툼 같음 | |\n'
+                          '| 2 | 2020누1 | 이유 3. | 판단 | 같음 | 공무원 사건이어서 다름 | |\n', encoding='utf-8')
+        self.assertEqual(fc.사람판정_빈(table, report), ['1(비고(주의 줄))'])   # 주장 대목 곁의 문장은 까닭을 적는다
+        report.write_text(report.read_text(encoding='utf-8').replace('| 양정 다툼 같음 | |', '| 양정 다툼 같음 | 배척한 주장 뒤의 법원 판단 |'),
+                          encoding='utf-8')
+        self.assertEqual(fc.사람판정_빈(table, report), [])
+
+    def test_citation_table_cells_existence_and_finality(self):
+        import datetime as dt
+        (self.d / '원문').mkdir()
+        (self.d / '원문' / '중노위.md').write_text('중앙노동위원회 2024부해100 …', encoding='utf-8')
+        table = self.d / '인용대조표.md'
+        table.write_text(
+            '| 번호 | 사건 표시 | 본문 문장 | 원문 문장 | 자리 | 주문·결론 | 다른 사유·전제 | 확정 | 원문 |\n|---|---|---|---|---|---|---|---|---|\n'
+            '| 1 | 대법원 2020. 1. 1. 선고 2019두1 판결 | 가 | 가 | 이유 2. | 상고기각 | 없음 | 확정 | 화면 확인(2026. 11. 2.) |\n'
+            '| 2 | 서울고등법원 2021. 1. 1. 선고 2020누1 판결 | 나 | 나 | 이유 3. | 항소기각 |  | 확정 여부 미확인(2026. 10. 1. 봄) | `원문/없는파일.md` |\n'
+            '| 3 | 중앙노동위원회 2024. 3. 1. 2024부해100 | 다 | 다 | 판정요지 | 기각 | 없음 | 확정 | 화면 확인(2026. 11. 2.) |\n'
+            '| 4 | 중앙노동위원회 2024. 3. 1. 2024부해100 | 라 | 라 | 판정요지 | 기각 | 없음 | 확정 | `원문/중노위.md` |\n'
+            '| 참고(하단 ②) | 대법원 2021. 1. 1. 선고 2020다1 판결 | 마 | 마 |  |  |  |  |  |\n', encoding='utf-8')
+        막, 미확정 = fc.대조표_칸(table, 오늘=dt.date(2026, 11, 2))
+        글 = '\n'.join(막)
+        self.assertIn('2: 다른 사유·전제 칸이 비었다', 글)
+        self.assertIn('2: 확정되지 않았거나 확인하지 못한 판결은 넘기기 전에 다시 보고', 글)   # 한 달 전에 본 미확인은 다시 본다
+        self.assertIn('3: 원문 파일이 없다', 글)                                        # 결정례를 화면으로만 본 줄
+        self.assertNotIn('4:', 글)
+        self.assertNotIn('1:', 글)                                                      # 판결은 PDF 로 맞댄다
+        self.assertNotIn('참고', 글)                                                    # 하단 ② 참고 줄은 보지 않는다
+        self.assertEqual(len(미확정), 1)
+        table.write_text(table.read_text(encoding='utf-8').replace('미확인(2026. 10. 1. 봄)', '미확인(2026. 11. 1. 다시 봄)'), encoding='utf-8')
+        막, _ = fc.대조표_칸(table, 오늘=dt.date(2026, 11, 2))
+        self.assertFalse(any(x.startswith('2: 확정되지') for x in 막))
 
     def test_rescan_of_harvested_lists_must_find_nothing_unrecorded(self):
         폴더 = self.d / '라운드1'

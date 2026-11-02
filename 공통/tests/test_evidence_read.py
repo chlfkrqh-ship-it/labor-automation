@@ -6,9 +6,11 @@
 """
 import importlib.util
 import io
+import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 from contextlib import redirect_stdout
 
@@ -19,7 +21,10 @@ spec = importlib.util.spec_from_file_location('evidence_read', ROOT / '4_서면�
 er = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(er)
 
-글 = '대표이사 상생안전 문자 안내입니다 오늘도 안전한 하루 되십시오 '
+글 = ('대표이사 상생안전 문자 안내입니다 오늘도 안전한 하루 되십시오\n'       # 글자층이 넉넉한 면(80자 넘게)
+     '현장의 모든 구성원은 안전 수칙을 지켜 주시기 바랍니다\n'
+     '작업 전후 점검표를 확인하고 이상이 있으면 즉시 보고합니다\n'
+     '보호구를 갖추고 정해진 통로로만 다닙니다\n')
 
 
 def make_pdf(path: Path, pages):
@@ -161,6 +166,102 @@ class EvidenceReadTest(unittest.TestCase):
         code, out = run('check', case, '--자료', att)
         self.assertEqual(code, 1)
         self.assertIn('단체협약.pdf', out)
+
+
+class CheaperReadingTest(unittest.TestCase):
+    """읽는 비용을 줄이되 글을 하나도 빼지 않는지 본다(2026. 11. 2. 담당 노무사 "많이 줄여지지 않아도 완결성이 더 중요")."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.case = self.root / '4_서면작성' / '사건' / 'GGM_정직'
+        self.ours = self.case / '라운드1' / '우리증거'
+        self.ours.mkdir(parents=True)
+        self.env = mock.patch.dict(os.environ, {'EVIDENCE_READ_ROOT': str(self.root)})
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def text(self, key):
+        return (self.case / '증거관리' / '호증글자' / f'{key}.txt').read_text(encoding='utf-8')
+
+    def rec(self, case, key):
+        return case / '증거관리' / '호증읽기' / f'{key}.md'
+
+    def test_repeated_lines_are_numbered_once_and_every_page_keeps_its_own_lines(self):
+        머리 = '대표이사 상생안전 문자\n현장의 모든 구성원은 안전 수칙을 지켜 주시기 바랍니다\n'
+        쪽 = [머리 + f'{n}일 실천사항 점검표를 확인하고 이상이 있으면 즉시 보고합니다 보호구를 갖춥니다' for n in range(1, 7)]
+        쪽[2] = 머리 + '작업 중 태블릿, 이어폰, 스피커 등 전자기기 사용 금지 보호구를 갖추고 통로로만 다닙니다'
+        make_pdf(self.ours / '사 제6호증 문자.pdf', 쪽)
+        run('make', self.case, '--no-ocr')
+        t = self.text('사6')
+        self.assertIn('- R1: ', t)
+        self.assertEqual(t.count('현장의 모든 구성원은 안전 수칙을 지켜 주시기 바랍니다'), 1)    # 되풀이 줄은 한 번만
+        셋째 = t.split('=== 3면')[1].split('\n=== ')[0]
+        self.assertIn('작업 중 태블릿, 이어폰, 스피커 등 전자기기 사용 금지', 셋째)         # 그 면에만 있는 줄은 그대로
+        self.assertIn('[되풀이 줄: R1, R2]', 셋째)                                      # 어느 면에 어느 줄이 있는지 남는다
+
+    def test_table_cells_are_kept_and_hard_pages_must_be_seen_as_images(self):
+        d = pymupdf.open()
+        pg = d.new_page()
+        pg.insert_text((50, 60), '급여 지급 내역 안내 문서입니다 아래 표와 같이 지급하였음을 알려 드립니다\n'
+                                 '확인 바랍니다 담당 부서 인사팀 문의는 내선으로 부탁드립니다 지급일은 매월 25일입니다', fontsize=8, fontname='korea')
+        x0, y0, cw, rh = 50, 100, 120, 20
+        for r in range(4):
+            pg.draw_line((x0, y0 + r * rh), (x0 + 3 * cw, y0 + r * rh))
+        for c in range(4):
+            pg.draw_line((x0 + c * cw, y0), (x0 + c * cw, y0 + 3 * rh))
+        for r, row in enumerate([['성명', '월', '지급액'], ['홍길동', '1월', '3,000,000'], ['김담당', '2월', '3,100,000']]):
+            for c, cell in enumerate(row):
+                pg.insert_text((x0 + c * cw + 5, y0 + r * rh + 14), cell, fontsize=9, fontname='korea')
+        d.new_page().insert_text((50, 80), '서명', fontsize=9, fontname='korea')        # 글자가 거의 없는 면(서명·사진)
+        d.save(self.ours / '사 제4호증 급여.pdf')
+        run('make', self.case, '--no-ocr')
+        t = self.text('사4')
+        self.assertIn('[표 1]', t)
+        self.assertIn('| 홍길동 | 1월 | 3,000,000 |', t)
+        self.assertIn('그림으로 볼 면: 2면(글자 거의 없음)', t)
+        rec = self.rec(self.case, '사4')
+        self.assertIn('그림으로 볼 면: 2면(글자 거의 없음)', rec.read_text(encoding='utf-8'))
+        body = '- 1면: 급여 지급 안내와 2명의 1·2월 지급액 표\n- 2면: 담당자 서명'
+        t = rec.read_text(encoding='utf-8')
+        head, rest = t.split('## 면별 내용', 1)
+        tail = rest.split('## 쟁점에 닿는 문구', 1)[1].replace('\n- \n', '\n- 없음\n', 1)
+        rec.write_text(head.replace('읽은 방식: \n', '읽은 방식: 글자층 1면\n') + '## 면별 내용\n\n' + body + '\n\n## 쟁점에 닿는 문구' + tail,
+                       encoding='utf-8')
+        code, out = run('check', self.case)
+        self.assertEqual(code, 1)
+        self.assertIn('그림으로 볼 면 2면을 그림으로 본 기록이 없다', out)
+        rec.write_text(rec.read_text(encoding='utf-8').replace('읽은 방식: 글자층 1면', '읽은 방식: 글자층 1면, 그림 2면'), encoding='utf-8')
+        self.assertEqual(run('check', self.case)[0], 0)
+
+    def test_same_file_read_in_another_case_is_offered_but_must_be_read_again(self):
+        쪽 = [글 + f'{n}면 안내' for n in range(1, 4)]
+        make_pdf(self.ours / '사 제6호증 문자.pdf', 쪽)
+        run('make', self.case, '--no-ocr')
+        rec = self.rec(self.case, '사6')
+        t = rec.read_text(encoding='utf-8')
+        t = t.replace('읽은 방식: \n', '읽은 방식: 글자층 전 면\n').replace('- 1면: ', '- 1면: 안전 안내(1)').replace('- 2면: ', '- 2면: 안전 안내(2)')
+        t = t.replace('- 3면: ', '- 3면: 안전 안내(3)').replace('면)\n\n- \n', '면)\n\n- 3면 "안내"\n')
+        rec.write_text(t, encoding='utf-8')
+        self.assertEqual(run('check', self.case)[0], 0)
+        other = self.root / '4_서면작성' / '사건' / 'GGM_경영설명회'
+        (other / '라운드1' / '우리증거').mkdir(parents=True)
+        (other / '라운드1' / '우리증거' / '갑 제2호증 같은 문자.pdf').write_bytes((self.ours / '사 제6호증 문자.pdf').read_bytes())
+        code, out = run('make', other, '--no-ocr')
+        self.assertIn('다른 사건 기록에서 옮겨 옴 1건', out)
+        t = self.rec(other, '갑2').read_text(encoding='utf-8')
+        self.assertIn('옮겨 온 기록: 4_서면작성/사건/GGM_정직/증거관리/호증읽기/사6.md', t)
+        self.assertIn('- 1면: (옮김) 안전 안내(1)', t)
+        self.assertIn('## 옮겨 온 기록의 쟁점 문구', t)
+        code, out = run('check', other)
+        self.assertEqual(code, 1)                                   # 다른 사건의 기록으로 갈음하지 않는다
+        self.assertIn('다른 사건 기록에서 옮긴 줄 3개', out)
+        t = t.replace('(옮김) ', '').replace('읽은 방식: \n', '읽은 방식: 글자층 전 면\n').replace('면)\n\n- \n', '면)\n\n- 없음\n', 1)
+        self.rec(other, '갑2').write_text(t, encoding='utf-8')
+        self.assertEqual(run('check', other)[0], 0)
 
 
 if __name__ == '__main__':
