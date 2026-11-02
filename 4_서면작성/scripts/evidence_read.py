@@ -599,8 +599,9 @@ def 숫자표_같나(줄들: list) -> bool:
 소리_꼴 = ('.mp3', '.m4a', '.wav', '.mp4', '.mov')
 목록_머리 = '확인표 단위: '
 가름 = ' ⟶ '
-글판 = 2      # 글을 뽑는 방식(evidence_text.py, 아래 파일_항목)이 바뀌어 면별 글의 내용이 달라지면 올린다.
+글판 = 3      # 글을 뽑는 방식(evidence_text.py, 아래 파일_항목)이 바뀌어 면별 글의 내용이 달라지면 올린다.
               # 2: 옛 형식 .doc·.xls 를 PDF 대신 .docx·.xlsx 로 바꾸어 읽는다(숨긴 시트·행·메모가 빠지지 않게)
+              # 3: 1,000자 넘는 줄을 나눈다(읽기 도구가 2,000자 넘는 줄을 잘라 보여 주어 실측이 지나가지 못한다)
               # 옛 면별 글은 make 가 새로 쓰고, 옛 확인표는 맞지 않게 되어 그 호증을 다시 읽게 된다
 
 
@@ -645,7 +646,8 @@ def 파일_항목(자: 자리, k: str, 이름: str, data: bytes, 경로: list, u
                 f.write_bytes(data)
                 열쇠 = f'{자.이름(k)}_{hashlib.sha1("›".join(경로).encode("utf-8")).hexdigest()[:8]}'
                 면들, 그림 = 면_분석(자, 열쇠, f, use_ocr)
-            out.append({'갈래': '면', '경로': 경로, '면': [('그림' if no in 그림 else '글', src, 그림.get(no, ''), '\n'.join(줄들 + 표))
+            out.append({'갈래': '면', '경로': 경로, '면': [('그림' if no in 그림 else '글', src, 그림.get(no, ''),
+                                                         '\n'.join(x for t in 줄들 + 표 for x in _et.긴줄_나누기(t)))
                                                         for no, src, 줄들, 표 in 면들]})
         elif ext in IMAGE + _et.바꿀_그림_꼴:
             열 = _et.열_그림(data, ext)
@@ -928,7 +930,8 @@ def PDF_글_쓰기(자: 자리, k: str, p: Path, 해: str, 면들: list, 그림:
         표시 = f' — 그림으로 볼 면({그림[no]})' if no in 그림 else ''
         끝 = (f'[{no}면 끝 · 그림으로 볼 면 — 확인표는 `그림` 이 그린 그림 아래 띠에 있다]' if no in 그림
              else f'[{no}면 끝 · 확인표 {확인표(자.사건, 해, no, "글")}]')
-        본문.append(f'=== {no}면 ({src}){표시} ===\n' + '\n'.join(줄들 + 표 + [끝]) + '\n')
+        줄 = [x for t in 줄들 + 표 for x in _et.긴줄_나누기(t)]      # 읽기 도구가 긴 줄을 잘라 보여 주지 않게
+        본문.append(f'=== {no}면 ({src}){표시} ===\n' + '\n'.join(줄 + [끝]) + '\n')
     자.글_파일(k).parent.mkdir(parents=True, exist_ok=True)
     자.글_파일(k).write_text('\n'.join(머리) + '\n\n' + '\n'.join(본문), encoding='utf-8')
     return (f'그림으로 볼 면 {면_표시(sorted(그림))}' if 그림 else ''), 그림
@@ -1067,7 +1070,8 @@ def 재기(자: 자리, k: str, p: Path, 본: dict) -> dict:
             덜.append(no)
     못본 = sorted(볼 - set(연))
     세션 = sorted({s[:8] for s, ls in 본['줄'].items() if 필요 & ls} | {s[:8] for s in 연.values()})
-    return {'합': 합, '든': 든, '덜': 덜, '볼': sorted(볼), '못본': 못본, '세션': 세션,
+    긴 = [no for no in 덜 if any(len(x) > 2000 and 정규(x) not in 본['모두'] for x in 면들[no])]
+    return {'합': 합, '든': 든, '덜': 덜, '볼': sorted(볼), '못본': 못본, '세션': 세션, '긴줄': 긴,
             '통과': not 덜 and 든 >= 줄_통과 * 합 and not 못본}
 
 
@@ -1147,6 +1151,8 @@ def cmd_실측(a) -> int:
                 말.append(f"덜 읽은 {'면' if all(isinstance(u, int) for u in x['덜']) else '단위'} {단위말(x['덜'])}")
             if x['못본']:
                 말.append(f"한 장씩 열지 않은 그림 {면말(x['못본'])}")
+            if x['긴줄']:      # 읽기 도구는 2,000자 넘는 줄을 잘라 보여 준다. 지금 판의 make 는 줄을 나누어 쓴다
+                말.append(f"2,000자 넘는 줄이 있는 {단위말(x['긴줄'])} — `make --글다시 {k}` 로 면별 글을 다시 내고 다시 읽는다")
             덜.append(f"- {자.제목(k)}: " + ', '.join(말))
     print(f"실측(세션 기록 {len(본['줄'])}개, {폴더.name}): 호증(자료) {len(잴)}건 가운데 통과 {len(통과)}건, 덜 읽음 {len(덜)}건, 읽은 기록 없음 {len(안읽음)}건"
           + (f', 기록·면별 글 없음 {len(없음)}건' if 없음 else '') + (' (보기만, 적지 않음)' if a.보기 else ''))

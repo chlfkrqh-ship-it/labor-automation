@@ -1131,6 +1131,29 @@ class OtherFormatsMeasuredTest(unittest.TestCase):
         self.assertIn('실측한 뒤 면별 글이 바뀌었다', out)
 
 
+class LongLineMeasureTest(unittest.TestCase):
+    """먼저 만든 면별 글에 2,000자 넘는 줄이 있으면 읽기 도구가 잘라 보여 주어 실측이 지나가지 못한다. 그 까닭과 할 일을 알려 준다."""
+
+    def test_measure_points_to_long_lines_in_old_text(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            case = root / '4_서면작성' / '사건' / 'GGM_정직'
+            ours = case / '라운드1' / '우리증거'
+            ours.mkdir(parents=True)
+            make_pdf(ours / '사 제6호증 문자.pdf', [글 + '1면'])
+            with mock.patch.dict(os.environ, {'EVIDENCE_READ_ROOT': str(root)}):
+                run('make', case, '--no-ocr')
+                글파일 = case / '증거관리' / '호증글자' / '사6.txt'
+                긴 = '가나다라 ' * 600                                                      # 3,000자 줄(옛 판 면별 글)
+                글파일.write_text(글파일.read_text(encoding='utf-8').replace('1면\n', '1면\n' + 긴 + '\n'), encoding='utf-8')
+                잘린 = '\n'.join(l[:2000] for l in 글파일.read_text(encoding='utf-8').splitlines())    # 읽기 도구가 보여 준 모양
+                세션(root / '기록', '세션1', [('Read', {'file_path': str(글파일)}, 줄번호(잘린))])
+                code, out = run('실측', case, '--기록폴더', root / '기록')
+                self.assertEqual(code, 1)
+                self.assertIn('2,000자 넘는 줄이 있는 1', out)
+                self.assertIn('make --글다시 사6', out)
+
+
 class TextPiecesTest(unittest.TestCase):
     def test_chunks_keep_every_line_and_stay_small(self):
         줄들 = [f'{i}번째 줄 ' + '가' * (i % 50) for i in range(2000)] + ['나' * 7000]
@@ -1138,6 +1161,29 @@ class TextPiecesTest(unittest.TestCase):
         self.assertEqual('\n'.join(덩이).replace('\n', ''), ''.join(줄들))     # 글자는 하나도 빠지지 않는다
         self.assertTrue(all(len(x) <= er._et.덩이_크기 for x in 덩이))
         self.assertEqual(er._et.덩이로('  \n '), [])
+
+    def test_long_lines_are_split_so_the_read_tool_does_not_cut_them(self):
+        """읽기 도구는 2,000자 넘는 줄을 잘라 보여 주어, 잘린 줄은 실측에서 읽지 않은 줄이 된다(긴 표 줄·메일 본문)."""
+        표줄 = '| ' + ' | '.join(f'{i}번 칸 값 {i * 1000:,}원' for i in range(150)) + ' |'
+        조각 = er._et.긴줄_나누기(표줄)
+        self.assertGreater(len(조각), 1)
+        self.assertTrue(all(len(x) <= er._et.줄_폭 for x in 조각))
+        self.assertEqual(re.sub(r'\s', '', ''.join(조각)), re.sub(r'\s', '', 표줄))         # 글자는 하나도 빠지지 않는다
+        self.assertTrue(all(x.startswith('| ') for x in 조각[1:]))                         # 칸 경계에서 끊는다
+        self.assertEqual(er._et.긴줄_나누기('짧은 줄'), ['짧은 줄'])
+        self.assertTrue(all(len(l) <= er._et.줄_폭 for x in er._et.덩이로('가' * 2500 + '\n' + 표줄) for l in x.split('\n')))
+        with tempfile.TemporaryDirectory() as tmp:
+            case = Path(tmp) / 'GGM_정직'
+            ours = case / '라운드1' / '우리증거'
+            ours.mkdir(parents=True)
+            make_pdf(ours / '사 제6호증 표.pdf', [글])
+            자 = er.자리(case, False)
+            er.PDF_글_쓰기(자, '사6', ours / '사 제6호증 표.pdf', 'abc', [(1, '글자층', ['첫 줄', 표줄], [])], {})
+            글_ = 자.글_파일('사6').read_text(encoding='utf-8')
+            self.assertTrue(all(len(x) <= er._et.줄_폭 for x in 글_.splitlines()))
+            self.assertIn(re.sub(r'\s', '', 표줄), re.sub(r'\s', '', 글_))
+            면들, _, _ = er.글_읽기(글_)
+            self.assertEqual(len(면들[1]), 1 + len(조각) + 1)                              # 첫 줄, 나눈 표 줄, 면 끝 줄
 
     def test_zip_names_made_on_windows_are_read_in_cp949(self):
         b = io.BytesIO()
