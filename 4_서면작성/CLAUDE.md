@@ -196,7 +196,7 @@ python 4_서면작성/scripts/docx_merge.py "<출력>/서면_프레임.docx" "<�
 | 쟁점 낱말이 호증의 어느 면에 있고 서면이 그 면을 인용하였는지(`.claude/commands/서면.md` 6-1단계) | `python -B 4_서면작성/scripts/evidence_words.py <사건 폴더> --낱말 {낱말들}` → 판단을 적은 뒤 `--확인` |
 | 심문회의 예상 질의답변의 모양(제목, 넣지 않는 절, 묻는 이·답하는 이 표시, 회색 메모, 정렬. `.claude/commands/예상질의.md`) | `python -B 4_서면작성/scripts/qna_check.py <파일>` |
 | 넘기기 전 마지막 관문: 위 검사와 판정 칸을 모두 했는지(`공통/자체검토.md` 4-1절 6.) | `python -B 공통/scripts/final_check.py <사건 폴더> [--라운드 N] [--대상 <docx>]` |
-| 증거 인용 괄호가 붙은 문장이 호증 문언과 맞는지(대조표와 원본 확대 그림, `.claude/commands/서면.md` 8-1단계 ①) | `python -B 4_서면작성/scripts/evidence_cite_review.py scan <서면초안.md>` → 판정을 `작업/증거인용검토/notes.json` 에 → `… doc <서면초안.md>` |
+| 증거 인용 괄호가 붙은 문장이 호증 문언과 맞는지(대조표와 원본 확대 그림, `.claude/commands/서면.md` 8-1단계 ①) | `python -B 4_서면작성/scripts/evidence_cite_review.py scan <서면초안.md>` → 판정을 `작업/증거인용검토/notes.json`(서면을 나눈 `서면초안_{이름}.md` 는 `증거인용검토_{이름}/notes.json`) 에 → `… doc <서면초안.md>` |
 | 편철한 호증의 1면에 호증 도장이 있는지(검출에 오탐·누락이 있으므로 번호와 내용은 sheet 이미지로 눈으로 대조한다) | `python 4_서면작성/scripts/evidence_check.py stamp <증거폴더>` |
 | 편철본의 각 면이 원본 어디에서 왔는지 | `python 4_서면작성/scripts/evidence_check.py trace <원본폴더> <편철폴더>` |
 | 표제와 내용이 맞는지 눈으로 볼 이미지(`--out` 은 사건 폴더 안, 2-1절) | `python 4_서면작성/scripts/evidence_check.py sheet <편철폴더> --out "4_서면작성/사건/{사건명}/증거관리/증거확인.png"` |

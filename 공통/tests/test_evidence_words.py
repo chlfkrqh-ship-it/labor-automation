@@ -18,7 +18,7 @@ spec = importlib.util.spec_from_file_location('evidence_words', ROOT / '4_서면
 ew = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ew)
 
-글 = ('대표이사 상생안전 문자 안내입니다 오늘도 안전한 하루 되십시오\n'       # 글자층이 넉넉한 면(80자 넘게)
+글 = ('공지 문자 안내입니다 오늘도 안전한 하루 되십시오\n'       # 글자층이 넉넉한 면(80자 넘게)
      '현장의 모든 구성원은 안전 수칙을 지켜 주시기 바랍니다\n'
      '작업 전후 점검표를 확인하고 이상이 있으면 즉시 보고합니다\n'
      '보호구를 갖추고 정해진 통로로만 다닙니다\n')
@@ -59,6 +59,27 @@ class CitedPageTest(unittest.TestCase):
         self.assertEqual(ew.인용_상태(본문, '사1', 3), '인용 없음')
 
 
+class SplitDraftTest(unittest.TestCase):
+    def test_body_of_split_drafts_is_read(self):
+        """서면을 나눈 라운드(서면초안_{이름}.md)의 인용을 '인용 없음'으로 적지 않는다(2026. 11. 3.). 지난 판과 본문 조각 파일은 읽지 않는다."""
+        with tempfile.TemporaryDirectory() as d:
+            사건 = Path(d)
+            출력 = 사건 / '라운드1' / '출력'
+            출력.mkdir(parents=True)
+            (출력 / '서면초안_림프종.md').write_text('사실입니다(사 제6호증 3면).\n\n---\n\n메모(사 제9호증)\n', encoding='utf-8')
+            (출력 / '서면초안_본문.md').write_text('사 제7호증\n', encoding='utf-8')
+            본문 = ew.서면_본문(사건)
+            self.assertEqual(ew.인용_상태(본문, '사6', 3), '이 면 인용')
+            self.assertEqual(ew.인용_상태(본문, '사7', 1), '인용 없음')
+            self.assertEqual(ew.인용_상태(본문, '사9', 1), '인용 없음')
+            (사건 / '라운드2' / '출력').mkdir(parents=True)
+            (사건 / '라운드2' / '출력' / '서면초안.md').write_text('다시 봅니다(사 제8호증 1면).\n', encoding='utf-8')
+            (사건 / '라운드2' / '출력' / '서면초안_긴판.md').write_text('지난 판(사 제7호증)\n', encoding='utf-8')
+            본문 = ew.서면_본문(사건)
+            self.assertEqual(ew.인용_상태(본문, '사8', 1), '이 면 인용')
+            self.assertEqual(ew.인용_상태(본문, '사7', 1), '인용 없음')
+
+
 class TableTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -67,8 +88,8 @@ class TableTest(unittest.TestCase):
         for d in ('우리증거', '출력', '작업'):
             (r / d).mkdir(parents=True)
         make_pdf(r / '우리증거' / '사 제6호증 문자.pdf',
-                 [글 + '1면', 글 + '2면', 글 + '작업 중 태블릿, 이어폰, 스피커 등 전자기기 사용 금지'])
-        make_pdf(r / '우리증거' / '사 제7호증 공지.pdf', [글 + '공지 1면', 글 + '공지 2면 블루투스 음악', 글 + '공지 3면'])
+                 [글 + '1면', 글 + '2면', 글 + '작업 중 시험 기기 등 전자 장비 사용 금지'])
+        make_pdf(r / '우리증거' / '사 제7호증 공지.pdf', [글 + '공지 1면', 글 + '공지 2면 무선 장비 안내', 글 + '공지 3면'])
         self.draft = r / '출력' / '서면초안.md'
         self.draft.write_text('- 다 음 -\n\n1. 가\n\n안전 수칙을 알렸습니다(사 제6호증, 사 제7호증 3면).\n\n---\n\n① (사 제6호증 3면)\n',
                               encoding='utf-8')
@@ -88,10 +109,10 @@ class TableTest(unittest.TestCase):
         self.table.write_text('\n'.join(lines) + '\n', encoding='utf-8')
 
     def test_uncited_page_is_listed_first_and_check_blocks_it(self):
-        code, out = run(self.case, '--낱말', '스피', '--no-ocr')
+        code, out = run(self.case, '--낱말', '시험', '--no-ocr')
         self.assertEqual(code, 0)
         rows = self.rows()
-        self.assertTrue(rows[0].startswith('| 사 제6호증 | 3 | 스피 |'))
+        self.assertTrue(rows[0].startswith('| 사 제6호증 | 3 | 시험 |'))
         self.assertIn('| 호증만 인용 |', rows[0])                 # 하단 목록('---' 아래)의 인용은 세지 않는다
         code, out = run(self.case, '--확인')
         self.assertEqual(code, 1)
@@ -100,18 +121,18 @@ class TableTest(unittest.TestCase):
         self.assertEqual(run(self.case, '--확인')[0], 0)
 
     def test_rerun_keeps_judgements_and_rows_of_words_not_searched_again(self):
-        run(self.case, '--낱말', '스피', '전자', '--no-ocr')
+        run(self.case, '--낱말', '시험', '전자', '--no-ocr')
         self.set_judgement('사 제6호증', 3, '본문 2항에 씀')
-        run(self.case, '--낱말', '전자', '스피', '--no-ocr')        # 낱말 순서가 바뀌어 같은 면의 줄 낱말이 달라져도
+        run(self.case, '--낱말', '전자', '시험', '--no-ocr')        # 낱말 순서가 바뀌어 같은 면의 줄 낱말이 달라져도
         self.assertTrue(any('| 사 제6호증 | 3 |' in l and '본문 2항에 씀' in l for l in self.rows()))
-        run(self.case, '--낱말', '블루투', '--no-ocr')               # 새 낱말만 다시 돌려도 앞선 줄과 판단이 남는다
+        run(self.case, '--낱말', '무선', '--no-ocr')               # 새 낱말만 다시 돌려도 앞선 줄과 판단이 남는다
         rows = self.rows()
         self.assertTrue(any('| 사 제6호증 | 3 |' in l and '본문 2항에 씀' in l for l in rows))
-        self.assertTrue(any(l.startswith('| 사 제7호증 | 2 | 블루투 |') for l in rows))
-        self.assertIn('낱말: 블루투, ', self.table.read_text(encoding='utf-8'))
+        self.assertTrue(any(l.startswith('| 사 제7호증 | 2 | 무선 |') for l in rows))
+        self.assertIn('낱말: 무선, ', self.table.read_text(encoding='utf-8'))
 
     def test_check_rereads_the_draft(self):
-        run(self.case, '--낱말', '스피', '--no-ocr')
+        run(self.case, '--낱말', '시험', '--no-ocr')
         self.draft.write_text('- 다 음 -\n\n1. 가\n\n금지하였습니다(사 제6호증 3면).\n', encoding='utf-8')
         self.assertEqual(run(self.case, '--확인')[0], 0)          # 지금 초안이 그 면을 인용하면 판단 없이도 된다
         self.assertEqual(run(self.case / 'x', '--확인')[0], 2)

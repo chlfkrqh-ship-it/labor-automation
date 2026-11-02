@@ -25,7 +25,7 @@ import sys
 import pymupdf as fitz
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from cite_check import QUOTES, cases, dates, norm, pieces, read_target, table_rows, upper_courts  # noqa: E402
+from cite_check import QUOTES, cases, dates, is_body, norm, pieces, read_target, table_rows, upper_courts  # noqa: E402
 
 PAGE_NO = re.compile(r"(?m)^\s*-\s*\d{1,3}\s*-\s*$")      # 면 아래의 '- 3 -' 는 문장 사이에 끼어 찾기를 막는다
 SHIMRI = re.compile(r"제5조(?:제1항)?에(?:의하여|따라)(?:이)?상고를(?:모두)?기각")      # 공백을 뺀 글에서 찾는다(상고심절차에 관한 특례법 제5조에 따른 기각)
@@ -90,8 +90,7 @@ def check_upper(cell, own, files, targets, used):
 
 
 def check(table, pdfdir, targets=None):
-    rows = [r for r in table_rows(table)
-            if not any(w in r.get("번호", "") for w in ("참고", "뺌")) and "법원" in r.get("사건 표시", "")]
+    rows = [r for r in table_rows(table) if is_body(r) and "법원" in r.get("사건 표시", "")]
     files = {}
     for n in sorted(os.listdir(pdfdir)):
         if n.lower().endswith(".pdf"):

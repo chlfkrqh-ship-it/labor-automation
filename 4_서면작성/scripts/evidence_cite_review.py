@@ -5,7 +5,7 @@
     python -B 4_서면작성/scripts/evidence_cite_review.py doc  "<라운드N>/출력/서면초안.md" [--no-pdf]
 
 scan  본문('---' 위)의 증거 인용 괄호마다 그 괄호가 받치는 구절과, 인용한 호증 면에서 그 구절에 가장 가까운 대목을
-      찾아 `라운드N/작업/증거인용검토/` 에 review.json·review.txt·crops/ 를 만든다.
+      찾아 `라운드N/작업/증거인용검토/`(서면초안_{이름}.md 는 `증거인용검토_{이름}/`) 에 review.json·review.txt·crops/ 를 만든다.
       - 호증 파일은 사건 폴더의 우리증거·상대증거·제출/증거·노동위원회_기록에서 파일 이름의 호증번호로 찾는다
         ('갑 제3호증 …', '갑3-1_…', 전자소송 내려받기 '…(을104-2_…)…'). 같은 라운드의 원본을 먼저 쓴다.
       - 글자층이 없거나 깨진 면은 Windows 문자인식(`ocr_win.ps1`)으로 읽는다. 결과는 증거인용검토/ocr/ 에 남겨 다시 쓰고,
@@ -499,6 +499,29 @@ def round_of(md: Path) -> Path:
     return md.resolve().parent.parent
 
 
+def drafts_of(rnd: Path) -> list:
+    """라운드의 서면 초안. 보통 서면초안.md 하나이고, 상병별로 나눈 심사청구처럼 서면이 여럿이면 서면초안_{이름}.md 이다."""
+    out = rnd / '출력'
+    if (out / '서면초안.md').is_file():
+        return [out / '서면초안.md']
+    return sorted(p for p in out.glob('서면초안_*.md') if not re.search(r'본문|백업|\.bak', p.name))
+
+
+def review_dir(md: Path) -> Path:
+    """증거 인용 검토를 두는 폴더. 서면초안_{이름}.md 는 증거인용검토_{이름}/ 이다. 한 폴더에 두면 뒤에 돌린 서면이 앞 서면의 대조와 판정을 덮는다
+    (2026. 11. 3. 상병별로 나눈 심사청구에서 어느 서면의 것도 아닌 review.json 하나만 남아 있었다)."""
+    name = md.stem.replace('서면초안', '').strip('_')
+    return round_of(md) / '작업' / ('증거인용검토_' + name if name else '증거인용검토')
+
+
+def citation_changes(md: Path, items: list) -> tuple:
+    """대조해 둔 인용(review.json)과 지금 초안의 인용을 맞댄다. (새로 생긴 인용 수, 없어진 인용 수). 호증·면·문장을 본다."""
+    key = lambda x: (x.get('key'), str(x.get('pages')), canon(x.get('sentence') or ''))
+    now = {key(c) for c in parse_citations(md.read_text(encoding='utf-8-sig'))}
+    old = {key(r) for r in items}
+    return len(now - old), len(old - now)
+
+
 def brief_pdf_of(md: Path):
     out = md.resolve().parent
     # 같은 폴더의 PT·합본은 서면이 아니다(2026. 10. 31. GGM 답변서(2) 대조표 머리에 PT 이름이 찍혔다)
@@ -531,7 +554,7 @@ def cmd_scan(args) -> int:
     text = md.read_text(encoding='utf-8-sig')
     rnd = round_of(md)
     case_dir = rnd.parent
-    out = rnd / '작업' / '증거인용검토'
+    out = review_dir(md)
     (out / 'crops').mkdir(parents=True, exist_ok=True)
     cites = parse_citations(text)
     md_lines = text.split('\n')
@@ -717,7 +740,7 @@ def cmd_doc(args) -> int:
 
     md = Path(args.md)
     rnd = round_of(md)
-    out = rnd / '작업' / '증거인용검토'
+    out = review_dir(md)
     report = json.loads((out / 'review.json').read_text(encoding='utf-8'))
     notes_path = out / 'notes.json'
     notes = json.loads(notes_path.read_text(encoding='utf-8')) if notes_path.is_file() else {}

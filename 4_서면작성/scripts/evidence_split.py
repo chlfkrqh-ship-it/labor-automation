@@ -43,7 +43,7 @@ def 면목록(글, 전체):
 
 
 def main():
-    if len(sys.argv) < 2:
+    if len(sys.argv) < 2 or sys.argv[1] in ('-h', '--help'):
         raise SystemExit(__doc__)
     계획 = json.load(io.open(sys.argv[1], encoding='utf-8-sig'))
     적용 = '--apply' in sys.argv[2:]

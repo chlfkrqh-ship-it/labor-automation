@@ -93,6 +93,25 @@ class ParseTest(unittest.TestCase):
         self.assertEqual([h for _, h in ecr.headings(MD)], ['1. 원고들의 주장', '가. 자금의 흐름'])
 
 
+class SplitDraftTest(unittest.TestCase):
+    def test_each_split_draft_has_its_own_review_folder(self):
+        """서면을 나눈 라운드에서 뒤에 돌린 서면이 앞 서면의 대조와 판정을 덮지 않는다(2026. 11. 3.)."""
+        with tempfile.TemporaryDirectory() as d:
+            rnd = Path(d) / '라운드1'
+            (rnd / '출력').mkdir(parents=True)
+            a, b = rnd / '출력' / '서면초안_림프종.md', rnd / '출력' / '서면초안_우울증.md'
+            for p in (a, b):
+                p.write_text('본문\n', encoding='utf-8')
+            (rnd / '출력' / '서면초안_본문.md').write_text('조각\n', encoding='utf-8')
+            self.assertEqual(ecr.drafts_of(rnd), [a, b])
+            self.assertEqual(ecr.review_dir(a).name, '증거인용검토_림프종')
+            self.assertEqual(ecr.review_dir(b).name, '증거인용검토_우울증')
+            one = rnd / '출력' / '서면초안.md'
+            one.write_text('본문\n', encoding='utf-8')
+            self.assertEqual(ecr.drafts_of(rnd), [one])                 # 서면초안.md 가 있으면 그 하나이다
+            self.assertEqual(ecr.review_dir(one).name, '증거인용검토')
+
+
 class ExhibitTest(unittest.TestCase):
     def test_file_names(self):
         self.assertEqual(ecr.file_key('2025나21206_080001_준비서면_서증_계좌_(을104-2_구교웅 관련 계좌)_피고.pdf'), '을104-2')

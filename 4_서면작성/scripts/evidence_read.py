@@ -390,7 +390,7 @@ def 글_쓰기(자: 자리, k: str, p: Path, use_ocr: bool) -> tuple:
     if p.suffix.lower() != '.pdf':
         return '', {}
     캐시 = 자.글
-    ocr_dirs = [str(x) for x in 자.사건.glob('라운드*/작업/증거인용검토/ocr')] + [str(캐시 / 'ocr')]
+    ocr_dirs = [str(x) for x in 자.사건.glob('라운드*/작업/증거인용검토*/ocr')] + [str(캐시 / 'ocr')]
     ex = _ecr.Exhibit(자.이름(k), p, 캐시, ocr_dirs=ocr_dirs, use_ocr=use_ocr)
     면들, 그림 = [], {}
     try:

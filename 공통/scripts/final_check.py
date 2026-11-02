@@ -2,33 +2,39 @@
 
     python -B 공통/scripts/final_check.py "4_서면작성/사건/{사건명}" [--라운드 N] [--대상 "<서면초안.md 또는 담당자 저장본 docx>"]
     python -B 공통/scripts/final_check.py "1_검토의견/사건/{의뢰인}_{검토내용}" [--대상 "<검토의견서 docx 또는 회신초안.md>"]
-    python -B 공통/scripts/final_check.py --최근 24          # 24시간 안에 손댄 사건마다(`/하자보완`)
+    python -B 공통/scripts/final_check.py --최근 24 --out "<보고.md>"   # 24시간 안에 손댄 사건마다. 화면에는 검사별 모음, 파일에 사건별 전문(`/하자보완`)
 
 검사마다 '통과'·'막힘'·'해당 없음'을 적고, 막힘이 하나라도 있으면 종료 코드 1 이다. 각 검사는 그 스크립트를 그대로 부른다
 (규칙을 두 벌로 두지 않는다). 이 관문이 보는 것은 검사를 했는지와 판정 칸이 다 찼는지이다. 판정이 맞는지는 작성 세션이
-원문을 읽고 정한다(`공통/자체검토.md` 4-1절).
+원문을 읽고 정한다(`공통/자체검토.md` 4-1절). 관문은 사건 폴더의 파일을 고치지 않는다.
 
-서면(라운드의 출력/서면초안.md)
+서면(라운드의 출력/서면초안.md. 상병별로 나눈 심사청구처럼 서면이 여럿이면 서면초안_{이름}.md 마다, 표는 인용대조표*{이름}*.md)
   문체           style_check.py 위반 0
   호증 번호      citation_check.py 위반 0
   판례 대조      인용이 있으면 작업/인용대조표.md 가 있고 cite_check.py 불일치 0
   판례 검색 기록 LBOX 목록(작업/LBOX_목록.tsv)·법제처 목록·작업/검색기록.md 가 있다(찾은 것을 남겼는가)
-  찾은 판례 다시 훑기  작업/수확목록_재확인.md 의 낱말로 harvest_titles.py scan 을 다시 돌려, 걸린 줄이 모두 원고·대조표·검색기록에 있다
+  찾은 판례 다시 훑기  작업/수확목록_재확인*.md 의 낱말로 harvest_titles.py scan 을 다시 돌린다. 걸린 줄은 원고·대조표·검색기록에 번호가 있거나,
+                 재확인 보고서에 이미 나온 줄로서 검색기록·보완 메모·사건상태에 처리를 적었어야 한다(사안이 전혀 다른 줄은 묶어 적는다, `/검토의견` 4-2단계).
+                 보고서 뒤에 새로 걸린 줄은 막는다
   대조표 칸      본문 인용 줄마다 자리·주문·결론·다른 사유·전제·확정·원문이 찼고, 판결이 아닌 자료(판정·재결·행정해석)는 원문 파일이 있으며,
                  미확정·확인 못한 판결은 7일 안에 다시 본 날짜가 있다(미확정 줄은 '참고'로 따로 보인다)
   판결문 PDF     본문 인용 판결이 있으면 참고자료/인용판결_PDF 가 있고 cite_pdf_check.py 문제 0, '사람 판정' 표가 본문 인용 줄마다
                  판단 부분인지·방향·사안 비교까지 찼고, '주의'(앞 글에 주장·원심·인정사실) 줄은 비고가 있다
-  증거 인용      증거 인용이 있으면 작업/증거인용검토/ 의 review.json 이 초안보다 새것이고 notes.json 에 인용마다 판정이 있다
+  증거 인용      증거 인용이 있으면 작업/증거인용검토/ (서면초안_{이름}.md 는 증거인용검토_{이름}/) 의 review.json 이 초안의 지금 인용과 같고 notes.json 에 인용마다 판정이 있다
   증거 파악      evidence_read.py check — 모든 호증의 전 면 읽기 기록이 찼고 파일이 그 뒤 바뀌지 않았다
   빠진 문구      evidence_words.py --확인 — 쟁점 낱말 대조표가 있고, 서면이 인용하지 않은 면마다 '판단'이 있다
   상대 서면      상대증거/ 에 상대방 서면이 있으면 작업/상대주장_맞대기.md 가 있고 판정 칸이 다 찼고 초안보다 새것이다
   의뢰인 주장    작업/의뢰인주장_대조.md 가 있으면 '반영' 칸이 다 찼다
-  DOCX           9-2단계(`--대상 docx`)와 밤 점검에서, 병합한 서면 docx 가 서면초안.md 보다 낡지 않았다(8-1단계는 병합 전이라 보지 않는다)
+  DOCX           9-2단계(`--대상 docx`)와 밤 점검에서, 병합한 서면 docx 가 서면초안.md 보다 낡지 않았다(8-1단계는 병합 전이라 보지 않는다).
+                 초안이 더 새것이어도 본문(문단·제목·표·각주, 지운 문단까지)이 병합본과 같으면 하단 메모만 고친 것이다
   서증 압축      출력/제출/ 에 서증 압축파일이 있으면 evidence_zip.py --확인
-검토의견(사건 폴더의 검토의견서 docx 또는 회신초안.md)
+  예상 질의답변  출력/ 에 심문회의 예상 질의답변 docx 가 있으면 qna_check.py·style_check.py·작업/예상질의_인용대조표.md 의 cite_check.py(`/예상질의` 5절)
+검토의견(사건 폴더의 검토의견서 docx(판 이름이 가장 높은 것) 또는 회신초안.md)
   판례 대조·판결문 PDF   위와 같다(작업/인용대조표.md, 작업/인용판결_PDF)
   자료 파악      evidence_read.py check --자료 — 사건 폴더의 의뢰인 자료마다 전 면 읽기 기록
-  문체           루트 CLAUDE.md 가 쓰지 말라고 한 낙관 표현과 '적다'(→ 기재하다)
+  문체           루트 CLAUDE.md 가 쓰지 말라고 한 낙관 표현과 '적다'(→ 기재하다). 보완 메모는 보지 않는다
+계산(6_손해배상계산/사건/{사건명})
+  자료 파악      evidence_read.py check --자료 — 받은 자료마다 전 면 읽기 기록(`/손배계산` 2-1·3-1절)
 
 2026. 11. 2. 담당 노무사 "노동사건자동화는 결국 문체, 증거, 판례 세 가지에 어떠한 하자도 없어야", "모든 자동화 시스템에 최종 재검토
 완결성 100%로". GGM 사 제6호증 3면을 첫 면만 읽어 놓친 일이 인용 대조·맞대기·통독을 모두 지나갔다. 그 검사들은 서면에 쓴 것이
@@ -38,13 +44,17 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import html
 import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
+import zipfile
 from pathlib import Path
+from urllib.parse import unquote
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
@@ -53,13 +63,28 @@ ROOT = Path(__file__).resolve().parents[2]
 S4 = ROOT / '4_서면작성' / 'scripts'
 SC = ROOT / '공통' / 'scripts'
 sys.path.insert(0, str(SC))
+import cite_check                 # noqa: E402
 import system as _system          # noqa: E402  사건번호 정규식은 한 벌만 둔다
 
 CASE_NO = re.compile(_system.CASE_NUMBER)
 EVIDENCE_REF = re.compile(r'(' + _system.EVIDENCE_PREFIX + r')\s*제\s*\d+\s*호증')
 낙관 = ('다툴 실익이 충분', '인정될 가능성이 높', '유력하', '승소 가능성이 높', '이길 가능성이 높')
-적다 = re.compile(r'적(?:혀|어)\s*있|적었|적은\s*바|적고\s*있')
-산출물_이름 = re.compile(r'(-회신초안|-간이안)\.md$|관련 검토_|_수정\(|_최종|_Rev_\d|_초안\.(?:docx|pdf)$|_간이안\.(?:docx|pdf)$')
+적다 = re.compile(r'(?<![가-힣])적(?:(?:혀|어)\s*있|었|은\s*바|고\s*있)')       # '목적은 바람직' 같은 말은 아니다
+# 병합한 서면의 이름(4_서면작성/CLAUDE.md 3-1절). 같은 이름 꼴의 부속 문서(예상 질의답변 등)는 서면이 아니다
+병합본_이름 = re.compile(r'(_초안|_Rev_\d+|_최종|^최종서면|_\d+차 수정안(?:\(클린\))?)\.docx$')
+부속_이름 = re.compile(r'예상\s*질의|질의답변|요지|요약|별첨|목록|확인서|내용증명|통지서|연기 요청|대응안|문답')
+번호_꼴 = r'(?:\d{1,2}\.|[가-하]\.|\(\d{1,2}\)|\([가-하]\)|\d{1,2}\)|[가-하]\))'       # 제목 번호는 docx 에서 자동 번호이다
+_모듈 = {}
+
+
+def 증거검토():
+    """evidence_cite_review 를 한 번만 읽는다. 호증 열쇠·초안 목록·증거 인용 폴더의 규칙을 두 벌로 두지 않는다."""
+    if 'ecr' not in _모듈:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('evidence_cite_review', S4 / 'evidence_cite_review.py')
+        _모듈['ecr'] = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_모듈['ecr'])
+    return _모듈['ecr']
 
 
 def RUN(args: list) -> tuple:
@@ -73,9 +98,18 @@ def RUN(args: list) -> tuple:
     return r.returncode, out
 
 
+def 요약(out: str) -> str:
+    """검사 출력에서 막힌 까닭만 남긴다. 맞은 줄('… — 일치', '… — 원문: 보관함 확인')은 뺀다."""
+    줄 = [l.rstrip() for l in out.strip().splitlines() if l.strip()]
+    return '\n'.join([l for l in 줄 if not re.search(r'— (?:일치|원문: [^/]*)$', l)][:40])
+
+
 class 결과:
     def __init__(self):
         self.줄 = []
+        self.대상 = None        # 본 산출물(보고 머리에 적는다)
+        self.대상시각 = None
+        self.넘긴판 = False     # 병합본·제출 묶음이 이미 있어 넘긴 판일 수 있다
 
     def add(self, 이름, 상태, 말=''):
         self.줄.append((이름, 상태, 말.strip()))
@@ -83,11 +117,10 @@ class 결과:
     def run(self, 이름, args, 통과말='', 없음말=None):
         """종료 코드 0 은 통과, 없음말을 주면 2(대상 없음)는 해당 없음, 그 밖은 막힘."""
         code, out = RUN(args)
-        tail = '\n'.join(l for l in out.strip().splitlines()[-12:])
         if code == 2 and 없음말 is not None:
             self.add(이름, '해당 없음', 없음말)
         else:
-            self.add(이름, '통과' if code == 0 else '막힘', 통과말 if code == 0 else tail)
+            self.add(이름, '통과' if code == 0 else '막힘', 통과말 if code == 0 else 요약(out))
         return code
 
     @property
@@ -138,30 +171,56 @@ def 빈_판정(path: Path, 칸말: tuple) -> tuple:
 
 def 본문_줄(table: Path) -> list:
     """대조표의 본문 인용 줄(번호 칸에 '참고'·'뺌'이 없는 줄)."""
-    sys.path.insert(0, str(SC))
-    import cite_check
-    return [r for r in cite_check.table_rows(str(table)) if not any(w in r.get('번호', '') for w in ('참고', '뺌'))]
+    return [r for r in cite_check.table_rows(str(table)) if cite_check.is_body(r)]
+
+
+def 자리_머리(이름: str) -> str:
+    """줄 이름의 번호 부분. '2.가.(1) 각주' → '2.가.(1)', '3. 라.(2줄)' → '3.라.', '7(재인용)' → '7', '4-2 (나.(4))' → '4-2'."""
+    m = re.match(r'(?:[①-⑳]|\d+(?:-\d+)?\.?|[가-하]\.|\(\d+\)|\([가-하]\)|\s)+', 이름)
+    return re.sub(r'\s', '', m.group(0)) if m else ''
+
+
+def 같은_자리(줄: str, 표줄: str) -> bool:
+    """'사람 판정' 표의 줄 이름이 이 인용 줄을 가리키는가. 표는 줄을 묶거나 줄여 적는다('2.가.(3), 4.가.(3줄)', '2.가.(1) 각주·둘째(2줄)', '7'과 '7(재인용)')."""
+    머리 = 자리_머리(줄)
+    if not 머리:
+        return bool(줄) and (줄 in 표줄 or 표줄 in 줄)
+    for 토막 in 표줄.split(','):
+        표머리 = 자리_머리(토막.strip())
+        if 표머리 and (머리 == 표머리 or re.match(re.escape(표머리) + r'(?![\d-])', 머리) or re.match(re.escape(머리) + r'(?![\d-])', 표머리)):
+            return True
+    return False
 
 
 def 사람판정_빈(table: Path, report: Path) -> list:
     """판결 본문 인용 줄(cite_pdf_check 가 보는 줄)마다 '사람 판정' 표에 판단 부분인지·방향·사안 비교가 있는지,
-    'PDF 의 자리'에 '주의'(앞 글에 주장·원심·인정사실 등)가 붙은 줄은 비고가 있는지. 빠진 줄을 '줄(빠진 칸)'로 돌려준다."""
-    want = [r.get('번호', '').strip() for r in 본문_줄(table) if '법원' in r.get('사건 표시', '')]
+    'PDF 의 자리'에 '주의'(앞 글에 주장·원심·인정사실 등)가 붙은 줄은 비고가 있는지. 빠진 줄을 '줄(빠진 칸)'로 돌려준다.
+    같은 이름의 표 줄이 없으면 같은 판결이면서 번호가 겹치는 표 줄로 본다(묶어 적은 줄). 다른 목의 판정으로 이 줄을 통과시키지 않고,
+    걸리는 표 줄이 여럿이면 하나라도 비었을 때 막는다. 2026. 11. 3. 같은 판결의 표 줄 하나만 차면 그 판결의 다른 인용 줄까지 통과하였다."""
+    want = [(r.get('번호', '').strip(), cite_check.cases(r.get('사건 표시', ''))) for r in 본문_줄(table) if '법원' in r.get('사건 표시', '')]
     if not report.is_file():
-        return [f'{n}(표 없음)' for n in want]
-    판정 = {}
+        return [f'{n}(표 없음)' for n, _ in want]
+    표줄 = []          # (줄 이름, 그 줄의 판결 번호, 빠진 칸)
     for head, rs in 표들(절_글(report.read_text(encoding='utf-8'), '사람 판정')):
         def 칸(말):
             return next((i for i, h in enumerate(head) if 말 in h), None)
         i줄 = next((i for i, h in enumerate(head) if h in ('줄', '번호') or h.startswith('줄')), 0)
+        i판결 = 칸('판결')
         칸들 = {'판단 부분인지': 칸('판단'), '방향': 칸('방향'), '사안 비교': 칸('사안')}
         i자리, i비고 = 칸('자리'), 칸('비고')
         for r in rs:
             빠짐 = [이름 for 이름, i in 칸들.items() if i is None or not r[i].strip()]
             if i자리 is not None and '주의' in r[i자리] and (i비고 is None or not r[i비고].strip()):
                 빠짐.append('비고(주의 줄)')
-            판정[r[i줄].strip()] = 빠짐
-    return [f"{n}({', '.join(판정[n]) if n in 판정 else '줄 없음'})" for n in want if 판정.get(n, ['줄 없음'])]
+            표줄.append((r[i줄].strip(), cite_check.cases(r[i판결]) if i판결 is not None else set(), 빠짐))
+    out = []
+    for n, 번호들 in want:
+        같은판결 = lambda x: not x[1] or not 번호들 or bool(x[1] & 번호들)
+        후보 = [x for x in 표줄 if x[0] == n and 같은판결(x)] or [x for x in 표줄 if 같은판결(x) and 같은_자리(n, x[0])]
+        빠짐 = max((x[2] for x in 후보), key=len) if 후보 else ['줄 없음']
+        if 빠짐:
+            out.append(f"{n}({', '.join(빠짐)})")
+    return out
 
 
 def 날짜들(cell: str) -> list:
@@ -188,9 +247,7 @@ def 대조표_칸(table: Path, 오늘=None) -> tuple:
         빈 = [h for h in ('자리', '주문·결론', '다른 사유·전제', '확정', '원문') if not r.get(h, '').strip()]
         if 빈:
             막.append(f"{n}: {'·'.join(빈)} 칸이 비었다")
-        원문 = r.get('원문', '')
-        파일 = re.findall(r'`([^`]+)`', 원문)
-        if '법원' not in r.get('사건 표시', '') and not any((table.parent / f).exists() or (ROOT / f).exists() for f in 파일):
+        if '법원' not in r.get('사건 표시', '') and not cite_check.source_files(r.get('원문', ''), table):
             막.append(f"{n}: 원문 파일이 없다(법제처 본문이나 화면 글을 파일로 받아 '원문' 칸에 경로를 적는다)")
         확정 = r.get('확정', '')
         if re.search(r'미확정|미확인|확인 못|모름|계속 중|상고 중|항소 중', 확정):
@@ -201,6 +258,15 @@ def 대조표_칸(table: Path, 오늘=None) -> tuple:
     return 막, 미확정
 
 
+def 까닭별로(말들: list) -> str:
+    """'줄: 까닭' 꼴의 막힘을 까닭마다 묶는다. 같은 까닭을 줄마다 되풀이하면 표가 길어지고 뒤의 다른 까닭이 잘린다."""
+    묶음 = {}
+    for 말 in 말들:
+        줄, _, 까닭 = 말.partition(': ')
+        묶음.setdefault(까닭, []).append(줄)
+    return '; '.join(f"{까닭} — {', '.join(dict.fromkeys(줄들))}" for 까닭, 줄들 in 묶음.items())
+
+
 def 인용_있나(text: str) -> bool:
     return bool(CASE_NO.search(text))
 
@@ -208,7 +274,6 @@ def 인용_있나(text: str) -> bool:
 def 글(p: Path) -> str:
     """산출물의 글. docx 는 review_text.py 로 본문과 각주를 함께 뽑는다(판례 번호가 각주에 있다)."""
     if p.suffix.lower() == '.docx':
-        import tempfile
         with tempfile.TemporaryDirectory() as d:
             out = Path(d) / '글.md'
             RUN([SC / 'review_text.py', p, '--out', out])
@@ -216,42 +281,86 @@ def 글(p: Path) -> str:
     return p.read_text(encoding='utf-8', errors='replace')
 
 
+def 라운드_번호(p: Path) -> int:
+    return int(re.sub(r'\D', '', p.name) or 0)
+
+
+def 앞_라운드(폴더: Path) -> list:
+    """서면의 라운드 폴더이면 앞선 라운드들. 뒤 라운드의 판례는 앞 라운드 검색에서 나오기도 한다."""
+    if not re.fullmatch(r'라운드\d+', 폴더.name):
+        return []
+    return [p for p in 폴더.parent.glob('라운드*') if p.is_dir() and 라운드_번호(p) < 라운드_번호(폴더)]
+
+
+def 없는_줄(글: str) -> set:
+    """수확 재확인 보고서의 '기록에 없는 줄' 번호. 옛 보고서에 주소 꼴로 적힌 번호도 글자로 푼다."""
+    return {unquote(r[1]) for _, rows in 표들(절_글(글, '기록에 없는 줄')) for r in rows if len(r) > 6 and r[6] == '없음'}
+
+
+def 수확_처리_적음(글: str) -> bool:
+    """재확인에서 기록에 없던 줄을 어떻게 가렸는지 적은 글이 있는가. 사건상태의 파일 안내처럼 보고서를 가리키기만 한 줄은 아니다.
+    2026. 11. 3. '수확 목록'이라는 말이 어디에 한 번만 있어도 통과하였다."""
+    return bool(re.search(r'(?:수확\s*목록|수확목록_재확인|다시\s*훑)[^\n]{0,200}?'
+                          r'(?:반영|처리|사안이\s*(?:전혀\s*)?(?:다르|달라|다름|다른)|무관|본문\s*(?:을\s*)?(?:읽|확인|받)|기록에\s*없)', 글))
+
+
 # ---------------------------------------------------------------- 판례(두 계열 같다)
 def 검색_완결(res: 결과, 폴더: Path):
-    """찾지 않은 판례: 검색 기록(LBOX·법제처 목록, 검색기록)이 남았고, 받아 둔 목록에서 사안 고유어가 걸린 줄을 모두 가렸는가."""
+    """찾지 않은 판례: 검색 기록(LBOX·법제처 목록, 검색기록)이 남았고, 받아 둔 목록에서 사안 고유어가 걸린 줄을 모두 가렸는가.
+    걸린 줄은 본문에 반영하거나 유사 사례 표에 미반영 이유를 적되 사안이 전혀 다른 줄은 묶어서 한 줄로 적으므로(`/검토의견` 4-2단계),
+    번호가 기록에 없어도 재확인 보고서에 이미 나온 줄이고 재확인을 처리한 글이 있으면 가린 것으로 본다. 보고서 뒤에 새로 걸린 줄은 막는다."""
     작업 = 폴더 / '작업'
-    없는것 = [이름 for 이름, 있나 in (('작업/LBOX_목록.tsv', any(폴더.rglob('LBOX_목록.tsv'))),
-                                    ('법제처_목록.json', any(폴더.rglob('법제처_목록.json'))),
-                                    ('검색기록.md', (작업 / '검색기록.md').is_file() or (폴더 / '검색기록.md').is_file())) if not 있나]
+    폴더들 = [폴더] + 앞_라운드(폴더)
+    없는것 = [이름 for 이름, 있나 in (('작업/LBOX_목록.tsv', any(x for d in 폴더들 for x in d.rglob('LBOX_목록*.tsv'))),
+                                    ('법제처_목록.json', any(x for d in 폴더들 for x in d.rglob('법제처_목록.json'))),
+                                    ('검색기록.md', any((d / '작업' / '검색기록.md').is_file() or (d / '검색기록.md').is_file() for d in 폴더들)))
+             if not 있나]
     res.add('판례 검색 기록', '막힘' if 없는것 else '통과',
             ('없다: ' + ', '.join(없는것) + ' (`lbox-검색` 4·7항, `법제처-검색`)') if 없는것 else 'LBOX·법제처 목록과 검색기록 있음')
-    재확인 = 작업 / '수확목록_재확인.md'
-    if not 재확인.is_file():
-        res.add('찾은 판례 다시 훑기', '막힘', f'수확 목록 재확인(harvest_titles.py scan)을 하지 않았다: {재확인}')
+    재확인들 = sorted(작업.glob('수확목록_재확인*.md'))
+    if not 재확인들:
+        res.add('찾은 판례 다시 훑기', '막힘', f"수확 목록 재확인(harvest_titles.py scan)을 하지 않았다: {작업 / '수확목록_재확인.md'}")
         return
-    m = re.search(r'^낱말:[ \t]*(.+)$', 재확인.read_text(encoding='utf-8'), re.M)
-    낱말 = [w.strip() for w in m.group(1).split(', ') if w.strip()] if m else []
+    옛글 = [p.read_text(encoding='utf-8') for p in 재확인들]
+    낱말 = []
+    for 글자 in 옛글:
+        m = re.search(r'^낱말:[ \t]*(.+)$', 글자, re.M)
+        낱말 += [w.strip() for w in m.group(1).split(', ') if w.strip()] if m else []
+    낱말 = list(dict.fromkeys(낱말))
     if not 낱말:
-        res.add('찾은 판례 다시 훑기', '막힘', f'재확인 보고서에 낱말이 없다: {재확인}')
+        res.add('찾은 판례 다시 훑기', '막힘', f'재확인 보고서에 낱말이 없다: {재확인들[0]}')
         return
-    import tempfile
+    머리 = re.match(r'# 수확 목록 제목 다시 훑기 — (.+)', 옛글[0])          # 앞 라운드 목록을 훑은 보고서이면 그 라운드를 다시 훑는다
+    훑을곳 = 폴더.parent / 머리.group(1).strip() if 머리 and (폴더.parent / 머리.group(1).strip()).is_dir() else 폴더
     with tempfile.TemporaryDirectory() as d:          # 같은 낱말로 지금 기록과 다시 맞댄다(LBOX 에는 요청하지 않는다)
         out = Path(d) / '재확인.md'
-        RUN([SC / 'harvest_titles.py', 'scan', 폴더, '--낱말', *낱말, '--out', out])
+        RUN([SC / 'harvest_titles.py', 'scan', 훑을곳, '--낱말', *낱말, '--out', out])
         t = out.read_text(encoding='utf-8') if out.is_file() else ''
     n = re.search(r'없음 (\d+)건', t)
     빠짐 = int(n.group(1)) if n else -1
-    줄 = 절_글(t, '기록에 없는 줄')
-    번호 = [r[1] for head, rows in 표들(줄) for r in rows if len(r) > 6 and r[6] == '없음'][:15]
-    if 빠짐 != 0:
-        res.add('찾은 판례 다시 훑기', '막힘',
-                (f'받아 둔 목록에서 낱말이 걸렸는데 원고·대조표·검색기록 어디에도 없는 줄 {빠짐}건: ' + ', '.join(번호) +
-                 ' — 본문을 읽고 반영하거나 검색기록 유사 사례 표에 미반영 이유를 적는다') if 빠짐 > 0 else '다시 훑기를 돌리지 못했다')
-    else:
+    목록 = re.search(r'같은 줄 합친 뒤 (\d+)줄', t)
+    if 빠짐 < 0:
+        res.add('찾은 판례 다시 훑기', '막힘', '다시 훑기를 돌리지 못했다')
+    elif 목록 and int(목록.group(1)) == 0:
+        res.add('찾은 판례 다시 훑기', '막힘', f'다시 훑을 법제처·LBOX 목록이 없다: {훑을곳}')
+    elif 빠짐 == 0:
         res.add('찾은 판례 다시 훑기', '통과', f"낱말 {', '.join(낱말)} — 걸린 줄 모두 기록에 있음")
+    else:
+        새줄 = sorted(없는_줄(t) - set().union(*map(없는_줄, 옛글)))
+        처리글 = ''.join(p.read_text(encoding='utf-8', errors='replace') for d in 폴더들
+                      for p in (d / '작업' / '검색기록.md', d / '검색기록.md', d / '작업' / '사건상태.md', *d.glob('*회신초안*.md'),
+                                *(d / '출력').glob('서면초안*.md')) if p.is_file())
+        if 새줄:
+            res.add('찾은 판례 다시 훑기', '막힘', f'재확인 보고서 뒤에 새로 걸린 줄 {len(새줄)}건: ' + ', '.join(새줄[:15]) +
+                    ' — 본문을 읽고 반영하거나 검색기록 유사 사례 표에 미반영 이유를 적는다')
+        elif not 수확_처리_적음(처리글):
+            res.add('찾은 판례 다시 훑기', '막힘', f'기록에 없는 줄 {빠짐}건을 어떻게 가렸는지 검색기록·보완 메모·사건상태에 없다 — '
+                    '본문을 읽고 반영하거나 유사 사례 표에 미반영 이유를 적고, 사안이 전혀 다른 줄은 묶어서 한 줄로 적는다')
+        else:
+            res.add('찾은 판례 다시 훑기', '통과', f'기록에 없는 {빠짐}줄은 재확인 보고서에 있고 처리를 적음')
 
 
-def 판례(res: 결과, 대상: Path, table: Path, pdfdir: Path, 폴더: Path):
+def 판례(res: 결과, 대상: Path, table: Path, pdfdir: Path, 폴더: Path, report: Path | None = None):
     text = 글(대상)
     if not table.is_file():
         if 인용_있나(text):
@@ -261,12 +370,10 @@ def 판례(res: 결과, 대상: Path, table: Path, pdfdir: Path, 폴더: Path):
         return
     res.run('판례 대조', [SC / 'cite_check.py', table, '--target', 대상], '불일치 0')
     막, 미확정 = 대조표_칸(table)
-    res.add('대조표 칸(실존·해석·확정)', '막힘' if 막 else '통과', '; '.join(막[:12]) if 막 else '본문 인용 줄의 칸이 모두 찼다')
+    res.add('대조표 칸(실존·해석·확정)', '막힘' if 막 else '통과', 까닭별로(막) if 막 else '본문 인용 줄의 칸이 모두 찼다')
     if 미확정:
         res.add('미확정·확인 못한 판결', '참고', '보고에 적고 제출 전에 다시 본다: ' + '; '.join(미확정[:8]))
     검색_완결(res, 폴더)
-    sys.path.insert(0, str(SC))
-    import cite_check
     본문줄 = [r for r in 본문_줄(table) if '법원' in r.get('사건 표시', '')]
     if not 본문줄:
         res.add('판결문 PDF', '해당 없음', '본문 인용 판결 없음')
@@ -274,8 +381,12 @@ def 판례(res: 결과, 대상: Path, table: Path, pdfdir: Path, 폴더: Path):
     if not pdfdir.is_dir():
         res.add('판결문 PDF', '막힘', f'판결문 PDF 폴더가 없다(`lbox-검색` 9항으로 받는다): {pdfdir}')
         return
-    report = table.parent / '판결원문_PDF대조.md'
-    if res.run('판결문 PDF', [SC / 'cite_pdf_check.py', table, pdfdir, '--out', report, '--target', 대상], '문제 0') == 0:
+    report = report or table.parent / '판결원문_PDF대조.md'
+    with tempfile.TemporaryDirectory() as d:          # 사건 기록의 보고서는 고치지 않는다(밤 점검이 고치면 다음 밤에 손댄 사건으로 잡힌다)
+        임시 = Path(d) / '대조.md'
+        code = res.run('판결문 PDF', [SC / 'cite_pdf_check.py', table, pdfdir, '--out', 임시, '--target', 대상], '문제 0')
+        res.줄[-1] = (*res.줄[-1][:2], res.줄[-1][2].replace(f' → {임시}', ''))     # 곧 지워질 파일을 가리키지 않는다
+    if code == 0:
         빈 = 사람판정_빈(table, report)
         res.add('판결 판단 부분·방향·사안 비교', '막힘' if 빈 else '통과',
                 (f"'사람 판정' 표에서 빈 줄: {', '.join(빈[:12])} ({report})") if 빈 else f'{len(본문줄)}줄 판정')
@@ -288,11 +399,7 @@ def 최근_라운드(사건: Path):
 
 
 def 상대_서면(라운드: Path) -> list:
-    sys.path.insert(0, str(S4))
-    import importlib.util
-    spec = importlib.util.spec_from_file_location('evidence_cite_review', S4 / 'evidence_cite_review.py')
-    ecr = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(ecr)
+    ecr = 증거검토()
     d = 라운드 / '상대증거'
     if not d.is_dir():
         return []
@@ -300,39 +407,143 @@ def 상대_서면(라운드: Path) -> list:
             and p.suffix.lower() in ('.pdf', '.docx', '.hwp', '.hwpx') and not ecr.file_key(p.name)]
 
 
-def 서면(사건: Path, 라운드번호=None, 대상=None, 초안없음_허용=False) -> 결과:
+def 초안_목록(라운드: Path) -> list:
+    return 증거검토().drafts_of(라운드)
+
+
+def 붙임(s: str) -> str:
+    return re.sub(r'[*`]', '', cite_check.norm(s)).translate(str.maketrans('․‧ㆍ・', '····'))
+
+
+def 초안_조각(초안: Path) -> tuple:
+    """(본문 조각들, 각주들). 본문('---' 위)을 줄과 표 칸으로 나눈다. 제목 번호와 그림은 docx 에 글자로 없다."""
+    본문 = 초안.read_text(encoding='utf-8', errors='replace').replace('\r\n', '\n').split('\n---\n')[0]
+    각주 = [붙임(x) for x in re.findall(r'\[\[각주:(.*?)\]\]', 본문, flags=re.S)]
+    본문 = re.sub(r'!\[[^\]]*\]\([^)]*\)', '', re.sub(r'\[\[각주:.*?\]\]', '', 본문, flags=re.S))
+    조각 = []
+    for 줄 in 본문.splitlines():
+        줄 = 줄.strip()
+        if 줄.startswith('|'):
+            if not re.fullmatch(r'[|\s:\-]+', 줄):
+                조각 += [붙임(c) for c in 줄.strip('|').split('|')]
+        else:
+            줄 = re.sub(r'^#+\s*|^〔[^〕]*〕', '', 줄.replace('**', '')).strip()     # '〔원문〕'은 병합 때 빠지는 표시이다
+            조각.append(붙임(re.sub('^' + 번호_꼴 + r'\s*', '', 줄)))
+    return [x for x in 조각 if x and not re.fullmatch(r'-?다음-?', x)], 각주
+
+
+def 병합본_글(병합본: Path) -> tuple:
+    """(본문 글자, 각주 글자, 본문 시작을 찾았나). 본문은 프레임의 '다음' 뒤이다(표지 없는 소장은 '청구원인' 뒤). 표지와 목차는 프레임의 것이다."""
+    with zipfile.ZipFile(병합본) as z:
+        본 = z.read('word/document.xml').decode('utf-8', 'replace')
+        주 = z.read('word/footnotes.xml').decode('utf-8', 'replace') if 'word/footnotes.xml' in z.namelist() else ''
+    뽑기 = lambda x: 붙임(html.unescape(''.join(re.findall(r'<w:t(?: [^>]*)?>([^<]*)</w:t>', x))))
+    문단들 = [뽑기(p) for p in re.findall(r'<w:p[ >].*?</w:p>', 본, flags=re.S)]
+    시작 = next((i for 꼴 in (r'-?다음-?', '청구원인') for i, p in enumerate(문단들) if re.fullmatch(꼴, p)), None)
+    return ''.join(문단들[시작 + 1 if 시작 is not None else 0:]), 뽑기(주), 시작 is not None
+
+
+def 본문이_같은가(초안: Path, 병합본: Path) -> bool:
+    """초안을 병합본보다 뒤에 고쳤어도 본문('---' 위)이 병합본과 같으면 하단 보완 메모만 고친 것이다. 문단·짧은 제목·표 칸을 차례대로 맞대고,
+    그 사이에 초안에 없는 글이 끼면(초안에서 지운 문단이 병합본에 남은 것) 다르다고 본다. 각주도 맞댄다.
+    2026. 11. 3. 스무 글자 넘는 문단이 병합본에 있기만 보다가, 각주의 판결 번호·표의 금액·짧은 제목을 고치거나 문단을 지운 초안을 통과시켰다."""
+    try:
+        글자, 주, 시작있음 = 병합본_글(병합본)
+    except (OSError, zipfile.BadZipFile, KeyError):
+        return False
+    조각, 각주 = 초안_조각(초안)
+    자리 = 0
+    for i, x in enumerate(조각):
+        k = 글자.find(x, 자리)
+        if k < 0:
+            if x == '입증방법':       # 새로 내는 호증이 없으면 병합이 입증방법 제목을 넣지 않는다
+                continue
+            return False
+        if (i or 시작있음) and not re.fullmatch(f'{번호_꼴}*', 글자[자리:k]):
+            return False
+        자리 = k + len(x)
+    남은글 = 글자[자리:]            # 끝은 프레임의 제출일·대리인 블록이다
+    if 시작있음 and 남은글 and not re.match(r'(?:20\d{2}|\s*\.)', 남은글):
+        return False
+    return bool(조각) and ''.join(각주) == 주
+
+
+def 초안_이름(초안: Path) -> str:
+    return 초안.stem.replace('서면초안', '').strip('_')
+
+
+def 대조표_자리(사건: Path, 라운드: Path, 초안: Path) -> tuple:
+    """(인용 대조표, 판결문 PDF 대조 보고서). 서면초안_{이름}.md 는 이름이 든 표(라운드나 사건 폴더의 작업/)를 쓴다."""
+    이름 = 초안_이름(초안)
+    if not 이름:
+        return 라운드 / '작업' / '인용대조표.md', 라운드 / '작업' / '판결원문_PDF대조.md'
+    for d in (라운드 / '작업', 사건 / '작업'):
+        걸림 = sorted(d.glob(f'인용대조표*{이름}*.md'))
+        if 걸림:
+            return 걸림[0], d / f'판결원문_PDF대조_{이름}.md'
+    return 라운드 / '작업' / f'인용대조표_{이름}.md', 라운드 / '작업' / f'판결원문_PDF대조_{이름}.md'
+
+
+def 예상질의(res: 결과, 라운드: Path):
+    """심문회의 예상 질의답변을 만들었으면 `/예상질의` 5절의 검사를 본다. 사내 인사위원회 리허설 문서는 모양이 달라 보지 않는다."""
+    질의 = [p for p in (라운드 / '출력').glob('*심문회의 예상 질의답변*.docx') if not p.name.startswith('~$')]
+    if not 질의:
+        return
+    최신 = max(질의, key=lambda p: p.stat().st_mtime)
+    res.run('예상 질의답변 모양', [S4 / 'qna_check.py', 최신], '위반 0')
+    res.run('예상 질의답변 문체', [S4 / 'style_check.py', 최신], '위반 0')
+    표 = 라운드 / '작업' / '예상질의_인용대조표.md'
+    if 표.is_file():
+        res.run('예상 질의답변 판례 대조', [SC / 'cite_check.py', 표, '--target', 최신], '불일치 0')
+    elif 인용_있나(글(최신)):
+        res.add('예상 질의답변 판례 대조', '막힘', f'사건번호가 있는데 대조표가 없다: {표}')
+
+
+def 서면(사건: Path, 라운드번호=None, 대상=None, 초안없음_허용=False, 초안=None) -> 결과:
     res = 결과()
     라운드 = 사건 / f'라운드{라운드번호}' if 라운드번호 else 최근_라운드(사건)
     if not 라운드 or not 라운드.is_dir():
         res.add('초안', '막힘', f'라운드 폴더가 없다: {사건}')
         return res
-    초안 = 라운드 / '출력' / '서면초안.md'
+    if 초안 is None and 대상 and Path(대상).suffix.lower() == '.md' and Path(대상).name.startswith('서면초안'):
+        초안 = Path(대상)
+    if 초안 is None:
+        후보 = 초안_목록(라운드)
+        초안 = 후보[0] if 후보 else 라운드 / '출력' / '서면초안.md'
+    제출 = 라운드 / '출력' / '제출'
     if not 초안.is_file():
         if 초안없음_허용:       # 밤 점검: 증거만 새로 받은 사건이면 읽기 기록만 본다
             res.add('초안', '해당 없음', f'{라운드.name} 초안 없음')
             res.run('증거 파악(전 면 읽기)', [S4 / 'evidence_read.py', 'check', 사건], '모든 호증 기록 완료', '호증 없음')
+            예상질의(res, 라운드)
             return res
         res.add('초안', '막힘', f'초안이 없다: {초안}')
         return res
     대상 = Path(대상) if 대상 else 초안
     작업 = 라운드 / '작업'
+    res.대상, res.대상시각 = f'{라운드.name}/출력/{초안.name}', 초안.stat().st_mtime
     res.run('문체', [S4 / 'style_check.py', 대상], '위반 0')
     res.run('호증 번호', [S4 / 'citation_check.py', 대상], '목록에 없는 호증 0')
-    판례(res, 대상, 작업 / '인용대조표.md', 라운드 / '참고자료' / '인용판결_PDF', 라운드)
+    표, 보고서 = 대조표_자리(사건, 라운드, 초안)
+    판례(res, 대상, 표, 라운드 / '참고자료' / '인용판결_PDF', 라운드, 보고서)
 
     본문 = 초안.read_text(encoding='utf-8', errors='replace')
     if EVIDENCE_REF.search(본문.split('\n---\n')[0]):
-        rj, nj = 작업 / '증거인용검토' / 'review.json', 작업 / '증거인용검토' / 'notes.json'
+        검토 = 증거검토().review_dir(초안)
+        rj, nj = 검토 / 'review.json', 검토 / 'notes.json'
         if not rj.is_file():
             res.add('증거 인용', '막힘', f'증거 인용 대조를 하지 않았다(evidence_cite_review.py scan): {rj}')
-        elif rj.stat().st_mtime + 1 < 초안.stat().st_mtime:
-            res.add('증거 인용', '막힘', '초안을 고친 뒤 증거 인용 대조(scan)를 다시 하지 않았다')
         else:
             items = json.loads(rj.read_text(encoding='utf-8'))
-            notes = json.loads(nj.read_text(encoding='utf-8')) if nj.is_file() else {}
-            빈 = [str(r.get('n')) for r in items if not (notes.get(str(r.get('n'))) or [''])[0]]
-            res.add('증거 인용', '막힘' if 빈 else '통과',
-                    f'notes.json 에 판정이 없는 인용 {len(빈)}건: {", ".join(빈[:20])}' if 빈 else f'{len(items)}건 판정')
+            # 초안이 더 새것이어도 인용이 그대로이면 대조는 낡지 않았다(2026. 11. 3. 하단 메모만 고친 초안을 막았다)
+            새것, 없어짐 = 증거검토().citation_changes(초안, items) if rj.stat().st_mtime + 1 < 초안.stat().st_mtime else (0, 0)
+            if 새것 or 없어짐:
+                res.add('증거 인용', '막힘', f'초안을 고친 뒤 증거 인용 대조(scan)를 다시 하지 않았다(새로 생긴 인용 {새것}건, 없어진 인용 {없어짐}건)')
+            else:
+                notes = json.loads(nj.read_text(encoding='utf-8')) if nj.is_file() else {}
+                빈 = [str(r.get('n')) for r in items if not (notes.get(str(r.get('n'))) or [''])[0]]
+                res.add('증거 인용', '막힘' if 빈 else '통과',
+                        f'notes.json 에 판정이 없는 인용 {len(빈)}건: {", ".join(빈[:20])}' if 빈 else f'{len(items)}건 판정')
     else:
         res.add('증거 인용', '해당 없음', '본문에 증거 인용 없음')
 
@@ -366,25 +577,48 @@ def 서면(사건: Path, 라운드번호=None, 대상=None, 초안없음_허용=
 
     # 병합한 서면(3-1절 이름. 서면_프레임.docx 는 아니다). 8-1단계는 병합 전에 돌리므로 그때는 보지 않고,
     # 9-2단계(--대상 docx)와 밤 점검에서 초안을 고친 뒤 병합하지 않은 판을 잡는다
+    이름 = 초안_이름(초안)
     docxs = [p for p in (라운드 / '출력').glob('*.docx')
-             if not p.name.startswith('~$') and re.search(r'(_초안|_Rev_\d+|_최종|^최종서면)\.docx$', p.name)]
+             if not p.name.startswith('~$') and 병합본_이름.search(p.name) and not 부속_이름.search(p.name)
+             and (not 이름 or 이름 in re.sub(r'[\s·ㆍ]', '', p.name))]
+    res.넘긴판 = bool(docxs) or 제출.is_dir()
     병합본 = 대상 if 대상.suffix.lower() == '.docx' else (max(docxs, key=lambda p: p.stat().st_mtime) if docxs and 초안없음_허용 else None)
     if 병합본 is None:
         res.add('DOCX', '해당 없음', '병합 전에 돌림(9-2단계에서 `--대상 "{docx}"` 로 다시 돌린다)' if docxs else '아직 병합 전')
-    elif 초안.stat().st_mtime > 병합본.stat().st_mtime + 1:
+    elif 초안.stat().st_mtime > 병합본.stat().st_mtime + 1 and not 본문이_같은가(초안, 병합본):
         res.add('DOCX', '막힘', f'서면초안.md 를 고친 뒤 병합하지 않았다: {병합본.name}')
     else:
         res.add('DOCX', '통과', 병합본.name)
 
-    제출 = 라운드 / '출력' / '제출'
     if list(제출.glob('*_서증.zip')):
         res.run('서증 압축', [S4 / 'evidence_zip.py', 제출, '--확인'], '증거/ 와 같다')
     else:
         res.add('서증 압축', '해당 없음', '제출 묶음 압축파일 없음')
+    예상질의(res, 라운드)
     return res
 
 
+def 돌리기(사건: Path, 라운드번호=None, 대상=None, 밤=False) -> list:
+    """[(표제, 결과)]. 한 라운드에 서면이 여럿이면 서면마다 본다."""
+    종류 = 사건_종류(사건)
+    if 종류 == '계산':
+        return [('', 계산(사건))]
+    if 종류 == '검토의견':
+        return [('', 검토의견(사건, 대상, 밤))]
+    라운드 = 사건 / f'라운드{라운드번호}' if 라운드번호 else 최근_라운드(사건)
+    후보 = 초안_목록(라운드) if 라운드 and 라운드.is_dir() else []
+    if 대상 or len(후보) < 2:
+        return [('', 서면(사건, 라운드번호, 대상, 밤))]
+    return [(p.name, 서면(사건, 라운드번호, None, 밤, p)) for p in 후보]
+
+
 # ---------------------------------------------------------------- 검토의견
+def 판_순위(p: Path) -> int:
+    """뒤 판일수록 크다(`_Rev_N`, `_N차 수정안`). 수정 시각만으로 고르면 나중에 건드린 지난 판을 본다."""
+    m = re.search(r'_Rev_(\d+)|_(\d+)차 수정안', p.name)
+    return int(m.group(1) or m.group(2)) if m else 0
+
+
 def 검토의견(사건: Path, 대상=None, 초안없음_허용=False) -> 결과:
     res = 결과()
     if 대상:
@@ -392,20 +626,29 @@ def 검토의견(사건: Path, 대상=None, 초안없음_허용=False) -> 결과
     else:
         후보 = [p for p in 사건.iterdir() if p.is_file() and not p.name.startswith('~$')
               and (re.search(r'관련 검토_.*\.docx$', p.name) or p.name.endswith('-회신초안.md') or p.name.endswith('-간이안.md'))]
-        대상 = max(후보, key=lambda p: p.stat().st_mtime) if 후보 else None
+        대상 = max(후보, key=lambda p: (판_순위(p), p.stat().st_mtime)) if 후보 else None
     if not 대상 or not 대상.is_file():
         res.add('산출물', '해당 없음' if 초안없음_허용 else '막힘', f'검토의견서·회신초안이 없다: {사건}')
         if 초안없음_허용:
             res.run('자료 파악(전 면 읽기)', [S4 / 'evidence_read.py', 'check', 사건, '--자료', 사건], '자료 기록 완료', '자료 없음')
         return res
+    res.대상, res.대상시각 = 대상.name, 대상.stat().st_mtime
+    res.넘긴판 = any(p.suffix.lower() == '.docx' and '관련 검토_' in p.name for p in 사건.iterdir())
     간이 = '간이안' in 대상.name
     판례(res, 대상, 사건 / '작업' / ('인용대조표_간이안.md' if 간이 else '인용대조표.md'), 사건 / '작업' / '인용판결_PDF', 사건)
     res.run('자료 파악(전 면 읽기)', [S4 / 'evidence_read.py', 'check', 사건, '--자료', 사건], '의뢰인 자료 기록 완료',
             '사건 폴더에 의뢰인 자료 없음')
-    text = 글(대상)
+    text = 글(대상).split('## 보완 메모')[0]       # 보완 메모는 의뢰인에게 가는 글이 아니다
     걸림 = [w for w in 낙관 if w in text] + [m.group(0) for m in 적다.finditer(text)]
     res.add('문체(낙관 표현·적다)', '막힘' if 걸림 else '통과',
             ('쓰지 않는 표현: ' + ', '.join(dict.fromkeys(걸림))) if 걸림 else '낙관 표현·적다 없음')
+    return res
+
+
+# ---------------------------------------------------------------- 계산
+def 계산(사건: Path) -> 결과:
+    res = 결과()
+    res.run('자료 파악(전 면 읽기)', [S4 / 'evidence_read.py', 'check', 사건, '--자료', 사건], '자료 기록 완료', '자료 없음')
     return res
 
 
@@ -416,6 +659,8 @@ def 사건_종류(사건: Path) -> str:
         return '서면'
     if '1_검토의견' in parts:
         return '검토의견'
+    if '6_손해배상계산' in parts:
+        return '계산'
     return '서면' if any(사건.glob('라운드*')) else '검토의견'
 
 
@@ -423,7 +668,7 @@ def 최근_사건(시간: float) -> list:
     """시간(시) 안에 파일을 고친 사건 폴더. 면별 글·문자인식 캐시는 세지 않는다."""
     끝 = time.time() - 시간 * 3600
     out = []
-    for 폴더 in ('4_서면작성', '1_검토의견'):
+    for 폴더 in ('4_서면작성', '1_검토의견', '6_손해배상계산'):
         base = ROOT / 폴더 / '사건'
         if not base.is_dir():
             continue
@@ -439,11 +684,36 @@ def 최근_사건(시간: float) -> list:
     return out
 
 
-def 보고(사건: Path, res: 결과) -> str:
-    줄 = [f'## {사건.name} ({사건_종류(사건)}) — 막힘 {len(res.막힘)}', '', '| 검사 | 결과 | 내용 |', '|---|---|---|']
+def 보고(사건: Path, res: 결과, 표제='', 길이=None, 끝=None) -> str:
+    """사건 하나의 표. 길이를 주면 내용을 그만큼만 싣는다(화면용. 파일에는 전문을 쓴다). 끝은 밤 점검 범위의 시작 시각이다."""
+    줄 = [f"## {사건.name}{' · ' + 표제 if 표제 else ''} ({사건_종류(사건)}) — 막힘 {len(res.막힘)}", '']
+    if res.대상:
+        때 = time.strftime('%Y-%m-%d %H:%M', time.localtime(res.대상시각))
+        범위 = '' if 끝 is None else (' · 이번 범위에 고침' if res.대상시각 >= 끝 else ' · 이번 범위에 안 고침(막힘은 앞서 만든 판의 것)')
+        줄 += [f"대상: {res.대상} ({때}{범위}){' · 넘긴 판일 수 있음' if res.넘긴판 else ''}", '']
+    줄 += ['| 검사 | 결과 | 내용 |', '|---|---|---|']
     for 이름, 상태, 말 in res.줄:
-        한줄 = re.sub(r'\s+', ' ', 말).replace('|', '｜')[:400]
-        줄.append(f'| {이름} | {상태} | {한줄} |')
+        한줄 = re.sub(r'\s+', ' ', 말).replace('|', '｜')
+        줄.append(f'| {이름} | {상태} | {한줄[:길이] if 길이 else 한줄} |')
+    return '\n'.join(줄) + '\n'
+
+
+def 검사별_모음(묶음: list, 끝: float) -> str:
+    """밤 점검의 화면 보고. 사건마다가 아니라 검사마다 모은다. `/하자보완` 은 이 표로 검사가 잘못 막거나 통과시키는지, 지침에 빈틈이 있는지 가른다.
+    묶음은 [(사건 이름, 결과)]이다. 사건 이름 뒤의 *는 이번 범위에 고친 판이다."""
+    막, 통 = {}, {}
+    for 이름, res in 묶음:
+        표시 = 이름 + ('*' if res.대상시각 and res.대상시각 >= 끝 else '')
+        for 검사, 상태, 말 in res.줄:
+            if 상태 == '막힘':
+                막.setdefault(검사, []).append((표시, 말))
+            elif 상태 == '통과':
+                통.setdefault(검사, []).append(표시)
+    줄 = ['## 검사별 모음', '', '| 검사 | 막힘 | 통과 | 막힌 사건(*는 이번 범위에 고친 판) | 표본 |', '|---|---|---|---|---|']
+    for 검사 in sorted(set(막) | set(통), key=lambda x: (-len(막.get(x, ())), x)):
+        걸림 = 막.get(검사, [])
+        표본 = re.sub(r'\s+', ' ', 걸림[0][1].replace(str(ROOT) + os.sep, '')).replace('|', '｜')[:200] if 걸림 else ''
+        줄.append(f"| {검사} | {len(걸림)} | {len(통.get(검사, ()))} | {', '.join(n for n, _ in 걸림)} | {표본} |")
     return '\n'.join(줄) + '\n'
 
 
@@ -461,19 +731,26 @@ def main(argv=None) -> int:
         사건들 = [Path(a.case)]
     else:
         ap.error('사건 폴더나 --최근 을 준다')
-    글들, 막힘 = [], 0
+    글들, 막힘, 묶음 = [], 0, []
+    끝 = time.time() - a.최근 * 3600 if a.최근 else None
     for c in 사건들:
-        밤 = bool(a.최근)
-        res = 서면(c, a.라운드, a.대상, 밤) if 사건_종류(c) == '서면' else 검토의견(c, a.대상, 밤)
-        막힘 += len(res.막힘)
-        글들.append(보고(c, res))
-        print(글들[-1])
+        for 표제, res in 돌리기(c, a.라운드, a.대상, bool(a.최근)):
+            막힘 += len(res.막힘)
+            글들.append(보고(c, res, 표제, 끝=끝))
+            묶음.append((c.name + (' · ' + 표제 if 표제 else ''), res))
+            if not a.최근:
+                print(보고(c, res, 표제, 400, 끝))
+    모음 = 검사별_모음(묶음, 끝) + '\n' if a.최근 and 사건들 else ''
+    if 모음:
+        print(모음)
     if a.최근 and not 사건들:
         print(f'{a.최근:g}시간 안에 손댄 사건이 없다.')
     print(f'사건 {len(사건들)}건, 막힘 {막힘}건' + ('' if 막힘 or not 사건들 else ' — 넘겨도 된다(판정의 옳고 그름은 작성 세션이 원문으로 본다)'))
-    if a.out:
+    if a.out:          # 같은 날 다시 돌려도 앞 실행의 전문을 지우지 않고, 손댄 사건이 없는 밤도 돌았다는 줄을 남긴다
         Path(a.out).parent.mkdir(parents=True, exist_ok=True)
-        Path(a.out).write_text('\n'.join(글들), encoding='utf-8')
+        범위 = f' · 최근 {a.최근:g}시간' if a.최근 else ''
+        with open(a.out, 'a', encoding='utf-8') as f:
+            f.write(f"# {time.strftime('%Y-%m-%d %H:%M')} 실행{범위} · 사건 {len(사건들)}건, 막힘 {막힘}건\n\n" + 모음 + ''.join(g + '\n' for g in 글들))
     return 1 if 막힘 else 0
 
 

@@ -23,6 +23,21 @@ ROW = ("| 1 | 대법원 2025. 7. 17. 선고 2021도11886 판결 | 대법원은 �
 TARGET = "연차는 청구한 시기에 주어야 하고, 대법원은 막대한 지장이 있는 경우에 한하여 시기를 변경할 수 있다고 판시하였습니다(대법원 2025. 7. 17. 선고 2021도11886 판결).\n\n## 보완 메모\n대법원 2099다1 은 본문이 아니다.\n"
 
 
+class SourcePathTest(unittest.TestCase):
+    def test_source_written_from_any_level_of_the_case_is_found(self):
+        """2026. 11. 3. 라운드·사건 폴더 기준으로 적은 경로를 찾지 못해 글자 대조가 '원문 미확인'으로 넘어갔다."""
+        with tempfile.TemporaryDirectory() as d:
+            work = os.path.join(d, "사건1", "라운드1", "작업")
+            os.makedirs(os.path.join(work, "원문"))
+            with open(os.path.join(work, "원문", "a.md"), "w", encoding="utf-8") as f:
+                f.write("글")
+            table = os.path.join(work, "인용대조표.md")
+            for cell in ("`원문/a.md`", "`작업/원문/a.md`", "`라운드1/작업/원문/a.md`", "작업/원문/a.md", "보관함 일치 작업/원문/a.md"):
+                self.assertEqual(cite_check.source_text(cell, table, ""), "글", cell)
+            self.assertEqual(cite_check.source_files("`없는폴더/a.md`", table), [])
+            self.assertIsNone(cite_check.source_text("화면 확인(2026. 11. 2.)", table, ""))
+
+
 class CiteCheckTest(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()

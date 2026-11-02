@@ -98,20 +98,41 @@ def in_order(text, parts):
     return None
 
 
+def is_body(row):
+    """본문 인용 줄인가. 번호 칸에 '참고'·'뺌'이 있거나 하단 목록의 번호(①②③)로 시작하는 줄은 본문 인용이 아니다.
+    2026. 11. 3. '② 2.'처럼 적은 하단 메모 줄까지 판결문 PDF 와 '사람 판정'을 요구하였다."""
+    no = row.get("번호", "").strip()
+    return not any(w in no for w in ("참고", "뺌")) and not re.match(r"[①②③]", no)
+
+
+def source_files(cell, table_path):
+    """'원문' 칸에 적힌 파일의 자리. 칸의 경로는 표 폴더·라운드·사건 폴더·저장소 루트 가운데 어디를 기준으로 적어도 찾는다.
+    2026. 11. 3. 사건 폴더 기준으로 적은 줄을 찾지 못해 인용 대조가 원문 미확인으로 넘어가고, final_check.py 는 따로 찾다가 있는 파일을 없다고 막았다."""
+    names = re.findall(r"`([^`]+)`", cell) or [w for w in re.split(r"\s+", cell) if re.search(r"\.(md|txt)$", w)]
+    d = os.path.dirname(os.path.abspath(table_path))
+    bases = ["", os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))]
+    for _ in range(4):      # 표 폴더 → 라운드 → 사건 폴더 → 사건 묶음
+        bases.append(d)
+        d = os.path.dirname(d)
+    out = []
+    for n in names:
+        p = next((os.path.join(b, n) if b else n for b in bases if os.path.isfile(os.path.join(b, n) if b else n)), None)
+        if p:
+            out.append(p)
+    return out
+
+
 def source_text(cell, table_path, key):
     """'원문' 칸에 적힌 파일의 글. 법제처 묶음이면 그 사건의 대목만. 없으면 None."""
-    names = re.findall(r"`([^`]+)`", cell) or [w for w in re.split(r"\s+", cell) if re.search(r"\.(md|txt)$", w)]
-    bases = ["", os.path.dirname(table_path), os.path.dirname(os.path.dirname(table_path))]
-    for n in names:
-        for b in bases:
-            p = os.path.join(b, n) if b else n
-            if os.path.isfile(p):
-                t = open(p, encoding="utf-8", errors="replace").read()
-                parts = re.split(r"\n(?=## \[)", t)
-                if len(parts) > 2:      # 여러 건을 묶은 법제처 본문 파일
-                    hit = [s for s in parts if key and key in norm(s[:400])] or [s for s in parts if key and key in norm(s)]
-                    t = hit[0] if hit else ""
-                return t
+    for p in source_files(cell, table_path):
+        if p.lower().endswith(".pdf"):      # PDF 글은 cite_pdf_check.py 가 본다
+            continue
+        t = open(p, encoding="utf-8", errors="replace").read()
+        parts = re.split(r"\n(?=## \[)", t)
+        if len(parts) > 2:      # 여러 건을 묶은 법제처 본문 파일
+            hit = [s for s in parts if key and key in norm(s[:400])] or [s for s in parts if key and key in norm(s)]
+            t = hit[0] if hit else ""
+        return t
     return None
 
 
@@ -154,7 +175,7 @@ def check(table_path, targets):
             if day and not (day & dates(src)):
                 bad += 1; notes.append("불일치: 원문 파일에 날짜 %s 없음" % sorted(day))
         # 3) 산출물
-        gone = any(w in r.get("번호", "") for w in ("뺌", "참고")) or r.get("본문 문장", "").startswith("뺌")      # 뺀 인용과 참고 줄(원심 등)은 산출물과 맞대지 않는다
+        gone = not is_body(r) or r.get("본문 문장", "").startswith("뺌")      # 뺀 인용과 참고 줄(원심, 하단 목록 등)은 산출물과 맞대지 않는다
         for p, t in ([] if gone else tgt):
             n = norm(t)
             if key and key not in n:
