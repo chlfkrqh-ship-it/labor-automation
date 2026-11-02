@@ -2,6 +2,7 @@
 
 호증마다 단위(PDF 면, 그림, 압축파일 안 파일, 엑셀 시트)별 빈 줄이 있는 틀을 만드는지, 모든 단위를 채우지 않으면 check 가
 막는지, '같음'·'반복'만 적은 줄을 빈 줄로 세는지, 기록한 뒤 파일이 바뀌면 막는지, 번호를 다시 매기면 기록을 옮기는지 본다.
+압축·엑셀·워드·한글(hwpx)·메일 호증도 단위마다 글 덩이·면·그림의 확인표가 있어야 지나가는지 본다(OtherFormatsTest).
 세션 기록으로 읽은 줄을 재는 실측과 스캔 표의 줄 복원도 본다. 문자인식(Windows)은 돌리지 않는다(--no-ocr).
 """
 import importlib.util
@@ -14,6 +15,7 @@ import tempfile
 import unittest
 from unittest import mock
 import zipfile
+import xml.etree.ElementTree as ET
 from contextlib import redirect_stdout
 
 import pymupdf
@@ -46,6 +48,46 @@ def tok(case: Path, key: str, no: int) -> str:
     return er.확인표(case, er.해시(case / re.search(r'^파일: (.+)$', rec, re.M).group(1)), no, '그림')
 
 
+XL = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+XR = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+PKG = 'http://schemas.openxmlformats.org/package/2006/relationships'
+
+
+def make_xlsx(path: Path, 시트: dict, 더=None):
+    """시트 이름 → [[칸 값]] 로 작은 통합 문서를 만든다(글은 공유 문자열). 더: 넣을 파일 {이름: 바이트}."""
+    공유, files = [], {}
+    sheets, rels = [], []
+    for i, (이름, 행들) in enumerate(시트.items(), 1):
+        sheets.append(f'<sheet name="{이름}" sheetId="{i}" r:id="rId{i}"/>')
+        rels.append(f'<Relationship Id="rId{i}" Target="worksheets/sheet{i}.xml"/>')
+        rows = []
+        for r, 칸 in enumerate(행들, 1):
+            cs = []
+            for c, v in enumerate(칸):
+                ref = f'{chr(65 + c)}{r}'
+                if isinstance(v, str):
+                    공유.append(v)
+                    cs.append(f'<c r="{ref}" t="s"><v>{len(공유) - 1}</v></c>')
+                else:
+                    cs.append(f'<c r="{ref}"><v>{v}</v></c>')
+            rows.append(f'<row r="{r}">{"".join(cs)}</row>')
+        files[f'xl/worksheets/sheet{i}.xml'] = f'<worksheet xmlns="{XL}"><sheetData>{"".join(rows)}</sheetData></worksheet>'
+    files['xl/workbook.xml'] = f'<workbook xmlns="{XL}" xmlns:r="{XR}"><sheets>{"".join(sheets)}</sheets></workbook>'
+    files['xl/_rels/workbook.xml.rels'] = f'<Relationships xmlns="{PKG}">{"".join(rels)}</Relationships>'
+    files['xl/sharedStrings.xml'] = f'<sst xmlns="{XL}">' + ''.join(f'<si><t>{s}</t></si>' for s in 공유) + '</sst>'
+    files.update(더 or {})
+    with zipfile.ZipFile(path, 'w') as z:
+        for n, x in files.items():
+            z.writestr(n, x)
+
+
+def 기대표(case: Path, key: str, 자료: bool = False) -> dict:
+    """그 호증 기록의 단위마다 있어야 할 확인표(글 덩이·면은 면별 글에, 그림은 `그림` 이 그린 띠에 있는 값)."""
+    자 = er.자리(case, 자료)
+    rec = 자.기록_파일(key).read_text(encoding='utf-8')
+    return er.기대_확인표(자, key, case / re.search(r'^파일: (.+)$', rec, re.M).group(1)) or {}
+
+
 def run(*args):
     out = io.StringIO()
     with redirect_stdout(out):
@@ -69,8 +111,7 @@ class EvidenceReadTest(unittest.TestCase):
         with zipfile.ZipFile(self.ours / '사 제3호증 사진 묶음.zip', 'w') as z:
             z.writestr('b.jpg', b'1')
             z.writestr('a.jpg', b'2')
-        with zipfile.ZipFile(self.ours / '사 제4호증 근무표.xlsx', 'w') as z:
-            z.writestr('xl/workbook.xml', '<workbook><sheets><sheet name="1월" sheetId="1"/><sheet name="2월" sheetId="2"/></sheets></workbook>')
+        make_xlsx(self.ours / '사 제4호증 근무표.xlsx', {'1월': [['성명', '출근'], ['홍길동', 20]], '2월': [['성명', '출근'], ['홍길동', 18]]})
         (self.ours / '사 제5호증 메모.docx').write_bytes(b'PK')
         (self.case / '라운드1' / '상대증거' / '신청이유서(2).pdf').write_bytes(b'')     # 호증 번호가 없는 상대 서면은 보지 않는다
 
@@ -131,8 +172,13 @@ class EvidenceReadTest(unittest.TestCase):
         run('make', self.case, '--no-ocr')
         확인 = ' '.join(tok(self.case, '사6', n) for n in (1, 2, 3))
         self.fill('사6', f'- 1~3면: 일자별 안전 문자(10. 1.~10. 3.), 3면에 시험 기기 사용 금지 (확인표 {확인})')
-        self.fill('사3', '- [파일] a.jpg: 출입문 사진\n- [파일] b.jpg: 작업대 사진', 문구='없음')
+        self.fill('사3', '- [파일] a.jpg: 출입문 사진\n- [파일] b.jpg: 작업대 사진', 문구='없음')     # 열리지 않는 그림은 신고로 본다
         self.fill('사4', '- [시트] 1월: 1월 근무표\n- [시트] 2월: 2월 근무표', 문구='없음')
+        code, out = run('check', self.case, '--호증', '사4')
+        self.assertEqual(code, 1)                               # 엑셀도 시트마다 끝까지 읽은 확인표가 있어야 한다
+        self.assertIn('확인표가 없거나 맞지 않는 단위 2/2: [시트] 1월, [시트] 2월', out)
+        표 = 기대표(self.case, '사4')
+        self.fill('사4', f"- [시트] 1월: 1월 근무표 확인표 {표['[시트] 1월'][0]}\n- [시트] 2월: 2월 근무표 확인표 {표['[시트] 2월'][0]}", 문구='없음')
         self.assertEqual(run('check', self.case, '--호증', '사6', '사3', '사4')[0], 0)
         self.fill('사3', '- [파일] a.jpg: 출입문 사진', 문구='없음')
         code, out = run('check', self.case, '--호증', '사3')
@@ -600,7 +646,7 @@ class MeasuredReadingTest(unittest.TestCase):
         (self.ours / '사 제5호증 메모.docx').write_bytes(b'PK')
         (self.ours / '사 제8호증 깨진 사진.jpg').write_bytes(b'\xff\xd8\xff')
         run('make', self.case, '--no-ocr')
-        self.assertNotIn('실측', run('check', self.case, '--호증', '사5')[1])       # 줄이 없는 종류는 재지 않는다
+        self.assertIn('실측', run('check', self.case, '--호증', '사5')[1])          # 문서도 면별 글이 있으므로 잰다(2026. 11. 3. 압축·엑셀·문서 확인표)
         self.assertNotIn('실측', run('check', self.case, '--호증', '사8')[1])       # 열리지 않는 그림도 재지 않는다
         self.assertIn('실측', run('check', self.case, '--호증', '사2')[1])
         폴더 = self.root / '그림'
@@ -678,6 +724,425 @@ class RowRestoreTest(unittest.TestCase):
                 글파일.write_text('옛 글', encoding='utf-8')
                 run('make', case, '--no-ocr', '--글다시', '사9')
                 self.assertIn(self.줄(3), 글파일.read_text(encoding='utf-8'))
+
+
+W_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+MC_NS = 'http://schemas.openxmlformats.org/markup-compatibility/2006'
+OD = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+CT = 'application/vnd.openxmlformats-officedocument.wordprocessingml'
+
+
+class 윈도_이름(zipfile.ZipInfo):
+    """윈도 탐색기처럼 이름을 cp949 바이트로 적고 UTF-8 표시를 하지 않는 압축 항목. 이름은 cp949 바이트를 cp437 로 푼 글로 준다."""
+
+    def _encodeFilenameFlags(self):
+        return self.filename.encode('cp437'), self.flag_bits & ~0x800
+
+
+def 윈도_압축_항목(이름: str) -> zipfile.ZipInfo:
+    return 윈도_이름(이름.encode('cp949').decode('cp437'))
+
+
+def png_bytes(w, h, text):
+    d = pymupdf.open()
+    pg = d.new_page(width=w, height=h)
+    for y in range(40, int(h), 100):
+        pg.insert_text((20, y), f'{text} {y}', fontsize=14, fontname='korea')
+    return pg.get_pixmap(dpi=72).tobytes('png')
+
+
+def pdf_bytes(pages):
+    d = pymupdf.open()
+    for x in pages:
+        d.new_page().insert_text((40, 72), x, fontsize=7, fontname='korea')
+    return d.tobytes()
+
+
+def docx_bytes(그림=()):
+    """본문·변경 내용 추적·표·글상자(대체본 포함)·각주·메모·머리글이 든 워드. 그림: [(이름, 바이트)] → word/media."""
+    w = f'xmlns:w="{W_NS}" xmlns:mc="{MC_NS}"'
+    body = ('<w:p><w:r><w:t>근로계약서 제1조 근로시간은 09:00부터 18:00까지로 한다.</w:t></w:r></w:p>'
+            '<w:p><w:del w:author="인사팀"><w:r><w:delText>수습기간 6개월</w:delText></w:r></w:del>'
+            '<w:ins w:author="인사팀"><w:r><w:t>수습기간 3개월</w:t></w:r></w:ins></w:p>'
+            '<w:tbl><w:tr><w:tc><w:p><w:r><w:t>성명</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>홍길동</w:t></w:r></w:p></w:tc></w:tr></w:tbl>'
+            '<w:p><w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><w:txbxContent><w:p><w:r><w:t>글상자 안 문구</w:t></w:r></w:p>'
+            '</w:txbxContent></w:drawing></mc:Choice><mc:Fallback><w:pict><w:txbxContent><w:p><w:r><w:t>글상자 안 문구</w:t></w:r></w:p>'
+            '</w:txbxContent></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p>')
+    files = {
+        '[Content_Types].xml': '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                               '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                               '<Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/>'
+                               '<Default Extension="emf" ContentType="image/x-emf"/>'
+                               f'<Override PartName="/word/document.xml" ContentType="{CT}.document.main+xml"/>'
+                               f'<Override PartName="/word/footnotes.xml" ContentType="{CT}.footnotes+xml"/>'
+                               f'<Override PartName="/word/comments.xml" ContentType="{CT}.comments+xml"/>'
+                               f'<Override PartName="/word/header1.xml" ContentType="{CT}.header+xml"/></Types>',
+        '_rels/.rels': f'<Relationships xmlns="{PKG}"><Relationship Id="rId1" Type="{OD}/officeDocument" Target="word/document.xml"/></Relationships>',
+        'word/_rels/document.xml.rels': f'<Relationships xmlns="{PKG}"><Relationship Id="rId1" Type="{OD}/footnotes" Target="footnotes.xml"/>'
+                                        f'<Relationship Id="rId2" Type="{OD}/comments" Target="comments.xml"/>'
+                                        f'<Relationship Id="rId3" Type="{OD}/header" Target="header1.xml"/></Relationships>',
+        'word/document.xml': f'<w:document {w}><w:body>{body}</w:body></w:document>',
+        'word/footnotes.xml': f'<w:footnotes {w}><w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:t>-</w:t></w:r></w:p></w:footnote>'
+                              '<w:footnote w:id="1"><w:p><w:r><w:t>대법원 2019. 1. 1. 선고 판결</w:t></w:r></w:p></w:footnote></w:footnotes>',
+        'word/comments.xml': f'<w:comments {w}><w:comment w:id="0" w:author="인사팀" w:date="2026-10-01T09:00:00Z"><w:p><w:r><w:t>확인 바람</w:t></w:r></w:p>'
+                             '</w:comment></w:comments>',
+        'word/header1.xml': f'<w:hdr {w}><w:p><w:r><w:t>대외비</w:t></w:r></w:p></w:hdr>',
+    }
+    b = io.BytesIO()
+    with zipfile.ZipFile(b, 'w') as z:
+        for n, x in files.items():
+            z.writestr(n, x)
+        for n, x in 그림:
+            z.writestr(f'word/media/{n}', x)
+    return b.getvalue()
+
+
+def xlsx_bytes():
+    """날짜 칸, 숨긴 행·시트, 식만 있는 칸, 메모, 시트 위 그림과 도형 글이 든 통합 문서."""
+    files = {
+        'xl/workbook.xml': f'<workbook xmlns="{XL}" xmlns:r="{XR}"><sheets><sheet name="1월" sheetId="1" r:id="rId1"/>'
+                           '<sheet name="숨김" sheetId="2" r:id="rId2" state="hidden"/></sheets></workbook>',
+        'xl/_rels/workbook.xml.rels': f'<Relationships xmlns="{PKG}"><Relationship Id="rId1" Target="worksheets/sheet1.xml"/>'
+                                      '<Relationship Id="rId2" Target="worksheets/sheet2.xml"/></Relationships>',
+        'xl/sharedStrings.xml': f'<sst xmlns="{XL}"><si><t>성명</t></si><si><t>홍길동</t></si><si><t>출근일</t></si></sst>',
+        'xl/styles.xml': f'<styleSheet xmlns="{XL}"><cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="14"/></cellXfs></styleSheet>',
+        'xl/worksheets/sheet1.xml': f'<worksheet xmlns="{XL}" xmlns:r="{XR}"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>2</v></c></row>'
+                                    '<row r="2" hidden="1"><c r="A2" t="s"><v>1</v></c><c r="B2" s="1"><v>45297</v></c><c r="C2"><f>SUM(A1:A2)</f></c></row>'
+                                    '</sheetData><drawing r:id="rId1"/></worksheet>',
+        'xl/worksheets/_rels/sheet1.xml.rels': f'<Relationships xmlns="{PKG}"><Relationship Id="rId1" Target="../drawings/drawing1.xml"/>'
+                                               '<Relationship Id="rId2" Target="../comments1.xml"/></Relationships>',
+        'xl/drawings/drawing1.xml': '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" '
+                                    'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><xdr:twoCellAnchor><xdr:sp><xdr:txBody>'
+                                    '<a:p><a:r><a:t>도형 메모: 연장근로 승인</a:t></a:r></a:p></xdr:txBody></xdr:sp></xdr:twoCellAnchor></xdr:wsDr>',
+        'xl/drawings/_rels/drawing1.xml.rels': f'<Relationships xmlns="{PKG}"><Relationship Id="rId1" Target="../media/image1.png"/></Relationships>',
+        'xl/comments1.xml': f'<comments xmlns="{XL}"><authors><author>인사팀</author></authors><commentList><comment ref="B2" authorId="0">'
+                            '<text><t>지각 처리</t></text></comment></commentList></comments>',
+        'xl/worksheets/sheet2.xml': f'<worksheet xmlns="{XL}"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>숨긴 시트의 값</t></is></c></row>'
+                                    '</sheetData></worksheet>',
+    }
+    b = io.BytesIO()
+    with zipfile.ZipFile(b, 'w') as z:
+        for n, x in files.items():
+            z.writestr(n, x)
+        z.writestr('xl/media/image1.png', png_bytes(500, 300, '시트 그림'))
+    return b.getvalue()
+
+
+def eml_bytes():
+    """본문(글·HTML), 본문에 넣은 이름 없는 그림, 같은 이름의 첨부 둘, PDF 첨부가 든 메일."""
+    from email.message import EmailMessage
+    m = EmailMessage()
+    m['From'], m['To'], m['Date'], m['Subject'] = 'a@x.kr', 'b@y.kr', 'Mon, 02 Nov 2026 10:00:00 +0900', '징계 통보'
+    m.set_content('징계위원회 출석을 통보합니다.\n11월 5일 10시')
+    m.add_alternative('<html><body><p>징계위원회 출석을 통보합니다.</p><img src="cid:img1"></body></html>', subtype='html')
+    m.get_payload()[1].add_related(png_bytes(300, 200, '본문 그림'), 'image', 'png', cid='<img1>')
+    m.add_attachment(png_bytes(300, 200, '첫 사진'), maintype='image', subtype='png', filename='사진.png')
+    m.add_attachment(png_bytes(300, 200, '둘째 사진'), maintype='image', subtype='png', filename='사진.png')
+    m.add_attachment(pdf_bytes([글 + '출석 통지']), maintype='application', subtype='pdf', filename='출석통지서.pdf')
+    return m.as_bytes()
+
+
+def 채우기(case: Path, key: str, 표: dict, 방식='글자층·그림 전부'):
+    """기록의 단위 줄마다(단위는 호증 파일에서) 그 단위의 확인표를 모두 적고 '읽은 방식'과 쟁점 문구를 채운다."""
+    rec = case / '증거관리' / '호증읽기' / f'{key}.md'
+    t = rec.read_text(encoding='utf-8')
+    units = er.단위들(case / re.search(r'^파일: (.+)$', t, re.M).group(1))
+    head, rest = t.split('## 면별 내용', 1)
+    tail = rest.split('## 쟁점에 닿는 문구', 1)[1].replace('\n- \n', '\n- 없음\n', 1)
+    줄 = [f'- {u}{"면" if isinstance(u, int) else ""}: 읽음 확인표 {" ".join(표.get(u, []))}' for u in units]
+    head = re.sub(r'^읽은 방식:.*$', lambda _: f'읽은 방식: {방식}', head, count=1, flags=re.M)
+    rec.write_text(head + '## 면별 내용\n\n' + '\n'.join(줄) + '\n\n## 쟁점에 닿는 문구' + tail, encoding='utf-8')
+
+
+class OtherFormatsTest(unittest.TestCase):
+    """압축·엑셀·워드·한글(hwpx)·메일 호증도 단위마다 끝까지 읽은 확인표가 있어야 지나간다.
+    2026. 11. 3. 담당 노무사 "압축·엑셀·문서 호증도 확인표 넣어줘"."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        실측 = mock.patch.object(er, '실측_문제', return_value=[])      # 실측은 OtherFormatsMeasuredTest 가 본다
+        실측.start()
+        self.addCleanup(실측.stop)
+        self.case = Path(self.tmp.name) / 'GGM_정직'
+        self.ours = self.case / '라운드1' / '우리증거'
+        self.ours.mkdir(parents=True)
+        with zipfile.ZipFile(self.ours / '사 제3호증 자료 묶음.zip', 'w') as z:
+            z.writestr('a.png', png_bytes(300, 1100, '대화'))
+            z.writestr('b.pdf', pdf_bytes([글 + '1면', 글 + '2면']))
+            z.writestr('c.docx', docx_bytes([('image1.png', png_bytes(400, 300, '현장 사진'))]))
+            z.writestr(윈도_압축_항목('한글이름.txt'), '메모 내용입니다'.encode('cp949'))   # 윈도에서 만든 압축
+        (self.ours / '사 제4호증 근무표.xlsx').write_bytes(xlsx_bytes())
+        (self.ours / '사 제5호증 계약서.docx').write_bytes(docx_bytes([('image1.png', png_bytes(400, 300, '직인')),
+                                                                     ('image2.png', png_bytes(16, 16, '.'))]))
+        with zipfile.ZipFile(self.ours / '사 제7호증 보고서.hwpx', 'w') as z:
+            z.writestr('Contents/section0.xml', '<hs:sec xmlns:hs="h" xmlns:hp="p"><hp:p><hp:run><hp:t>보고서 첫 문단</hp:t></hp:run></hp:p>'
+                                                '<hp:p><hp:run><hp:t>둘째 문단</hp:t></hp:run></hp:p></hs:sec>')
+        (self.ours / '사 제8호증 통보 메일.eml').write_bytes(eml_bytes())
+        self.keys = ['사3', '사4', '사5', '사7', '사8']
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def text(self, key):
+        return (self.case / '증거관리' / '호증글자' / f'{key}.txt').read_text(encoding='utf-8')
+
+    def rec(self, key):
+        return self.case / '증거관리' / '호증읽기' / f'{key}.md'
+
+    def 그림표(self, key):
+        """그 호증의 그림 확인표(면별 글에 없고 `그림` 이 그린 띠에만 있다)."""
+        p = self.case / re.search(r'^파일: (.+)$', self.rec(key).read_text(encoding='utf-8'), re.M).group(1)
+        h = er.해시(p)
+        return {er.확인표(self.case, h, er.키(it['단위'], it['경로'], f'그림{i}'), '그림')
+                for it in er.목록_읽기(self.text(key)) if it['갈래'] == '그림' for i in range(1, it['수'] + 1)}
+
+    def test_text_of_each_format_is_written_with_codes(self):
+        code, out = run('make', self.case, '--no-ocr')
+        self.assertEqual(code, 0, out)
+        사3 = self.text('사3')
+        for x in ('[파일] a.png ⟶ 그림 3 ⟶ a.png', '[파일] b.pdf ⟶ 면 글,글 ⟶ b.pdf', '[파일] c.docx ⟶ 글 1 ⟶ c.docx',
+                  '[파일] c.docx ⟶ 그림 1 ⟶ c.docx›word/media/image1.png', '[파일] 한글이름.txt ⟶ 글 1 ⟶ 한글이름.txt'):
+            self.assertIn('확인표 단위: ' + x, 사3)
+        self.assertIn('메모 내용입니다', 사3)                                   # cp949 글
+        self.assertIn('- [파일] 한글이름.txt: ', self.rec('사3').read_text(encoding='utf-8'))
+        self.assertRegex(사3, r'\[\[파일\] b\.pdf · 2면 끝 · 확인표 [A-Z0-9]{4}\]')
+        사4 = self.text('사4')
+        for x in ('2024-01-06', '(숨긴 행)', '(숨긴 시트)', '숨긴 시트의 값', '=SUM(A1:A2)', '[메모 B2 인사팀] 지각 처리',
+                  '[도형 글] 도형 메모: 연장근로 승인', '확인표 단위: [시트] 1월 ⟶ 그림 1 ⟶ xl/media/image1.png'):
+            self.assertIn(x, 사4)
+        사5 = self.text('사5')
+        for x in ('[지움: 수습기간 6개월]', '수습기간 3개월', '| 성명 | 홍길동 |', '[각주 1] 대법원 2019. 1. 1. 선고 판결',
+                  '[메모 인사팀 2026-10-01] 확인 바람', '[머리글] 대외비', '[작은 그림 1개', '확인표 단위: 전체 ⟶ 그림 1 ⟶ word/media/image1.png'):
+            self.assertIn(x, 사5)
+        self.assertEqual(사5.count('글상자 안 문구'), 1)                         # 대체본(mc:Fallback)을 두 번 적지 않는다
+        self.assertIn('둘째 문단', self.text('사7'))
+        사8 = self.text('사8')
+        for x in ('Subject: 징계 통보', '11월 5일 10시', '확인표 단위: 전체 ⟶ 면 글 ⟶ 출석통지서.pdf', '그림 1 ⟶ 사진.png',
+                  '그림 1 ⟶ 사진 (2).png', '그림 1 ⟶ 이름 없는 첨부1.png'):
+            self.assertIn(x, 사8)
+        code, out = run('check', self.case)
+        self.assertEqual(code, 1)
+        self.assertEqual(out.count('확인표가 없거나 맞지 않는 단위'), 5)
+
+    def test_codes_from_text_and_pictures_let_it_pass_and_a_missing_one_blocks(self):
+        run('make', self.case, '--no-ocr')
+        for k in self.keys:
+            표 = 기대표(self.case, k)
+            그림 = self.그림표(k)
+            for u, toks in 표.items():
+                for x in toks:                  # 글 덩이·면의 확인표는 면별 글에, 그림의 확인표는 그림에만 있다
+                    (self.assertNotIn if x in 그림 else self.assertIn)(f'확인표 {x}]', self.text(k), (k, u))
+            채우기(self.case, k, 표)
+        code, out = run('check', self.case)
+        self.assertEqual(code, 0, out)
+        표 = 기대표(self.case, '사3')
+        채우기(self.case, '사3', {**표, '[파일] a.png': 표['[파일] a.png'][:2]})       # 긴 갈무리의 마지막 조각을 안 봄
+        code, out = run('check', self.case, '--호증', '사3')
+        self.assertEqual(code, 1)
+        self.assertIn('확인표가 없거나 맞지 않는 단위 1/4: [파일] a.png', out)
+        그림폴더 = Path(self.tmp.name) / '그림'
+        code, out = run('그림', self.case, '--호증', '사3', '사8', '--out', 그림폴더)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(sorted(p.name for p in (그림폴더 / '사3').glob('*.png')),
+                         ['001_01조각.png', '001_02조각.png', '001_03조각.png', '003_01조각.png'])     # b.pdf 는 그림으로 볼 면이 없다
+        self.assertEqual(len(list((그림폴더 / '사8').glob('*.png'))), 3)
+        pix = pymupdf.Pixmap(str(그림폴더 / '사3' / '003_01조각.png'))
+        self.assertGreater(pix.height, 300 + 20)                                   # 그림 아래 확인표 띠
+
+    def test_new_extraction_version_rewrites_text_and_old_codes_stop_matching(self):
+        run('make', self.case, '--no-ocr', '--호증', '사7')
+        채우기(self.case, '사7', 기대표(self.case, '사7'))
+        self.assertEqual(run('check', self.case, '--호증', '사7')[0], 0)
+        with mock.patch.object(er, '글판', er.글판 + 1):
+            code, out = run('check', self.case, '--호증', '사7')
+            self.assertEqual(code, 1)
+            self.assertIn('옛 판', out)
+            run('make', self.case, '--no-ocr', '--호증', '사7')
+            self.assertIn(f'글판: {er.글판}', self.text('사7'))
+            code, out = run('check', self.case, '--호증', '사7')
+            self.assertEqual(code, 1)                                               # 새 판의 글을 다시 읽어야 한다
+            self.assertIn('확인표가 없거나 맞지 않는 단위 1/1: 전체', out)
+
+    def test_unreadable_documents_block_until_a_pdf_of_the_same_name_stands_in(self):
+        case = Path(self.tmp.name) / 'HPS_자문'
+        att = case / '첨부'
+        att.mkdir(parents=True)
+        (att / '취업규칙.hwp').write_bytes(b'not a real hwp file \x00\x01')
+        (att / '계약서.docx').write_bytes(docx_bytes([('image1.emf', b'not an emf picture')]))
+        run('make', case, '--자료', att, '--no-ocr')
+        code, out = run('check', case, '--자료', att)
+        self.assertEqual(code, 1)
+        self.assertIn('글을 뽑지 못한 곳: 전체(', out)
+        self.assertIn('word/media/image1.emf(문서 안의 .emf 그림을 그리지 못했다', out)
+        make_pdf(att / '취업규칙.pdf', [글 + '제1조'])
+        make_pdf(att / '계약서.pdf', [글 + '제1조'])
+        run('make', case, '--자료', att, '--no-ocr')
+        code, out = run('check', case, '--자료', att)
+        self.assertNotIn('글을 뽑지 못한 곳', out)                                  # 같은 이름의 PDF 를 면마다 읽는다
+        self.assertIn('취업규칙.pdf', out)
+
+    def test_ocr_cache_of_a_replaced_file_is_not_reused(self):
+        d = pymupdf.open()
+        d.new_page()                                                               # 글자층이 없는 스캔 면
+        d.save(self.ours / '사 제6호증 스캔.pdf')
+        캐시 = self.case / '증거관리' / '호증글자' / 'ocr' / '사6'
+        캐시.mkdir(parents=True)
+        (캐시 / 'pages.json').write_text('{"1": {"units": [["앞 파일의 문자인식 글", [0, 0, 10, 10]]], "png": "p001.png"}}', encoding='utf-8')
+        (캐시 / '파일해시.txt').write_text('deadbeef0000', encoding='utf-8')
+        run('make', self.case, '--no-ocr', '--호증', '사6')
+        self.assertNotIn('앞 파일의 문자인식 글', self.text('사6'))                   # 다른 파일의 표지가 붙은 캐시는 버린다
+        # 표지가 없는 옛 캐시는 쓰되, 기록한 뒤 파일이 바뀌면 버린다
+        캐시.mkdir(parents=True, exist_ok=True)
+        (캐시 / 'pages.json').write_text('{"1": {"units": [["옛 캐시의 문자인식 글", [0, 0, 10, 10]]], "png": "p001.png"}}', encoding='utf-8')
+        (캐시 / '파일해시.txt').unlink(missing_ok=True)
+        run('make', self.case, '--no-ocr', '--호증', '사6', '--글다시', '사6')
+        self.assertIn('옛 캐시의 문자인식 글', self.text('사6'))
+        self.assertEqual((캐시 / '파일해시.txt').read_text(encoding='utf-8'), er.해시(self.ours / '사 제6호증 스캔.pdf'))
+        (캐시 / '파일해시.txt').unlink()
+        d = pymupdf.open()
+        d.new_page()
+        d.new_page()
+        d.save(self.ours / '사 제6호증 스캔.pdf')                                     # 같은 번호에 다른 파일
+        run('make', self.case, '--no-ocr', '--다시', '사6')
+        self.assertNotIn('옛 캐시의 문자인식 글', self.text('사6'))
+
+    @unittest.skipUnless(er._et.soffice(), 'LibreOffice 가 없다')
+    def test_old_word_file_and_emf_picture_go_through_libreoffice(self):
+        doc = er._et._libre(docx_bytes(), '.docx', 'doc')
+        self.assertTrue(doc)
+        (self.ours / '사 제9호증 옛 계약서.doc').write_bytes(doc)
+        svg = (b'<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200"><rect x="10" y="10" width="380" height="180" fill="#def"/>'
+               b'<text x="40" y="110" font-size="30">EMF 3,000,000</text></svg>')
+        emf = er._et._libre(svg, '.svg', 'emf')
+        self.assertEqual(emf[40:44], b' EMF')
+        (self.ours / '사 제10호증 그림 든 문서.docx').write_bytes(docx_bytes([('image3.emf', emf)]))
+        run('make', self.case, '--no-ocr', '--호증', '사9', '사10')
+        self.assertIn('확인표 단위: 전체 ⟶ 면 ', self.text('사9'))                  # PDF 로 바꾸어 면마다
+        self.assertIn('수습기간3개월', re.sub(r'\s', '', self.text('사9')))           # PDF 글자층은 숫자 뒤를 띄우기도 한다
+        self.assertIn('확인표 단위: 전체 ⟶ 그림 1 ⟶ word/media/image3.emf', self.text('사10'))
+        for k in ('사9', '사10'):
+            채우기(self.case, k, 기대표(self.case, k), 방식='글자층 전 면, 그림 전 면')
+        self.assertEqual(run('check', self.case, '--호증', '사9', '사10')[0], 0)
+        code, out = run('그림', self.case, '--호증', '사10', '--out', Path(self.tmp.name) / '그림')
+        self.assertEqual(code, 0, out)
+        self.assertEqual([p.name for p in (Path(self.tmp.name) / '그림' / '사10').glob('*.png')], ['001_01조각.png'])
+
+
+class OtherFormatsMeasuredTest(unittest.TestCase):
+    """압축·엑셀·문서도 확인표만 옮겨서는 지나가지 못하고 세션 기록으로 잰다(확인표만 grep 해 옮기는 길을 막는다)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.case = self.root / '4_서면작성' / '사건' / 'GGM_정직'
+        self.ours = self.case / '라운드1' / '우리증거'
+        self.ours.mkdir(parents=True)
+        self.기록 = self.root / '세션기록'
+        self.기록.mkdir()
+        self.env = mock.patch.dict(os.environ, {'EVIDENCE_READ_ROOT': str(self.root)})
+        self.env.start()
+        with zipfile.ZipFile(self.ours / '사 제3호증 자료 묶음.zip', 'w') as z:
+            z.writestr('a.png', png_bytes(300, 700, '대화'))
+            z.writestr('b.pdf', pdf_bytes([글 + '1면 고유 문구', 글 + '2면 고유 문구']))
+            z.writestr('c.docx', docx_bytes([('image1.png', png_bytes(400, 300, '현장 사진'))]))
+        run('make', self.case, '--no-ocr')
+        채우기(self.case, '사3', 기대표(self.case, '사3'))
+        self.글파일 = self.case / '증거관리' / '호증글자' / '사3.txt'
+        self.그림폴더 = self.root / '그림'
+        run('그림', self.case, '--호증', '사3', '--out', self.그림폴더)
+
+    def tearDown(self):
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def 그림_열기(self):
+        return [('Read', {'file_path': str(f)}, 그림결과) for f in sorted((self.그림폴더 / '사3').glob('*.png'))]
+
+    def test_codes_alone_are_not_enough_and_reading_everything_passes(self):
+        self.assertEqual(sorted(p.name for p in (self.그림폴더 / '사3').glob('*.png')), ['001_01조각.png', '001_02조각.png', '003_01조각.png'])
+        code, out = run('check', self.case)
+        self.assertEqual(code, 1)
+        self.assertIn('실제로 읽은 기록(실측)이 없다', out)
+        self.assertNotIn('확인표가 없거나', out)
+        전체 = self.글파일.read_text(encoding='utf-8')
+        고른 = '\n'.join(l for l in 전체.splitlines() if '확인표' in l)          # 확인표 줄만 찍어 옮긴 것
+        세션(self.기록, '세션1', [('Bash', {'command': f'grep 확인표 "{self.글파일}"'}, 고른)] + self.그림_열기())
+        code, out = run('실측', self.case, '--기록폴더', self.기록)
+        self.assertEqual(code, 1)
+        self.assertIn('덜 읽은 단위 [파일] b.pdf, [파일] c.docx', out)
+        (self.기록 / '세션1.jsonl').unlink()
+        세션(self.기록, '세션2', [('Read', {'file_path': str(self.글파일)}, 줄번호(전체))])        # 글은 다 읽고 그림은 안 엶
+        code, out = run('실측', self.case, '--기록폴더', self.기록)
+        self.assertEqual(code, 1)
+        self.assertIn('한 장씩 열지 않은 그림 3장', out)
+        세션(self.기록, '세션3', self.그림_열기())
+        code, out = run('실측', self.case, '--기록폴더', self.기록)
+        self.assertEqual(code, 0, out)
+        self.assertRegex(self.case.joinpath('증거관리', '호증읽기', '사3.md').read_text(encoding='utf-8'),
+                         r'(?m)^실측: \d{4}-\d\d-\d\d · 줄 (\d+)/\1 · 그림 3장 · 글 [0-9a-f]{12} · 세션 ')
+        self.assertEqual(run('check', self.case)[0], 0)
+        run('make', self.case, '--no-ocr', '--글다시', '사3')                       # 면별 글을 다시 내면(글판이 같아 내용은 같다) 표시가 맞으면 그대로
+        self.assertEqual(run('check', self.case)[0], 0)
+        self.글파일.write_text(self.글파일.read_text(encoding='utf-8') + '\n덧붙은 줄', encoding='utf-8')
+        code, out = run('check', self.case)
+        self.assertEqual(code, 1)
+        self.assertIn('실측한 뒤 면별 글이 바뀌었다', out)
+
+
+class TextPiecesTest(unittest.TestCase):
+    def test_chunks_keep_every_line_and_stay_small(self):
+        줄들 = [f'{i}번째 줄 ' + '가' * (i % 50) for i in range(2000)] + ['나' * 7000]
+        덩이 = er._et.덩이로('\n'.join(줄들))
+        self.assertEqual('\n'.join(덩이).replace('\n', ''), ''.join(줄들))     # 글자는 하나도 빠지지 않는다
+        self.assertTrue(all(len(x) <= er._et.덩이_크기 for x in 덩이))
+        self.assertEqual(er._et.덩이로('  \n '), [])
+
+    def test_zip_names_made_on_windows_are_read_in_cp949(self):
+        b = io.BytesIO()
+        with zipfile.ZipFile(b, 'w') as z:
+            z.writestr(윈도_압축_항목('급여명세서.pdf'), b'x')
+            z.writestr('utf8이름.txt', b'y')
+        with zipfile.ZipFile(b) as z:
+            self.assertEqual([n for n, _ in er._et.zip_목록(z)], ['utf8이름.txt', '급여명세서.pdf'])
+
+    def test_excel_numbers_are_shown_as_excel_shows_them(self):
+        """근태 자료의 출퇴근 시각, '[h]:mm' 합계 시간, 백분율을 숫자로 두면 잘못 읽는다."""
+        값 = lambda fid, code, v: er._et._엑셀_값(v, er._et._서식_갈래(fid, code), False)
+        self.assertEqual(값(14, '', '45297'), '2024-01-06')
+        self.assertEqual(값(20, '', '0.3708333333'), '08:54')                     # 초 단위로 반올림(엑셀과 같다)
+        self.assertEqual(값(164, 'hh:mm:ss', '0.5000115740740741'), '12:00:01')
+        self.assertEqual(값(164, '[h]:mm', '1.5'), '36:00')                       # 하루를 넘는 합계 시간
+        self.assertEqual(값(10, '', '0.155'), '15.5%')
+        self.assertEqual(값(164, 'yyyy"년" m"월" d"일"', '45297.5'), '2024-01-06 12:00')
+        self.assertEqual(값(0, '', '2999999.9999999995'), '3000000')               # 엑셀처럼 유효 숫자 15자리
+        self.assertEqual(값(164, '#,##0', '3000000'), '3000000')
+
+    def test_word_symbols_text_encodings_and_junk_in_zips(self):
+        p = ET.fromstring(f'<w:p xmlns:w="{W_NS}"><w:r><w:sym w:font="Wingdings" w:char="F0FE"/><w:t>동의</w:t>'
+                          '<w:sym w:font="Wingdings" w:char="F0A8"/><w:t>거부</w:t><w:sym w:char="F099"/></w:r></w:p>')
+        self.assertEqual(er._et._w_글(p), '☑동의☐거부[기호]')
+        self.assertEqual(er._et.텍스트_글('출근 기록'.encode('utf-16')), '출근 기록')
+        self.assertEqual(er._et.텍스트_글('출근 기록'.encode('cp949')), '출근 기록')
+        b = io.BytesIO()
+        with zipfile.ZipFile(b, 'w') as z:
+            for n in ('사진/.DS_Store', 'Thumbs.db', '__MACOSX/._a.png', '사진/a.png'):
+                z.writestr(n, b'x')
+        with zipfile.ZipFile(b) as z:
+            self.assertEqual([n for n, _ in er._et.zip_목록(z)], ['사진/a.png'])
+
+    def test_mail_with_only_a_notice_in_plain_text_also_gives_the_html_body(self):
+        from email.message import EmailMessage
+        m = EmailMessage()
+        m.set_content('이 메일은 HTML 형식입니다.')
+        m.add_alternative('<html><body><p>징계위원회는 11월 5일 10시에 열립니다.</p><p>출석하지 않으면 진술을 포기한 것으로 봅니다.</p>'
+                          '</body></html>', subtype='html')
+        글 = er._et.eml_글(m.as_bytes())['글']
+        self.assertIn('출석하지 않으면 진술을 포기한 것으로 봅니다.', 글)
+        self.assertNotIn('<p>', 글)
+
+    def test_same_attachment_names_are_kept_apart(self):
+        self.assertEqual(er._et.고유('사진.png', ['사진.png', '사진 (2).png']), '사진 (3).png')
+        self.assertEqual(er._et.고유('a.pdf', []), 'a.pdf')
 
 
 if __name__ == '__main__':
