@@ -759,15 +759,28 @@ def pdf_bytes(pages):
 
 
 def docx_bytes(그림=()):
-    """본문·변경 내용 추적·표·글상자(대체본 포함)·각주·메모·머리글이 든 워드. 그림: [(이름, 바이트)] → word/media."""
-    w = f'xmlns:w="{W_NS}" xmlns:mc="{MC_NS}"'
-    body = ('<w:p><w:r><w:t>근로계약서 제1조 근로시간은 09:00부터 18:00까지로 한다.</w:t></w:r></w:p>'
-            '<w:p><w:del w:author="인사팀"><w:r><w:delText>수습기간 6개월</w:delText></w:r></w:del>'
-            '<w:ins w:author="인사팀"><w:r><w:t>수습기간 3개월</w:t></w:r></w:ins></w:p>'
+    """본문·변경 내용 추적·표·글상자(대체본 포함)·각주·메모·머리글이 든 워드. 그림: [(이름, 바이트)] → word/media 에 두고 본문에 넣는다.
+    메모·각주·머리글·그림은 본문에서 가리키게 둔다(가리키지 않으면 LibreOffice 가 바꿀 때 버린다)."""
+    w = (f'xmlns:w="{W_NS}" xmlns:mc="{MC_NS}" xmlns:r="{OD}" '
+         'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"')
+    그림글 = ''.join(
+        f'<w:p><w:r><w:drawing><wp:inline><wp:extent cx="3810000" cy="2857500"/><wp:docPr id="{i}" name="그림 {i}"/>'
+        '<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+        '<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="0" name="그림"/><pic:cNvPicPr/></pic:nvPicPr>'
+        f'<pic:blipFill><a:blip r:embed="rIdImg{i}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/>'
+        '<a:ext cx="3810000" cy="2857500"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic>'
+        '</wp:inline></w:drawing></w:r></w:p>' for i in range(1, len(그림) + 1))
+    body = ('<w:p><w:r><w:t>근로계약서 제1조 근로시간은 09:00부터 18:00까지로 한다.</w:t></w:r>'
+            '<w:r><w:footnoteReference w:id="1"/></w:r></w:p>'
+            '<w:p><w:del w:id="10" w:author="인사팀"><w:r><w:delText>수습기간 6개월</w:delText></w:r></w:del>'
+            '<w:ins w:id="11" w:author="인사팀"><w:r><w:t>수습기간 3개월</w:t></w:r></w:ins></w:p>'
             '<w:tbl><w:tr><w:tc><w:p><w:r><w:t>성명</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>홍길동</w:t></w:r></w:p></w:tc></w:tr></w:tbl>'
+            '<w:p><w:commentRangeStart w:id="0"/><w:r><w:t>제2조 휴게시간은 1시간으로 한다.</w:t></w:r><w:commentRangeEnd w:id="0"/>'
+            '<w:r><w:commentReference w:id="0"/></w:r></w:p>'
             '<w:p><w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><w:txbxContent><w:p><w:r><w:t>글상자 안 문구</w:t></w:r></w:p>'
             '</w:txbxContent></w:drawing></mc:Choice><mc:Fallback><w:pict><w:txbxContent><w:p><w:r><w:t>글상자 안 문구</w:t></w:r></w:p>'
-            '</w:txbxContent></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p>')
+            '</w:txbxContent></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p>' + 그림글 +
+            '<w:sectPr><w:headerReference w:type="default" r:id="rId3"/></w:sectPr>')
     files = {
         '[Content_Types].xml': '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
                                '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
@@ -780,7 +793,9 @@ def docx_bytes(그림=()):
         '_rels/.rels': f'<Relationships xmlns="{PKG}"><Relationship Id="rId1" Type="{OD}/officeDocument" Target="word/document.xml"/></Relationships>',
         'word/_rels/document.xml.rels': f'<Relationships xmlns="{PKG}"><Relationship Id="rId1" Type="{OD}/footnotes" Target="footnotes.xml"/>'
                                         f'<Relationship Id="rId2" Type="{OD}/comments" Target="comments.xml"/>'
-                                        f'<Relationship Id="rId3" Type="{OD}/header" Target="header1.xml"/></Relationships>',
+                                        f'<Relationship Id="rId3" Type="{OD}/header" Target="header1.xml"/>'
+                                        + ''.join(f'<Relationship Id="rIdImg{i}" Type="{OD}/image" Target="media/{n}"/>' for i, (n, _) in enumerate(그림, 1))
+                                        + '</Relationships>',
         'word/document.xml': f'<w:document {w}><w:body>{body}</w:body></w:document>',
         'word/footnotes.xml': f'<w:footnotes {w}><w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:t>-</w:t></w:r></w:p></w:footnote>'
                               '<w:footnote w:id="1"><w:p><w:r><w:t>대법원 2019. 1. 1. 선고 판결</w:t></w:r></w:p></w:footnote></w:footnotes>',
@@ -799,22 +814,37 @@ def docx_bytes(그림=()):
 
 def xlsx_bytes():
     """날짜 칸, 숨긴 행·시트, 식만 있는 칸, 메모, 시트 위 그림과 도형 글이 든 통합 문서."""
+    SM = 'application/vnd.openxmlformats-officedocument.spreadsheetml'
     files = {
+        '[Content_Types].xml': '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                               '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                               '<Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/>'
+                               f'<Override PartName="/xl/workbook.xml" ContentType="{SM}.sheet.main+xml"/>'
+                               f'<Override PartName="/xl/worksheets/sheet1.xml" ContentType="{SM}.worksheet+xml"/>'
+                               f'<Override PartName="/xl/worksheets/sheet2.xml" ContentType="{SM}.worksheet+xml"/>'
+                               f'<Override PartName="/xl/sharedStrings.xml" ContentType="{SM}.sharedStrings+xml"/>'
+                               f'<Override PartName="/xl/styles.xml" ContentType="{SM}.styles+xml"/>'
+                               f'<Override PartName="/xl/comments1.xml" ContentType="{SM}.comments+xml"/>'
+                               '<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>'
+                               '</Types>',
+        '_rels/.rels': f'<Relationships xmlns="{PKG}"><Relationship Id="rId1" Type="{XR}/officeDocument" Target="xl/workbook.xml"/></Relationships>',
         'xl/workbook.xml': f'<workbook xmlns="{XL}" xmlns:r="{XR}"><sheets><sheet name="1월" sheetId="1" r:id="rId1"/>'
                            '<sheet name="숨김" sheetId="2" r:id="rId2" state="hidden"/></sheets></workbook>',
-        'xl/_rels/workbook.xml.rels': f'<Relationships xmlns="{PKG}"><Relationship Id="rId1" Target="worksheets/sheet1.xml"/>'
-                                      '<Relationship Id="rId2" Target="worksheets/sheet2.xml"/></Relationships>',
+        'xl/_rels/workbook.xml.rels': f'<Relationships xmlns="{PKG}"><Relationship Id="rId1" Type="{XR}/worksheet" Target="worksheets/sheet1.xml"/>'
+                                      f'<Relationship Id="rId2" Type="{XR}/worksheet" Target="worksheets/sheet2.xml"/>'
+                                      f'<Relationship Id="rId3" Type="{XR}/sharedStrings" Target="sharedStrings.xml"/>'
+                                      f'<Relationship Id="rId4" Type="{XR}/styles" Target="styles.xml"/></Relationships>',
         'xl/sharedStrings.xml': f'<sst xmlns="{XL}"><si><t>성명</t></si><si><t>홍길동</t></si><si><t>출근일</t></si></sst>',
         'xl/styles.xml': f'<styleSheet xmlns="{XL}"><cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="14"/></cellXfs></styleSheet>',
         'xl/worksheets/sheet1.xml': f'<worksheet xmlns="{XL}" xmlns:r="{XR}"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>2</v></c></row>'
                                     '<row r="2" hidden="1"><c r="A2" t="s"><v>1</v></c><c r="B2" s="1"><v>45297</v></c><c r="C2"><f>SUM(A1:A2)</f></c></row>'
                                     '</sheetData><drawing r:id="rId1"/></worksheet>',
-        'xl/worksheets/_rels/sheet1.xml.rels': f'<Relationships xmlns="{PKG}"><Relationship Id="rId1" Target="../drawings/drawing1.xml"/>'
-                                               '<Relationship Id="rId2" Target="../comments1.xml"/></Relationships>',
+        'xl/worksheets/_rels/sheet1.xml.rels': f'<Relationships xmlns="{PKG}"><Relationship Id="rId1" Type="{XR}/drawing" Target="../drawings/drawing1.xml"/>'
+                                               f'<Relationship Id="rId2" Type="{XR}/comments" Target="../comments1.xml"/></Relationships>',
         'xl/drawings/drawing1.xml': '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" '
                                     'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><xdr:twoCellAnchor><xdr:sp><xdr:txBody>'
                                     '<a:p><a:r><a:t>도형 메모: 연장근로 승인</a:t></a:r></a:p></xdr:txBody></xdr:sp></xdr:twoCellAnchor></xdr:wsDr>',
-        'xl/drawings/_rels/drawing1.xml.rels': f'<Relationships xmlns="{PKG}"><Relationship Id="rId1" Target="../media/image1.png"/></Relationships>',
+        'xl/drawings/_rels/drawing1.xml.rels': f'<Relationships xmlns="{PKG}"><Relationship Id="rId1" Type="{XR}/image" Target="../media/image1.png"/></Relationships>',
         'xl/comments1.xml': f'<comments xmlns="{XL}"><authors><author>인사팀</author></authors><commentList><comment ref="B2" authorId="0">'
                             '<text><t>지각 처리</t></text></comment></commentList></comments>',
         'xl/worksheets/sheet2.xml': f'<worksheet xmlns="{XL}"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>숨긴 시트의 값</t></is></c></row>'
@@ -1008,21 +1038,33 @@ class OtherFormatsTest(unittest.TestCase):
 
     @unittest.skipUnless(er._et.soffice(), 'LibreOffice 가 없다')
     def test_old_word_file_and_emf_picture_go_through_libreoffice(self):
-        doc = er._et._libre(docx_bytes(), '.docx', 'doc')
+        doc = er._et._libre(docx_bytes([('image1.png', png_bytes(400, 300, '현장 사진'))]), '.docx', 'doc')
         self.assertTrue(doc)
         (self.ours / '사 제9호증 옛 계약서.doc').write_bytes(doc)
+        xls = er._et._libre(xlsx_bytes(), '.xlsx', 'xls')
+        self.assertTrue(xls)
+        (self.ours / '사 제11호증 옛 근무표.xls').write_bytes(xls)
         svg = (b'<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200"><rect x="10" y="10" width="380" height="180" fill="#def"/>'
                b'<text x="40" y="110" font-size="30">EMF 3,000,000</text></svg>')
         emf = er._et._libre(svg, '.svg', 'emf')
         self.assertEqual(emf[40:44], b' EMF')
         (self.ours / '사 제10호증 그림 든 문서.docx').write_bytes(docx_bytes([('image3.emf', emf)]))
-        run('make', self.case, '--no-ocr', '--호증', '사9', '사10')
-        self.assertIn('확인표 단위: 전체 ⟶ 면 ', self.text('사9'))                  # PDF 로 바꾸어 면마다
-        self.assertIn('수습기간3개월', re.sub(r'\s', '', self.text('사9')))           # PDF 글자층은 숫자 뒤를 띄우기도 한다
-        self.assertIn('확인표 단위: 전체 ⟶ 그림 1 ⟶ word/media/image3.emf', self.text('사10'))
-        for k in ('사9', '사10'):
+        run('make', self.case, '--no-ocr', '--호증', '사9', '사10', '사11')
+        사9 = self.text('사9')
+        self.assertIn('확인표 단위: 전체 ⟶ 글 1 ⟶ ', 사9)                            # .docx 로 바꾸어 같은 방식으로
+        for x in ('[지움: 수습기간 6개월]', '[메모 인사팀', '| 성명 | 홍길동 |'):        # PDF 로 바꾸면 빠지는 메모·지운 글까지
+            self.assertIn(x, 사9)
+        self.assertRegex(사9, r'확인표 단위: 전체 ⟶ 그림 1 ⟶ word/media/image\d+\.png')
+        사11 = self.text('사11')
+        for x in ('(숨긴 시트)', '숨긴 시트의 값', '(숨긴 행)', '[메모 B2', '2024-01-06'):    # PDF 로 바꾸면 빠지는 숨긴 시트·행·메모까지
+            self.assertIn(x, 사11)
+        self.assertIn('확인표 단위: 전체 ⟶ 글 1 ⟶ word/media/image3.emf'.replace('글 1', '그림 1'), self.text('사10'))
+        for k in ('사9', '사10', '사11'):
             채우기(self.case, k, 기대표(self.case, k), 방식='글자층 전 면, 그림 전 면')
-        self.assertEqual(run('check', self.case, '--호증', '사9', '사10')[0], 0)
+        self.assertEqual(run('check', self.case, '--호증', '사9', '사10', '사11')[0], 0)
+        code, out = run('그림', self.case, '--호증', '사9', '--out', Path(self.tmp.name) / '그림')
+        self.assertEqual(code, 0, out)
+        self.assertEqual([p.name for p in (Path(self.tmp.name) / '그림' / '사9').glob('*.png')], ['001_01조각.png'])   # 바꾼 .docx 에서 다시 찾는다
         code, out = run('그림', self.case, '--호증', '사10', '--out', Path(self.tmp.name) / '그림')
         self.assertEqual(code, 0, out)
         self.assertEqual([p.name for p in (Path(self.tmp.name) / '그림' / '사10').glob('*.png')], ['001_01조각.png'])

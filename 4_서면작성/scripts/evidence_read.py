@@ -13,7 +13,8 @@ make  서면 사건은 호증마다(우리·상대, PDF 가 아닌 원자료 포
       PDF 는 면별 글(글자층, 없거나 깨지면 Windows 문자인식)을 `증거관리/호증글자/{호증키}.txt` 에 낸다.
       압축·엑셀·워드·한글·파워포인트·메일·텍스트도 단위마다 글을 뽑아 같은 자리에 낸다(`evidence_text.py`). 글은 3,000자 안팎의
       덩이로 나누어 덩이 끝에, 압축·첨부 안의 PDF 는 면 끝에 확인표를 붙이고, 그림(압축 안 그림 파일, 문서·시트·메일에 든 그림)은
-      `그림` 으로 열게 한다. 옛 형식(.doc·.xls·.hwp)은 PDF 로 바꾸어 면마다 읽는다(.hwp 는 한글이 있는 PC, 그 밖은 LibreOffice).
+      `그림` 으로 열게 한다. 옛 형식 .doc·.xls 는 워드·엑셀(없으면 LibreOffice)로 .docx·.xlsx 로 바꾸어 읽고, .hwp 는 한글이 있는
+      PC에서 PDF 로 바꾸어 면마다 읽는다.
       `--자료` 를 주면 그 폴더의 파일마다 `작업/자료읽기/{파일 이름}.md` 와 `작업/자료글자/{파일 이름}.txt` 를 만든다.
       호증 번호를 다시 매겨 기록의 호증키와 파일이 어긋나면, 해시가 같은 파일의 호증키로 기록을 옮긴다.
 check 모든 호증(자료)에 기록이 있는지, 기록한 뒤 파일이 바뀌지 않았는지(해시), 모든 단위가 채워졌는지, '읽은 방식'과
@@ -598,7 +599,8 @@ def 숫자표_같나(줄들: list) -> bool:
 소리_꼴 = ('.mp3', '.m4a', '.wav', '.mp4', '.mov')
 목록_머리 = '확인표 단위: '
 가름 = ' ⟶ '
-글판 = 1      # 글을 뽑는 방식(evidence_text.py, 아래 파일_항목)이 바뀌어 면별 글의 내용이 달라지면 올린다.
+글판 = 2      # 글을 뽑는 방식(evidence_text.py, 아래 파일_항목)이 바뀌어 면별 글의 내용이 달라지면 올린다.
+              # 2: 옛 형식 .doc·.xls 를 PDF 대신 .docx·.xlsx 로 바꾸어 읽는다(숨긴 시트·행·메모가 빠지지 않게)
               # 옛 면별 글은 make 가 새로 쓰고, 옛 확인표는 맞지 않게 되어 그 호증을 다시 읽게 된다
 
 
@@ -631,6 +633,12 @@ def 파일_항목(자: 자리, k: str, 이름: str, data: bytes, 경로: list, u
         out.append({'갈래': '모름', '경로': 경로, '까닭': 까닭, '문서': 문서})
 
     try:
+        if ext in ('.doc', '.xls'):      # 새 형식으로 바꾸어 같은 방식으로 읽는다(숨긴 시트·메모·지운 글까지)
+            b = _et.새형식(이름, data)
+            if not b:
+                모름(f'{ext} 를 바꾸지 못했다(워드·엑셀이나 LibreOffice 가 있는 PC에서 make 를 다시 돌리거나 PDF 로 저장해 둔다)')
+                return out
+            data, ext = b, '.docx' if ext == '.doc' else '.xlsx'
         if ext == '.pdf':
             with _et.임시_폴더() as d:
                 f = Path(d) / 'a.pdf'
@@ -673,11 +681,10 @@ def 파일_항목(자: 자리, k: str, 이름: str, data: bytes, 경로: list, u
                     for n, info in _et.zip_목록(z):
                         out.extend(파일_항목(자, k, n, b, 경로 + [n], use_ocr, 깊이 + 1) if (b := 압축_풀기(z, info)) is not None else
                                    [{'갈래': '모름', '경로': 경로 + [n], '까닭': '압축을 풀지 못했다(암호가 걸렸거나 깨졌다)', '문서': True}])
-        elif ext in ('.doc', '.xls', '.hwp'):      # PDF 로 바꾸어 면마다 읽는다(그림이 든 면은 그림으로 볼 면이 된다)
+        elif ext == '.hwp':      # PDF 로 바꾸어 면마다 읽는다(그림이 든 면은 그림으로 볼 면이 된다)
             b = _et.PDF로(이름, data)
             if not b:
-                모름('한글 자동화가 없는 곳이라 .hwp 를 PDF 로 바꾸지 못했다(한글이 있는 PC에서 make 를 다시 돌리거나 PDF 로 저장해 둔다)'
-                   if ext == '.hwp' else f'LibreOffice 가 없어 {ext} 를 PDF 로 바꾸지 못했다(PDF 로 저장해 둔다)')
+                모름('한글 자동화가 없는 곳이라 .hwp 를 PDF 로 바꾸지 못했다(한글이 있는 PC에서 make 를 다시 돌리거나 PDF 로 저장해 둔다)')
             else:
                 out.extend(파일_항목(자, k, '바꾼.pdf', b, 경로, use_ocr, 깊이))
         elif ext == '.msg':
@@ -752,6 +759,8 @@ def 바이트_찾기(p: Path, 경로: list) -> bytes:
     data, 이름 = p.read_bytes(), p.name
     for e in 경로:
         ext = Path(이름).suffix.lower()
+        if ext in ('.doc', '.xls'):      # make 처럼 새 형식으로 바꾼 뒤 그 안에서 찾는다
+            data, ext = _et.새형식(이름, data), '.docx' if ext == '.doc' else '.xlsx'
         if ext == '.eml':
             data = next(b for n, b in _et.eml_글(data)['첨부'] if n == e)
         elif ext == '.msg':
@@ -1350,7 +1359,7 @@ def cmd_그림(a) -> int:
                     data = 바이트_찾기(p, 경로)
                     끝 = 경로[-1] if 경로 else p.name
                     ext = Path(끝).suffix.lower().lstrip('.')
-                    if it['갈래'] == '면' and '.' + ext in ('.doc', '.xls', '.hwp'):
+                    if it['갈래'] == '면' and ext == 'hwp':
                         data = _et.PDF로(끝, data)
                     elif it['갈래'] == '그림':
                         data, ext = _et.열_그림(data, '.' + ext)
