@@ -88,6 +88,10 @@ class LawGoError(Exception):
     pass
 
 
+class NoSuchLaw(LawGoError):
+    """이름이 일치하는 현행 법령이 없다. 인증·연결 오류와 달리 행정규칙에서 다시 찾을 수 있다."""
+
+
 def kind_of(name):
     if name in TYPES:
         return name
@@ -436,8 +440,12 @@ def search(kind, query='', *, body=False, court=None, source=None, period=None, 
         if len(rows) >= total:
             break
         page += 1
-    return {'종류': kind, '검색어': query, '범위': '본문' if body else '제목', '전체': total,
-            '받은건수': len(rows[:limit]), 'rows': rows[:limit]}
+    result = {'종류': kind, '검색어': query, '범위': '본문' if body else '제목', '전체': total,
+              '받은건수': len(rows[:limit]), 'rows': rows[:limit]}
+    if kind == '법령' and query and not any(r.get('현행') == '현행' for r in rows):
+        # 위원회 규칙 일부는 행정규칙으로 올라 있어 법령 목록에는 없거나 옛 판만 있다. 이 결과를 '없는 규칙'으로 읽지 않게 알린다
+        result['안내'] = f'현행 법령이 보이지 않습니다. 위원회 규칙 등은 행정규칙으로 올라 있을 수 있으니 search 행정규칙 "{query}" 로도 찾으십시오.'
+    return result
 
 
 def fetch_file(url, out):
@@ -619,8 +627,8 @@ def find_law(name, oc):
     for item in items:
         if squash(name) in (squash(item.get('법령명한글')), squash(item.get('법령약칭명'))):
             return item
-    raise LawGoError(f'이름이 일치하는 현행 법령이 없습니다: {name}'
-                     + (' (후보: ' + ', '.join(i.get('법령명한글', '') for i in items[:8]) + ')' if items else ''))
+    raise NoSuchLaw(f'이름이 일치하는 현행 법령이 없습니다: {name}'
+                    + (' (후보: ' + ', '.join(i.get('법령명한글', '') for i in items[:8]) + ')' if items else ''))
 
 
 def today():
@@ -748,9 +756,14 @@ def article(name, number, *, date=None, oc=None):
       efYd=20260317로 받아도 2026. 9. 18. 시행분이 온다), 조문참고자료([본조신설 …]·[시행일: …])가 빠져 온다.
 
     date 가 없으면 앞으로 시행될 판본을 '시행예정'에 함께 적는다. 현행 조문이 곧 바뀔 수 있음을 알리기 위한 것이다.
+    이름이 일치하는 현행 법령이 없으면 같은 이름의 행정규칙에서 찾는다(rule_article).
     """
     oc = oc_value(oc)
-    law, jo = find_law(name, oc), jo_code(number)
+    jo = jo_code(number)
+    try:
+        law = find_law(name, oc)
+    except NoSuchLaw as missing:
+        return rule_article(name, jo, date, oc, missing)
     day = basis_day(date)
     versions = law_versions(law['법령ID'], oc)
     version = version_on(versions, day)
@@ -769,10 +782,87 @@ def article(name, number, *, date=None, oc=None):
             '조문': '\n\n'.join(article_text(u) for u in units)}
 
 
+def rule_versions(name, oc):
+    """이름이 같은 행정규칙의 판본 줄을 현행·연혁 목록에서 모은다. 돌려주는 값은 (판본 줄, 이름이 다른 후보 {이름: 일련번호})이다.
+
+    연혁 목록(nw=2)에 현행 줄이 함께 오므로 일련번호로 합친다. 발령일자·발령번호는 법령 판본 줄과 같은 칸 이름(공포일자·공포번호)으로
+    옮겨 version_on·upcoming 을 함께 쓴다.
+    """
+    rows, others = {}, {}
+    for extra in ({}, {'nw': 2}):
+        page = 1
+        while True:
+            items = list_items(unwrap(call('lawSearch.do', {'target': 'admrul', 'query': name, 'display': PAGE, 'page': page, **extra}, oc)))
+            for item in items:
+                serial = item.get('행정규칙일련번호')
+                if squash(item.get('행정규칙명')) == squash(name):
+                    rows.setdefault(serial, {**item, '공포일자': item.get('발령일자'), '공포번호': item.get('발령번호')})
+                elif not extra:     # 후보는 현행 목록에서만 든다. 연혁 줄의 일련번호는 옛 판본이어서 그대로 받으면 옛 글이 온다
+                    others.setdefault(item.get('행정규칙명'), serial)
+            if len(items) < PAGE:
+                break
+            page += 1
+    return list(rows.values()), others
+
+
+def rule_unit(text, jo):
+    """행정규칙 본문(조문을 빈 줄로 이은 글)에서 조 하나를 찾는다. 없으면 None 이다.
+
+    문단 머리만 보므로 장·절 제목과 다른 조 안의 인용은 걸리지 않고, 제85조를 찾을 때 제85조의2 가 걸리지 않는다.
+    행정규칙 조문은 항이 한 줄로 이어져 오므로(법령 조문과 달리 항 단위가 없다) 항 머리에서만 줄을 바꾼다. 글자는 바꾸지 않는다.
+    """
+    number, branch = int(jo[:4]), int(jo[4:])
+    head = re.compile(rf'\s*제\s*{number}\s*조' + (rf'\s*의\s*{branch}(?!\d)' if branch else r'(?!\s*의\s*\d)'))
+    unit = next((p for p in text.split('\n\n') if head.match(p)), None)
+    return re.sub(r'(?<=\S)\s*(?=[②-⑳])', '\n', unit) if unit else None
+
+
+def rule_article(name, jo, date, oc, missing):
+    """현행 법령에 없는 이름의 조문을 같은 이름의 행정규칙에서 찾는다. 판본은 법령처럼 시행일자로 고른다.
+
+    위원회 규칙 일부는 법제처에 법령이 아니라 행정규칙으로 올라 있다. 「원자로시설 등의 기술기준에 관한 규칙」(원자력안전위원회규칙)은
+    법령 목록에 2008년 판까지만 있고 2011. 11. 11. 제3호부터 현행 제37호까지는 행정규칙 목록에 있다(2026. 11. 2. 실측).
+    missing 은 법령에서 찾지 못한 오류이다. 행정규칙에도 없으면 그 후보에 행정규칙 후보를 덧붙여 알린다.
+    """
+    versions, others = rule_versions(name, oc)
+    if not versions:
+        raise LawGoError(f'{missing}. 행정규칙에도 같은 이름이 없습니다.'
+                         + (' (행정규칙 후보: ' + ', '.join(f'{n} {s}' for n, s in list(others.items())[:8])
+                            + ' — show 행정규칙 일련번호 로 받습니다)' if others else ''))
+    if len({v.get('행정규칙ID') for v in versions}) > 1:     # 기관마다 같은 이름의 규칙을 두는 일이 있다. 어느 것인지 짐작하지 않는다
+        now = [v for v in versions if v.get('현행연혁구분') == '현행'] or versions
+        raise LawGoError(f'같은 이름의 행정규칙이 여럿입니다: {name} ('
+                         + ', '.join(f"{v.get('소관부처명', '')} {v['행정규칙일련번호']}" for v in now[:8])
+                         + ') show 행정규칙 일련번호 로 받습니다.')
+    day, title, label = basis_day(date), versions[0].get('행정규칙명') or name, jo_label(jo)
+    days = sorted(v['시행일자'] for v in versions if v.get('시행일자'))
+    if not date and not any(v.get('현행연혁구분') == '현행' for v in versions):
+        raise LawGoError(f"{title}: 현행 판본이 없는 행정규칙입니다"
+                         + (f"(마지막 판본 {ymd(days[-1])} 시행)" if days else '') + '. 그때의 조문은 --date 로 받습니다.')
+    version = version_on(versions, day)
+    if not version:
+        raise LawGoError(f"{title}: {ymd(day)} 당시 시행 중이던 행정규칙 판본을 찾지 못했습니다"
+                         + (f"(가장 이른 판본 {ymd(days[0])} 시행)" if days else '')
+                         + f'. 그 전 판본은 search 법령 "{name}" --history 로 찾고, 이름이 바뀐 규칙이면 이름 일부로 찾습니다.')
+    serial = version['행정규칙일련번호']
+    body = show('행정규칙', serial, oc=oc)['본문'].get('조문', '')
+    unit = rule_unit(body, jo)
+    if not unit:
+        raise LawGoError(f"{title} {label}: {ymd(day) + ' 당시' if date else '현행'} 판본"
+                         f"(시행 {ymd(version['시행일자'])}, 행정규칙 일련번호 {serial})에 없는 조문입니다"
+                         + ('' if body else '. 본문이 조문으로 오지 않는 규칙이니 show 행정규칙 일련번호 의 첨부파일을 봅니다'))
+    return {'법령': title, '조': label, '기준': ymd(day) if date else '현행', '시행일자': ymd(version['시행일자']),
+            '발령': f"{ymd(version.get('발령일자'))} 제{version.get('발령번호', '')}호",
+            '분류': f"행정규칙({version.get('행정규칙종류', '')}) 일련번호 {serial}, {version.get('소관부처명', '')}",
+            **({} if date else {'시행예정': upcoming(versions, day)}),
+            '링크': 'https://www.law.go.kr/행정규칙/' + re.sub(r'\s', '', title), '조문': unit}
+
+
 def article_markdown(doc):
     soon = f"- 시행예정: {', '.join(doc['시행예정'])} (이 조문이 바뀌는지는 --date 로 확인)\n" if doc.get('시행예정') else ''
+    issued = f"- 공포: {doc['공포']}\n" if doc.get('공포') else f"- 발령: {doc['발령']}\n- 법제처 분류: {doc['분류']}\n"
     return (f"## {doc['법령']} {doc['조']} ({doc['기준']} 기준, 시행 {doc['시행일자']})\n\n"
-            f"- 공포: {doc['공포']}\n{soon}- 링크: {doc['링크']}\n\n{doc['조문']}\n")
+            f"{issued}{soon}- 링크: {doc['링크']}\n\n{doc['조문']}\n")
 
 
 def check(oc=None):
@@ -804,7 +894,8 @@ def main():
     s.add_argument('kind'); s.add_argument('id'); s.add_argument('--refresh', action='store_true')
     s.add_argument('--date', help='법령에만 쓴다. 기준일 20190716(기본: 오늘). 그날 시행 중이던 본문을 받는다')
     s.add_argument('--out', help='마크다운 파일로 쓴다')
-    s = subs.add_parser('article', help='법령 조문 하나를 받는다. --date를 주면 그날, 없으면 오늘 시행 중인 조문')
+    s = subs.add_parser('article', help='법령 조문 하나를 받는다. --date를 주면 그날, 없으면 오늘 시행 중인 조문. '
+                                        '현행 법령에 없는 이름이면 같은 이름의 행정규칙에서 찾는다')
     s.add_argument('law', help='법령명(예: 근로기준법, 근로기준법 시행령)'); s.add_argument('number', help='조 번호(예: 23, 76의2)')
     s.add_argument('--date', help='기준일 20190716(기본: 오늘)'); s.add_argument('--out', help='마크다운 파일로 쓴다')
     s = subs.add_parser('file', help="별표·서식 파일을 내려받는다. search 결과의 '한글파일'·'PDF파일' 주소를 넘긴다")

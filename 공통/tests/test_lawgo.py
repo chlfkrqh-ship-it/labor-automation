@@ -44,6 +44,27 @@ def jo_400(*added):
             *({'항내용': x} for x in added)]}]}}}
 
 
+RULE = '원자로시설 등의 기술기준에 관한 규칙'
+NO_LAW = {'LawSearch': {'totalCnt': '0'}}
+NO_RULE = {'AdmRulSearch': {'totalCnt': '0'}}
+
+
+def rule_row(serial, effective, number, state='연혁', rule_id='2042951', name=RULE, org='원자력안전위원회'):
+    """행정규칙 목록의 한 줄. 발령일과 시행일을 같게 둔다."""
+    return {'id': serial, '행정규칙일련번호': serial, '행정규칙ID': rule_id, '행정규칙명': name, '행정규칙종류': '규칙',
+            '발령일자': effective, '발령번호': number, '시행일자': effective, '현행연혁구분': state, '소관부처명': org}
+
+
+def rule_list(*rows):
+    return {'AdmRulSearch': {'totalCnt': str(len(rows)), 'admrul': list(rows)}}
+
+
+def rule_body(serial, *articles):
+    """행정규칙 본문 응답. 조문내용은 장·절 제목과 조문이 섞인 글 목록이고, 항이 한 줄로 이어져 온다."""
+    return {'AdmRulService': {'행정규칙기본정보': {'행정규칙일련번호': serial, '행정규칙명': RULE, '행정규칙종류': '규칙',
+                                         '소관부처명': '원자력안전위원회'}, '조문내용': list(articles)}}
+
+
 def law_body(name, law_id, effective, *articles, **basic):
     """법령 전체 본문 응답. 기본정보에 법령ID 는 있고 법령일련번호는 없다. articles 는 조문내용이다."""
     return {'법령': {'기본정보': {'법령명_한글': name, '법령ID': law_id, '시행일자': effective, **basic},
@@ -81,6 +102,8 @@ class LawGoTests(unittest.TestCase):
         self.calls.append(dict(q, path=path))
         if path == 'lawSearch.do':
             key = ('list', q['target'], q.get('query', ''), q.get('page', '1'))
+            if key + (q.get('nw'),) in self.routes:         # 행정규칙의 현행 목록과 연혁 목록(nw=2)을 가른다
+                key += (q.get('nw'),)
         else:
             key = ('info', q['target'], q.get('ID') or q.get('MST'), q['type'])
             if key + (q.get('efYd'),) in self.routes:       # 한 일련번호에 시행일이 여럿인 판본은 시행일까지 넣어 가른다
@@ -388,9 +411,119 @@ class LawGoTests(unittest.TestCase):
         lawgo.article('근로기준법', '제76조의2')
         self.assertEqual(self.steps(), ['목록 law', '목록 eflaw', '본문 eflaw', '목록 law', '목록 eflaw'])   # 조문은 보관함에서
         self.routes[('list', 'law', '근로기준법 시행규칙', '1')] = self.LAWS
+        self.routes[('list', 'admrul', '근로기준법 시행규칙', '1')] = NO_RULE
         with self.assertRaises(lawgo.LawGoError) as caught:
             lawgo.article('근로기준법 시행규칙', '1')
         self.assertIn('후보: 근로기준법, 근로기준법 시행령', str(caught.exception))
+        self.assertIn('행정규칙에도 같은 이름이 없습니다', str(caught.exception))
+
+    def rule_routes(self, *rows):
+        """법령 목록에는 없고 행정규칙 목록에만 있는 규칙. 연혁 목록(nw=2)에는 현행 줄도 함께 온다."""
+        self.routes[('list', 'law', RULE, '1')] = NO_LAW
+        self.routes[('list', 'admrul', RULE, '1')] = rule_list(*[r for r in rows if r['현행연혁구분'] == '현행'])
+        self.routes[('list', 'admrul', RULE, '1', '2')] = rule_list(*rows)
+
+    def test_article_falls_back_to_admin_rule_when_no_law_has_the_name(self):
+        # 2026. 11. 2. 실제 조회: 현행 규칙은 행정규칙 목록에만 있어 '현행 법령이 없습니다'로 끝났다
+        self.rule_routes(rule_row('2100000276496', '20260330', '37', '현행'), rule_row('2100000185743', '20200107', '24'))
+        self.routes[('info', 'admrul', '2100000276496', 'JSON')] = rule_body(
+            '2100000276496', '제4절 원자로시설의 건설 및 운영에 관한 품질보증',
+            '제68조(품질보증 조직) ① 사업자는 권한과 의무를 정하여야 한다.② 사업자는 독립성을 부여하여야 한다.1. 품질문제의 제기2. 해결방안의 제시',
+            '제85조(감사) ① 사업자는 감사를 실시하여야 한다. 제99조를 준용한다.', '제85조의2(적용범위) 해체에 적용한다.')
+        doc = lawgo.article(RULE, '68')
+        self.assertEqual(doc['조문'], '제68조(품질보증 조직) ① 사업자는 권한과 의무를 정하여야 한다.\n② 사업자는 독립성을 부여하여야 한다.1. 품질문제의 제기2. 해결방안의 제시')
+        self.assertEqual((doc['법령'], doc['조'], doc['기준'], doc['시행일자'], doc['발령'], doc['시행예정'], doc['링크']),
+                         (RULE, '제68조', '현행', '2026-03-30', '2026-03-30 제37호', [],
+                          'https://www.law.go.kr/행정규칙/원자로시설등의기술기준에관한규칙'))
+        text = lawgo.article_markdown(doc)
+        self.assertIn('- 발령: 2026-03-30 제37호\n- 법제처 분류: 행정규칙(규칙) 일련번호 2100000276496, 원자력안전위원회\n', text)
+        self.assertNotIn('공포', text)
+        self.assertEqual(self.steps(), ['목록 law', '목록 admrul', '목록 admrul', '본문 admrul'])
+        self.assertEqual(self.calls[2]['nw'], '2')
+        # 가지 번호를 가른다. 다른 조 안의 인용과 절 제목은 조문으로 잡지 않고, 띄어쓰기가 달라도 같은 이름으로 찾는다
+        self.assertTrue(lawgo.article(RULE, '85')['조문'].startswith('제85조(감사)'))
+        self.assertTrue(lawgo.article(RULE, '제85조의2')['조문'].startswith('제85조의2(적용범위)'))
+        for number in ('99', '4', '85의3'):
+            with self.assertRaises(lawgo.LawGoError) as caught:
+                lawgo.article(RULE, number)
+            self.assertIn('행정규칙 일련번호 2100000276496)에 없는 조문입니다', str(caught.exception))
+        self.routes[('list', 'law', '원자로시설등의기술기준에관한규칙', '1')] = NO_LAW
+        self.routes[('list', 'admrul', '원자로시설등의기술기준에관한규칙', '1')] = self.routes[('list', 'admrul', RULE, '1')]
+        self.assertEqual(lawgo.article('원자로시설등의기술기준에관한규칙', '68')['법령'], RULE)
+
+    def test_article_admin_rule_picks_version_by_effective_date(self):
+        self.rule_routes(rule_row('38', '20270101', '38', '현행'), rule_row('37', '20260330', '37'), rule_row('24', '20200107', '24'),
+                         rule_row('3', '20111111', '3'))
+        self.routes[('info', 'admrul', '37', 'JSON')] = rule_body('37', '제68조(품질보증 조직) 제37호 문언')
+        self.routes[('info', 'admrul', '24', 'JSON')] = rule_body('24', '제68조(품질보증 조직) 제24호 문언')
+        doc = lawgo.article(RULE, '68')                 # 현행 표시가 붙은 줄이 아직 시행 전이면 오늘 시행 중인 판본을 받고 뒤 판본을 알린다
+        self.assertEqual((doc['조문'], doc['시행일자'], doc['시행예정']),
+                         ('제68조(품질보증 조직) 제37호 문언', '2026-03-30', ['2027-01-01 시행(2027-01-01 제38호)']))
+        self.assertIn('시행예정: 2027-01-01 시행', lawgo.article_markdown(doc))
+        dated = lawgo.article(RULE, '68', date='2020-06-01')
+        self.assertEqual((dated['조문'], dated['기준'], dated['시행일자'], dated['발령']),
+                         ('제68조(품질보증 조직) 제24호 문언', '2020-06-01', '2020-01-07', '2020-01-07 제24호'))
+        self.assertNotIn('시행예정', dated)
+        with self.assertRaises(lawgo.LawGoError) as caught:     # 행정규칙 판본보다 이른 날은 다른 판본으로 답하지 않는다
+            lawgo.article(RULE, '68', date='20100101')
+        self.assertIn('가장 이른 판본 2011-11-11 시행', str(caught.exception))
+        self.assertIn(f'search 법령 "{RULE}" --history', str(caught.exception))
+
+    def test_article_admin_rule_with_only_old_versions_is_not_current(self):
+        self.rule_routes(rule_row('24', '20200107', '24'))
+        self.routes[('info', 'admrul', '24', 'JSON')] = rule_body('24', '제68조(품질보증 조직) 제24호 문언')
+        with self.assertRaises(lawgo.LawGoError) as caught:
+            lawgo.article(RULE, '68')
+        self.assertIn('현행 판본이 없는 행정규칙입니다(마지막 판본 2020-01-07 시행)', str(caught.exception))
+        self.assertEqual(lawgo.article(RULE, '68', date='20200601')['시행일자'], '2020-01-07')
+
+    def test_article_admin_rule_body_without_articles_points_to_attachments(self):
+        self.rule_routes(rule_row('9', '20260330', '9', '현행'))
+        self.routes[('info', 'admrul', '9', 'JSON')] = {'AdmRulService': {'행정규칙기본정보': {'행정규칙일련번호': '9'}}}
+        with self.assertRaises(lawgo.LawGoError) as caught:
+            lawgo.article(RULE, '1')
+        self.assertIn('첨부파일', str(caught.exception))
+
+    def test_article_admin_rule_same_name_is_not_guessed(self):
+        self.rule_routes(rule_row('1', '20260101', '1', '현행', rule_id='111', org='갑위원회'),
+                         rule_row('2', '20260201', '2', '현행', rule_id='222', org='을위원회'))
+        with self.assertRaises(lawgo.LawGoError) as caught:
+            lawgo.article(RULE, '1')
+        self.assertIn('같은 이름의 행정규칙이 여럿입니다', str(caught.exception))
+        self.assertIn('갑위원회 1, 을위원회 2', str(caught.exception))
+        self.assertNotIn('본문 admrul', self.steps())
+
+    def test_article_reports_admin_rule_candidates_when_name_differs(self):
+        self.routes[('list', 'law', '원자로 품질보증', '1')] = NO_LAW
+        self.routes[('list', 'admrul', '원자로 품질보증', '1')] = rule_list(
+            rule_row('2100000284348', '20260826', '2026-15', '현행', name='원자로시설의 품질보증 세부요건에 관한 고시'))
+        self.routes[('list', 'admrul', '원자로 품질보증', '1', '2')] = rule_list(
+            rule_row('739', '20160725', '2016-13', name='원자로시설의 품질보증 세부요건에 관한 기준'))
+        with self.assertRaises(lawgo.LawGoError) as caught:
+            lawgo.article('원자로 품질보증', '3')
+        message = str(caught.exception)
+        self.assertIn('이름이 일치하는 현행 법령이 없습니다: 원자로 품질보증. 행정규칙에도', message)
+        self.assertIn('행정규칙 후보: 원자로시설의 품질보증 세부요건에 관한 고시 2100000284348', message)
+        self.assertNotIn('739', message)                # 연혁 줄의 일련번호는 옛 판본이어서 후보로 들지 않는다
+        self.assertNotIn('본문 admrul', self.steps())
+
+    def test_article_auth_error_is_not_taken_for_a_missing_law(self):
+        self.routes[('list', 'law', RULE, '1')] = {'result': '사용자 정보 검증에 실패하였습니다.', 'msg': 'IP주소를 등록해 주세요.'}
+        with self.assertRaises(lawgo.LawGoError) as caught:
+            lawgo.article(RULE, '68')
+        self.assertIn('IP주소', str(caught.exception))
+        self.assertEqual(self.steps(), ['목록 law'])
+
+    def test_law_search_hints_admin_rule_when_no_current_law(self):
+        self.routes[('list', 'law', RULE, '1')] = NO_LAW
+        self.assertIn(f'search 행정규칙 "{RULE}"', lawgo.search('법령', RULE)['안내'])
+        self.routes[('list', 'eflaw', RULE, '1')] = {'LawSearch': {'totalCnt': '1', 'law': [
+            version('85791', '20080304', '20080304', '1', '연혁', law_id='007818', name=RULE)]}}
+        self.assertIn('안내', lawgo.search('법령', RULE, history=True))       # 옛 판만 나와도 알린다
+        self.routes[('list', 'law', '근로기준법', '1')] = self.LAWS
+        self.assertNotIn('안내', lawgo.search('법령', '근로기준법'))
+        self.routes[('list', 'admrul', RULE, '1')] = rule_list(rule_row('37', '20260330', '37', '현행'))
+        self.assertNotIn('안내', lawgo.search('행정규칙', RULE))
 
     def test_article_current_takes_text_in_force_not_text_as_promulgated(self):
         """현행 조문도 시행일 기준으로 받는다(2026. 10. 1. 민사소송법).
