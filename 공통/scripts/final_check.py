@@ -13,9 +13,9 @@
   호증 번호      citation_check.py 위반 0
   판례 대조      인용이 있으면 작업/인용대조표.md 가 있고 cite_check.py 불일치 0
   판례 검색 기록 LBOX 목록(작업/LBOX_목록.tsv)·법제처 목록·작업/검색기록.md 가 있다(찾은 것을 남겼는가)
-  찾은 판례 다시 훑기  작업/수확목록_재확인*.md 의 낱말로 harvest_titles.py scan 을 다시 돌린다. 걸린 줄은 원고·대조표·검색기록에 번호가 있거나,
-                 재확인 보고서에 이미 나온 줄로서 검색기록·보완 메모·사건상태에 처리를 적었어야 한다(사안이 전혀 다른 줄은 묶어 적는다, `/검토의견` 4-2단계).
-                 보고서 뒤에 새로 걸린 줄은 막는다
+  찾은 판례 다시 훑기  작업/수확목록_재확인*.md 의 낱말로 harvest_titles.py scan 을 다시 돌린다(보고서에 적은 처리를 잇는다). 걸린 줄은 원고·대조표·검색기록에
+                 번호가 있거나, 재확인 보고서의 '처리' 칸에 줄마다 처리를 적었어야 한다(사안이 전혀 다른 줄도 묶지 않는다, `/검토의견` 4-2단계).
+                 번호가 없는 줄과 보고서 뒤에 새로 걸린 줄도 처리 칸이 비면 막는다
   대조표 칸      본문 인용 줄마다 자리·주문·결론·다른 사유·전제·확정·원문이 찼고, 판결이 아닌 자료(판정·재결·행정해석)는 원문 파일이 있으며,
                  미확정·확인 못한 판결은 7일 안에 다시 본 날짜가 있다(미확정 줄은 '참고'로 따로 보인다)
   판결문 PDF     본문 인용 판결이 있으면 참고자료/인용판결_PDF 가 있고 cite_pdf_check.py 문제 0, '사람 판정' 표가 본문 인용 줄마다
@@ -54,7 +54,6 @@ import tempfile
 import time
 import zipfile
 from pathlib import Path
-from urllib.parse import unquote
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
@@ -170,8 +169,8 @@ def 빈_판정(path: Path, 칸말: tuple) -> tuple:
 
 
 def 본문_줄(table: Path) -> list:
-    """대조표의 본문 인용 줄(번호 칸에 '참고'·'뺌'이 없는 줄)."""
-    return [r for r in cite_check.table_rows(str(table)) if cite_check.is_body(r)]
+    """대조표의 본문 인용 줄(번호 칸에 '참고'가 없고 뺀 줄이 아니며, 서면 대조표이면 하단 목록 번호 ①②③ 으로 시작하지 않는 줄)."""
+    return [r for r in cite_check.table_rows(str(table)) if cite_check.is_body(r, str(table))]
 
 
 def 자리_머리(이름: str) -> str:
@@ -213,10 +212,17 @@ def 사람판정_빈(table: Path, report: Path) -> list:
             if i자리 is not None and '주의' in r[i자리] and (i비고 is None or not r[i비고].strip()):
                 빠짐.append('비고(주의 줄)')
             표줄.append((r[i줄].strip(), cite_check.cases(r[i판결]) if i판결 is not None else set(), 빠짐))
+    이름_판결 = {}
+    for n, 번호들 in want:
+        이름_판결.setdefault(n, set()).add(frozenset(번호들))
     out = []
     for n, 번호들 in want:
-        같은판결 = lambda x: not x[1] or not 번호들 or bool(x[1] & 번호들)
-        후보 = [x for x in 표줄 if x[0] == n and 같은판결(x)] or [x for x in 표줄 if 같은판결(x) and 같은_자리(n, x[0])]
+        # 표 줄의 '판결' 칸이 비었으면 이름이 꼭 같고 그 이름으로 인용한 판결이 하나일 때만 그 줄로 본다.
+        # 2026. 11. 3. 점검: 판결 칸이 빈 표 줄 하나가 번호가 겹치는 다른 판결의 인용 줄까지 통과시켰다
+        def 같은판결(x, 느슨):
+            return bool(x[1] & 번호들) if x[1] and 번호들 else 느슨
+        후보 = ([x for x in 표줄 if x[0] == n and 같은판결(x, len(이름_판결[n]) == 1)]
+              or [x for x in 표줄 if 같은판결(x, False) and 같은_자리(n, x[0])])
         빠짐 = max((x[2] for x in 후보), key=len) if 후보 else ['줄 없음']
         if 빠짐:
             out.append(f"{n}({', '.join(빠짐)})")
@@ -292,23 +298,24 @@ def 앞_라운드(폴더: Path) -> list:
     return [p for p in 폴더.parent.glob('라운드*') if p.is_dir() and 라운드_번호(p) < 라운드_번호(폴더)]
 
 
-def 없는_줄(글: str) -> set:
-    """수확 재확인 보고서의 '기록에 없는 줄' 번호. 옛 보고서에 주소 꼴로 적힌 번호도 글자로 푼다."""
-    return {unquote(r[1]) for _, rows in 표들(절_글(글, '기록에 없는 줄')) for r in rows if len(r) > 6 and r[6] == '없음'}
-
-
-def 수확_처리_적음(글: str) -> bool:
-    """재확인에서 기록에 없던 줄을 어떻게 가렸는지 적은 글이 있는가. 사건상태의 파일 안내처럼 보고서를 가리키기만 한 줄은 아니다.
-    2026. 11. 3. '수확 목록'이라는 말이 어디에 한 번만 있어도 통과하였다."""
-    return bool(re.search(r'(?:수확\s*목록|수확목록_재확인|다시\s*훑)[^\n]{0,200}?'
-                          r'(?:반영|처리|사안이\s*(?:전혀\s*)?(?:다르|달라|다름|다른)|무관|본문\s*(?:을\s*)?(?:읽|확인|받)|기록에\s*없)', 글))
+def 기록에_없는_줄(글: str) -> list:
+    """다시 훑은 보고서의 '기록에 없는 줄'(기록에 번호가 없거나 번호를 알 수 없는 줄). [(번호나 제목, 처리)].
+    '처리' 칸은 harvest_titles.py 가 앞선 재확인 보고서에서 이어 적는다('같음'·'상동'만 적은 칸은 잇지 않는다)."""
+    out = []
+    for head, rows in 표들(절_글(글, '기록에 없는 줄')):
+        i = next((k for k, h in enumerate(head) if h == '처리'), None)
+        for r in rows:
+            if len(r) > 6 and r[6] in ('없음', '번호 없음'):
+                out.append((r[1] or r[4][:20], r[i].strip() if i is not None else ''))
+    return out
 
 
 # ---------------------------------------------------------------- 판례(두 계열 같다)
 def 검색_완결(res: 결과, 폴더: Path):
     """찾지 않은 판례: 검색 기록(LBOX·법제처 목록, 검색기록)이 남았고, 받아 둔 목록에서 사안 고유어가 걸린 줄을 모두 가렸는가.
-    걸린 줄은 본문에 반영하거나 유사 사례 표에 미반영 이유를 적되 사안이 전혀 다른 줄은 묶어서 한 줄로 적으므로(`/검토의견` 4-2단계),
-    번호가 기록에 없어도 재확인 보고서에 이미 나온 줄이고 재확인을 처리한 글이 있으면 가린 것으로 본다. 보고서 뒤에 새로 걸린 줄은 막는다."""
+    기록(원고·대조표·검색기록)에 번호가 없는 줄과 번호를 알 수 없는 줄은 재확인 보고서의 '처리' 칸에 줄마다 무엇을 하였는지 적어야 지나간다.
+    2026. 11. 3. 점검: 묶어 적은 한 문장('나머지는 사안이 다름')으로 기록에 없는 줄 161건을 가린 것으로 보았다. 보고서 뒤에 새로 걸린 줄은
+    처리 칸이 비어 막힌다."""
     작업 = 폴더 / '작업'
     폴더들 = [폴더] + 앞_라운드(폴더)
     없는것 = [이름 for 이름, 있나 in (('작업/LBOX_목록.tsv', any(x for d in 폴더들 for x in d.rglob('LBOX_목록*.tsv'))),
@@ -334,7 +341,7 @@ def 검색_완결(res: 결과, 폴더: Path):
     훑을곳 = 폴더.parent / 머리.group(1).strip() if 머리 and (폴더.parent / 머리.group(1).strip()).is_dir() else 폴더
     with tempfile.TemporaryDirectory() as d:          # 같은 낱말로 지금 기록과 다시 맞댄다(LBOX 에는 요청하지 않는다)
         out = Path(d) / '재확인.md'
-        RUN([SC / 'harvest_titles.py', 'scan', 훑을곳, '--낱말', *낱말, '--out', out])
+        RUN([SC / 'harvest_titles.py', 'scan', 훑을곳, '--낱말', *낱말, '--out', out, '--잇기', *재확인들])
         t = out.read_text(encoding='utf-8') if out.is_file() else ''
     n = re.search(r'없음 (\d+)건', t)
     빠짐 = int(n.group(1)) if n else -1
@@ -343,21 +350,17 @@ def 검색_완결(res: 결과, 폴더: Path):
         res.add('찾은 판례 다시 훑기', '막힘', '다시 훑기를 돌리지 못했다')
     elif 목록 and int(목록.group(1)) == 0:
         res.add('찾은 판례 다시 훑기', '막힘', f'다시 훑을 법제처·LBOX 목록이 없다: {훑을곳}')
-    elif 빠짐 == 0:
-        res.add('찾은 판례 다시 훑기', '통과', f"낱말 {', '.join(낱말)} — 걸린 줄 모두 기록에 있음")
     else:
-        새줄 = sorted(없는_줄(t) - set().union(*map(없는_줄, 옛글)))
-        처리글 = ''.join(p.read_text(encoding='utf-8', errors='replace') for d in 폴더들
-                      for p in (d / '작업' / '검색기록.md', d / '검색기록.md', d / '작업' / '사건상태.md', *d.glob('*회신초안*.md'),
-                                *(d / '출력').glob('서면초안*.md')) if p.is_file())
-        if 새줄:
-            res.add('찾은 판례 다시 훑기', '막힘', f'재확인 보고서 뒤에 새로 걸린 줄 {len(새줄)}건: ' + ', '.join(새줄[:15]) +
-                    ' — 본문을 읽고 반영하거나 검색기록 유사 사례 표에 미반영 이유를 적는다')
-        elif not 수확_처리_적음(처리글):
-            res.add('찾은 판례 다시 훑기', '막힘', f'기록에 없는 줄 {빠짐}건을 어떻게 가렸는지 검색기록·보완 메모·사건상태에 없다 — '
-                    '본문을 읽고 반영하거나 유사 사례 표에 미반영 이유를 적고, 사안이 전혀 다른 줄은 묶어서 한 줄로 적는다')
+        미기록 = 기록에_없는_줄(t)
+        빈 = [n for n, h in 미기록 if not h]
+        if 빈:
+            res.add('찾은 판례 다시 훑기', '막힘', f"기록에 없는 줄 {len(미기록)}건 가운데 '처리' 칸이 빈 줄 {len(빈)}건: " + ', '.join(빈[:15]) +
+                    (' 외' if len(빈) > 15 else '') + " — 본문을 읽고 반영하거나 유사 사례 표에 미반영 이유를 적고, 사안이 전혀 다른 줄도 묶지 않고 "
+                    f"그 줄의 '처리' 칸에 다른 점을 적는다(`harvest_titles.py scan` 을 같은 --out `{재확인들[0].name}` 으로 다시 돌리면 적어 둔 처리는 이어진다)")
+        elif not 미기록:
+            res.add('찾은 판례 다시 훑기', '통과', f"낱말 {', '.join(낱말)} — 걸린 줄 모두 기록에 있음")
         else:
-            res.add('찾은 판례 다시 훑기', '통과', f'기록에 없는 {빠짐}줄은 재확인 보고서에 있고 처리를 적음')
+            res.add('찾은 판례 다시 훑기', '통과', f'기록에 없는 {len(미기록)}줄은 재확인 보고서에 줄마다 처리를 적음')
 
 
 def 판례(res: 결과, 대상: Path, table: Path, pdfdir: Path, 폴더: Path, report: Path | None = None):

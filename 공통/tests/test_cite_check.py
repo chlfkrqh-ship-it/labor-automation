@@ -117,6 +117,38 @@ class CiteCheckTest(unittest.TestCase):
         self.write("산출물.md", TARGET)      # 상급심을 적지 않은 글(서면 등)은 건드리지 않는다
         self.assertEqual(cite_check.check(self.p("대조표.md"), [self.p("산출물.md")])["불일치"], 0)
 
+    def test_body_number_needs_a_body_row_not_only_a_bottom_or_dropped_row(self):
+        """2026. 11. 3. 점검: 본문에 남은 판결이 대조표에 하단 목록 줄('② 1.')이나 뺀 줄로만 있으면 그 본문 문장이 대조 없이 지나갔다.
+        하단 세 목록은 서면 초안('---' 아래)에만 있다. 검토의견 대조표의 ①② 줄은 본문 인용으로 본다."""
+        rows = ("| ② 1. | 대법원 2020. 1. 1. 선고 2019두1 판결 | 반대 판결로 사안이 다르다 | 가나다라마바사아자 | 판결요지 | 기각 | 없음 | 확정 | 보관함 일치 |\n"
+                "| 뺌 | 대법원 2021. 1. 1. 선고 2020두2 판결 | 뺌 | 차카타파하가나다라 | 판결요지 | 기각 | 없음 | 확정 | 보관함 일치 |\n")
+        bottom = "\n\n---\n\n② 반대 판결로 사안이 다르다(대법원 2020. 1. 1. 선고 2019두1 판결).\n"
+        for folder in ("사건/라운드1/작업", "자문/작업"):
+            os.makedirs(self.p(folder), exist_ok=True)
+            table = os.path.join(self.p(folder), "인용대조표.md")
+            with open(table, "w", encoding="utf-8") as f:
+                f.write(HEAD + ROW + rows)
+            brief = folder.startswith("사건")
+            # 하단에만 둔 반대 판결은 통과한다
+            self.write("산출물.md", TARGET.split("\n\n## 보완 메모")[0] + bottom)
+            res = cite_check.check(table, [self.p("산출물.md")])
+            self.assertEqual(res["불일치"], 0, (folder, res["내용"]))
+            # 본문에 남은 하단 줄 판결과 뺀 판결
+            self.write("산출물.md", "대법원 2020. 1. 1. 선고 2019두1 판결은 본문에서도 들었다. 대법원 2021. 1. 1. 선고 2020두2 판결도 남았다. "
+                       + TARGET.split("\n\n## 보완 메모")[0] + bottom)
+            res = cite_check.check(table, [self.p("산출물.md")])
+            글 = "\n".join(res["내용"])
+            self.assertIn("뺀 인용의 2020두2 가 산출물에 남아 있다", 글, folder)
+            if brief:
+                self.assertIn("산출물 본문의 2019두1 가 대조표에 하단 목록 줄로만 있다", 글)
+                self.assertEqual(res["불일치"], 2, 글)
+            else:      # 검토의견의 ①② 줄은 본문 인용 줄이어서 3)으로 본문 문장을 맞댄다
+                self.assertNotIn("하단 목록 줄로만", 글)
+                self.assertEqual(res["불일치"], 1, 글)
+        # DOCX 에는 하단 목록이 없으므로 DOCX 의 번호는 모두 본문이다
+        self.assertEqual(cite_check.body_and_bottom("a.docx", "본문\n---\n하단"), ("본문\n---\n하단", ""))
+        self.assertEqual(cite_check.body_and_bottom("a.md", "---\n머리\n본문\n---\n하단"), ("---\n머리\n본문", "하단"))
+
     def test_statute_and_dates_are_not_case_numbers(self):
         self.assertEqual(cite_check.cases("근로기준법 제60조제5항, 제76조의3, 2026년10월31일, 11일분, 99두202, 2022가단23572"), {"99두202", "2022가단23572"})
 
