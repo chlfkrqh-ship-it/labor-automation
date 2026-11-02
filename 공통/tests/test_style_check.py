@@ -96,6 +96,25 @@ class VenueAgentTests(unittest.TestCase):
         self.assertEqual(style_check.cover_texts(path), [])
         self.assertNotIn(RULE, self.rules(path))
 
+    def test_plain_exhibit_mark_is_only_for_procedures_without_exchange(self):
+        """'증 제N호증'은 공단 심사청구 같은 절차의 표기이다. 노동위원회·법원 서면이면 위반이다(2026. 11. 1. 담당 노무사)."""
+        글 = '사실입니다(증 제2호증).'
+        self.assertIn('호증 부호', self.rules(self.make('노동위2.docx', body=[글, '전남지방노동위원회 귀중'])))
+        self.assertIn('호증 부호', self.rules(self.make('법원.docx', body=[글, '서울행정법원 제1부 귀중'])))
+        self.assertNotIn('호증 부호', self.rules(self.make('공단.docx', body=[글, '근로복지공단 서울지역본부 귀중'])))
+        self.assertNotIn('호증 부호', self.rules(self.make('입증.docx', body=['이를 입증 제2호증으로 봅니다.', '전남지방노동위원회 귀중'])))
+
+    def test_markdown_draft_reads_the_venue_from_its_frame(self):
+        md = self.root / '서면초안.md'
+        md.write_text('사실입니다(증 제2호증).\n', encoding='utf-8')
+        self.assertNotIn('호증 부호', self.rules(md))             # 프레임이 없으면 제출처를 모른다
+        self.make('서면_프레임.docx', body=['전남지방노동위원회 귀중'])
+        self.assertIn('호증 부호', self.rules(md))
+        나눈것 = self.root / '서면초안_림프종.md'
+        나눈것.write_text('사실입니다(증 제2호증).\n', encoding='utf-8')
+        self.make('프레임_림프종.docx', body=['근로복지공단 서울지역본부 귀중'])
+        self.assertNotIn('호증 부호', self.rules(나눈것))         # 나눈 서면은 제 프레임을 본다
+
 
 class StyleRuleTests(unittest.TestCase):
     """SKILL.md '저장 전 자가 점검'의 규칙이 걸려야 할 문장과 걸리면 안 되는 문장."""
@@ -114,6 +133,23 @@ class StyleRuleTests(unittest.TestCase):
 
     def found(self, result, rule, kind='violations'):
         return [row['detail'] for row in result[kind] if row['rule'] == rule]
+
+    def test_banned_word_inside_quoted_source_is_not_ours(self):
+        """따옴표로 옮긴 판정·재결 문언은 바꾸지 않으므로 금지 낱말로 막지 않는다(2026. 11. 2. 첫 밤 점검)."""
+        옮김 = self.check("판정위원회는 '괴롭힘 상황이 객관적으로 확인되어 악화 요인이 되었다'고 판단하였습니다.")
+        self.assertEqual(self.found(옮김, '금지 낱말'), [])
+        self.assertEqual(self.found(self.check('괴롭힘 상황이 객관적으로 확인됩니다.'), '금지 낱말'), ['객관적으로 확인'])
+
+    def test_ba_in_adjacent_paragraphs_is_violation(self):
+        """바로 위아래 문단에 '~는바,'를 잇달아 쓰지 않는다(2026. 11. 2. OES 답변서(2) 담당자)."""
+        rule = "위아래 문단에 '~는바,'"
+        위 = '원고는 지시를 받고도 이행하지 않았는바, 이는 지시 거부입니다.'
+        아래 = '피고는 세 차례 주의를 준바, 이는 정당한 조치입니다.'
+        self.assertEqual(len(self.found(self.check(위, 아래), rule)), 1)
+        self.assertEqual(self.found(self.check(위, '이처럼 지시는 정당합니다.', 아래), rule), [])
+        self.assertEqual(self.found(self.check(위, '나. 징계양정에 관하여', 아래), rule), [])
+        self.assertEqual(self.found(self.check(위, '법원은 "위 행위가 있었는바, 정당하다"고 판단하였습니다.'), rule), [])
+        self.assertEqual(self.found(self.check(위, '다만, 그 바, 호응이 다릅니다.'), rule), [])
 
     def test_captions_and_bracket_citations_are_not_memos(self):
         result = self.check('[을나 제5호증 사실확인서]',

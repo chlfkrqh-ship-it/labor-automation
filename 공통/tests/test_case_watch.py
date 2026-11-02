@@ -206,6 +206,8 @@ class CaseWatchTests(unittest.TestCase):
         base.mkdir(parents=True, exist_ok=True)
         with mock.patch.dict(os.environ, {'COMPUTERNAME': 'HOME-PC'}):
             self.assertIsNone(cw.log_feedback({'prompt': '좋아 진행해', 'session_id': 's'}, self.root))
+            self.assertIsNone(cw.log_feedback({'prompt': '/하자보완 예약 작업을 만들어 줘', 'session_id': 's'}, self.root))
+            self.assertIsNone(cw.log_feedback({'prompt': '<scheduled-task name="self-audit">하자보완.md 절차대로 왜</scheduled-task>', 'session_id': 's'}, self.root))
             path = cw.log_feedback({'prompt': '증거를 왜 빠뜨렸는지 확인하고 재발 방지', 'session_id': 's', 'cwd': 'x'}, self.root)
         self.assertEqual(path, base / '_지적기록' / 'HOME-PC.jsonl')
         rows = [json.loads(l) for l in path.read_text(encoding='utf-8').splitlines()]

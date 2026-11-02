@@ -249,15 +249,15 @@ def on_prompt(data: dict, root: Path, sdir: Path, now: float | None = None, rece
 
 # 담당자가 결과를 지적한 메시지(`/하자보완` 이 밤에 읽고 지침·검사로 옮겨졌는지 본다). 지나치게 넓어도 밤에 가려 읽으므로 놓치지 않는 쪽을 택한다
 지적말 = re.compile(r'왜|빠뜨|빠졌|빠진|놓쳤|놓친|틀렸|틀린|잘못|다시\s*(?:해|봐|보|확인|검토)|재발|지침화|지침\s*(?:반영|마련|으로)|'
-                 r'이상하|이상해|아니잖|아닌데|퀄리티|엉망|개판|누락|오류|실수|의문|이해할 수 없|하자|제대로|생경|어색')
+                 r'이상하|이상해|아니잖|아닌데|퀄리티|엉망|개판|누락|오류|실수|의문|이해할 수 없|하자(?!보완)|제대로|생경|어색')
 
 
 def log_feedback(data: dict, root: Path, now: float | None = None) -> Path | None:
     """지적으로 보이는 메시지를 `공통/사건/_지적기록/{PC}.jsonl` 에 한 줄 덧붙인다(git 밖, OneDrive 로 두 PC가 함께 본다).
-    `공통/사건/` 이 없는 곳(클라우드 세션)에서는 적지 않는다."""
+    `공통/사건/` 이 없는 곳(클라우드 세션)에서는 적지 않는다. 예약 실행의 지시문처럼 앱이 태그로 싸서 넣는 글은 담당자의 말이 아니다."""
     text = data.get('prompt')
     base = root / '공통' / '사건'
-    if not isinstance(text, str) or not base.is_dir() or not 지적말.search(text):
+    if not isinstance(text, str) or not base.is_dir() or text.lstrip().startswith('<') or not 지적말.search(text):
         return None
     import socket
     pc = re.sub(r'[^\w.-]', '_', os.environ.get('COMPUTERNAME') or socket.gethostname() or 'PC')

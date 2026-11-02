@@ -14,7 +14,7 @@ LBOX 에는 요청을 보내지 않는다. 넘긴 폴더 안의 파일만 읽는
 scan
   - 법제처: 폴더 아래 모든 `법제처_목록.json`(lawgo.py harvest 가 쓴 것. `법제처_양정` 처럼 나눈 수확 폴더도)의 줄.
     제목(사건명·안건명)에서 찾는다.
-  - LBOX: 폴더 아래 `LBOX_목록.tsv`(lbox-save 가 쓴 것)와 --lbox 로 준 파일. --lbox 에는 lbox-save 의 결과 파일이나
+  - LBOX: 폴더 아래 `LBOX_목록*.tsv`(lbox-save 가 쓴 것. `LBOX_목록_2차.tsv` 처럼 나눈 목록도)와 --lbox 로 준 파일. --lbox 에는 lbox-save 의 결과 파일이나
     `lboxLines` 출력이 남은 세션 결과 파일(tool-results 의 .txt, 세션 기록 .jsonl)을 줄 수 있다. 사건명과 스니펫에서 찾는다.
   - 낱말은 공백과 가운뎃점을 무시하고 찾는다('유지보수'로 '유지·보수'도 걸린다). '발전+정비'처럼 + 로 이으면 둘 다 든 줄만
     걸린다. '정비'·'위탁'처럼 다른 분야 제목(도시정비, 민간위탁)에도 흔한 낱말은 홀로 쓰지 말고 + 로 묶는다.
@@ -35,6 +35,7 @@ import json
 import os
 import re
 import sys
+from urllib.parse import unquote
 
 sys.stdout.reconfigure(encoding="utf-8")
 SQUEEZE = re.compile(r"[\s·ㆍ•]+")
@@ -189,10 +190,12 @@ def scan(a):
     case = a.case.rstrip("/\\")
     words = [w for w in a.낱말 if sq(w)]
     files, law = load_lawgo(case)
-    lbox_files = glob.glob(os.path.join(case, "**", "LBOX_목록.tsv"), recursive=True) + (a.lbox or [])
+    lbox_files = glob.glob(os.path.join(case, "**", "LBOX_목록*.tsv"), recursive=True) + (a.lbox or [])
     lbox = []
     for f in lbox_files:
         lbox += load_lbox_file(f)
+    for r in lbox:                                 # 주소 그대로 저장된 id('%EA%B5%AD…')는 번호를 찾을 수 없으므로 글자로 푼다
+        r["id"] = unquote(r["id"])
     seen, rows = set(), []
     for r in law + lbox:                           # 같은 줄이 여러 수확·파일에 있으면 하나로
         key = (r["src"].split("-")[0], sq(r["id"]) or sq(r["title"]))

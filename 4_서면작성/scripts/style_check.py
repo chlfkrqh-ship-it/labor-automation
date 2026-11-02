@@ -2,8 +2,8 @@
 
 `4_서면작성/skills/노동서면작성/SKILL.md` 의 '저장 전 자가 점검' 가운데 아직
 스크립트가 없던 항목(금지 낱말, 접속부사 뒤 쉼표, 3문장 이상 문단, 대괄호 메모,
-본문 해라체, 자료에 쓰여 있다는 뜻의 '적다')과 `4_서면작성/CLAUDE.md` 2-2절의
-제출처별 대리인 표기를 기계로 센다.
+본문 해라체, 자료에 쓰여 있다는 뜻의 '적다', 위아래 문단의 '~는바,')과 `4_서면작성/CLAUDE.md` 2-2절의
+제출처별 대리인 표기, `references/서면별-구조.md` 의 제출처별 호증 부호를 기계로 센다.
 규칙을 새로 만들지 않고 그 문서들에 적힌 것만 검사한다.
 
     python 4_서면작성/scripts/style_check.py 출력/서면초안.md
@@ -95,6 +95,14 @@ NESTED = re.compile(r'\([^()]*\([^()]*\)[^()]*\)')
 # 2026. 10. 31. GGM 답변서(2) 담당자 "더욱이를 두번이나 반복"). 앞 문단과의 관계를 드러내는 말만 본다.
 OPENING = re.compile(r'^(그러나|나아가|더욱이|또한|한편|이처럼|따라서|실제로|마찬가지로|오히려|무엇보다|반면|결국|그런데'
                      r'|이와 관련하여|구체적으로|특히|다만|그럼에도|이에|즉|가사|참고로)(?![가-힣])')
+# 바로 위아래 문단에 '~는바,'를 잇달아 쓰지 않는다(SKILL.md, 2026. 11. 2. OES 답변서(2) 담당자 "위에 ~바가 있으니 아래 문단에서 또 쓰면 별로야").
+# 받침 ㄴ 뒤의 '바,'를 본다('하였는바,', '인바,', '한바,'). 따옴표로 옮긴 원문은 세지 않고, 제목을 사이에 두면 세지 않는다.
+BA = re.compile(r'([가-힣])바\s*,')
+QUOTED = re.compile(r"'[^'\n]*'|\"[^\"\n]*\"|‘[^’\n]*’|“[^”\n]*”")
+# '증 제N호증'은 공단 심사청구처럼 호증을 주고받지 않는 절차의 표기이고 노동위원회는 노·사, 소송은 갑·을이다
+# (references/서면별-구조.md '입증방법 표기', 2026. 11. 1. 담당 노무사 "소송이 아닌 절차 모두에 증 제0호증은 아닌거 알지?").
+PLAIN_EXHIBIT = re.compile(r'(?<![가-힣])증\s*제\s*\d+\s*호증')
+VENUE_COURT = re.compile(r'법원.*귀중')
 # 결론만 말하는 한 줄 문단. 근거를 다음 문단으로 떼지 않고 온전한 문장으로 합친다(SKILL.md '문단·문장 이음').
 SHORT_PARAGRAPH = 45
 # 논리를 줄인 표현과 담당자가 고치게 한 표현(SKILL.md '문단·문장 이음', 2026. 10. 31. 같은 서면). 인용 원문일 수 있어 참고로 센다.
@@ -209,6 +217,23 @@ def cover_texts(path: Path):
     return found
 
 
+def venue_cover(path: Path):
+    """제출처를 볼 표지. docx 는 그 파일, md 초안은 같은 폴더의 프레임(서면초안_{이름}.md 는 프레임_{이름}.docx)이다. 못 읽으면 보지 않는다."""
+    if path.suffix.lower() == '.docx':
+        return cover_texts(path)
+    name = path.stem.replace('서면초안', '').strip('_')
+    frame = path.parent / (f'프레임_{name}.docx' if name else '서면_프레임.docx')
+    try:
+        return cover_texts(frame) if frame.is_file() else []
+    except Exception:
+        return []
+
+
+def has_ba(text):
+    """'~는바,'·'~ㄴ바,'가 있는가(받침 ㄴ 뒤의 '바,')."""
+    return any((ord(m[1]) - 0xAC00) % 28 == 4 for m in BA.finditer(QUOTED.sub('', text)))
+
+
 def check(path: Path):
     blocks = paragraphs(path)
     violations, notes = [], []
@@ -219,23 +244,31 @@ def check(path: Path):
 
     previous_cited = False
     previous_opening = None
+    previous_ba = False
     for line, text, body in blocks:
         if not body:                      # 보완 메모는 제출용 본문이 아니다
             previous_cited = False
+            previous_ba = False
             continue
         own = FOOTNOTE.sub('', text)      # 각주에 옮긴 판결 원문은 문체 검사 대상이 아니다
         sentences = prose(text)
         stripped = own.strip()
+        if HEADING_LINE.match(stripped):
+            previous_ba = False
         if SENTENCE.search(sentences) and not HEADING_LINE.match(stripped) and not CAPTION_BLOCK.match(stripped):
             opening = OPENING.match(stripped)
             if opening and opening[1] == previous_opening:
                 add(violations, '같은 연결어 연달아', line, text, opening[1])
             previous_opening = opening[1] if opening else None
+            ba = has_ba(stripped)
+            if ba and previous_ba:
+                add(violations, "위아래 문단에 '~는바,'", line, text, "아래 문단은 '~하였는데, 이는 …'처럼 달리 잇는다")
+            previous_ba = ba
             if len(stripped) <= SHORT_PARAGRAPH and not stripped.startswith('이하에서'):
                 add(notes, '짧은 선언 문단', line, text, '%d자' % len(stripped))
         for hit in set(m[0] for m in STIFF.finditer(own)):
             add(notes, '어색한 표현', line, text, hit)
-        for hit in set(BANNED.findall(own)):
+        for hit in set(BANNED.findall(QUOTED.sub('', own))):       # 따옴표로 옮긴 판정·재결 문언은 바꾸지 않는다
             add(violations, '금지 낱말', line, text, hit)
         for hit in set(m[0] for m in DRAMA.finditer(own)):
             add(violations, '판례 도입 연극조', line, text, hit)
@@ -283,6 +316,11 @@ def check(path: Path):
             if LITIGATION_AGENT.search(text) and text not in seen:
                 seen.add(text)
                 add(violations, '노동위 서면에 소송대리인', number, text, "'대리인'으로 고친다")
+    if any(VENUE_LABOR.search(text) or VENUE_COURT.search(text) for _, text in venue_cover(path)):
+        for line, text, body in blocks:
+            hit = PLAIN_EXHIBIT.search(FOOTNOTE.sub('', text)) if body else None
+            if hit:
+                add(violations, '호증 부호', line, text, "'%s' — 노동위원회는 노·사, 소송은 갑·을이다" % hit[0])
 
     body_text = [prose(t) for _, t, body in blocks if body]
     lengths = [len(s) for t in body_text for s in split_sentences(t)]

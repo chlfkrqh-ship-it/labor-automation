@@ -140,19 +140,24 @@ def 서면_호증(사건: Path) -> dict:
     return out
 
 
-산출물_이름 = re.compile(r'(-회신초안|-간이안)\.md$|관련 검토_|_수정\(|_최종|_Rev_\d|_초안\.(?:docx|pdf)$|_간이안\.(?:docx|pdf)$')
+산출물_이름 = re.compile(r'(-회신초안|-간이안)\.md$|관련 검토[_.]|_수정\(|_최종|_Rev_\d|_초안\.(?:docx|pdf)$|_간이안\.(?:docx|pdf)$'
+                    r'|_노동금액계산표|^검산_|^_추출\.txt$')
+우리_폴더 = re.compile(r'^(?:작업|백업|계산|전환작업|빌드)$|^별첨_|^법제처')
 
 
 def 자료_목록(사건: Path, 폴더들: list) -> dict:
     """자료 이름 → 파일. 이름은 파일 이름(확장자 포함)이고, 같은 이름이 여럿이면 폴더 이름을 앞에 붙인다.
-    우리가 만든 산출물(검토의견서·회신초안·수정본, `1_검토의견/CLAUDE.md` 6절의 이름)과 작업·계산·백업 폴더는 뺀다."""
+    우리가 만든 산출물(검토의견서·회신초안·수정본, `1_검토의견/CLAUDE.md` 6절의 이름, 엔진이 만든 계산표)과
+    작업·계산·백업·전환작업(Word 변환 부품)·별첨(붙이려고 받은 판결·회시)·법제처 수확 폴더는 뺀다. 상대방의 별지 계산표는 자료이다."""
     out = {}
     for d in 폴더들:
         d = Path(d)
         for p in sorted(d.rglob('*')):
             if not p.is_file() or p.name.startswith('~$') or not p.name.lower().endswith(DOCS) or 산출물_이름.search(p.name):
                 continue
-            if any(x in ('작업', '백업', '계산') for x in p.relative_to(d).parts[:-1]):
+            if any(우리_폴더.search(x) for x in p.relative_to(d).parts[:-1]):
+                continue
+            if p.stem in (f'{d.name}_계산표', f'{d.name}_검산표') or p.stem.startswith(f'{d.name}_대안계산표'):
                 continue
             k = nfc(p.name)
             if k in out:
@@ -184,7 +189,7 @@ class 자리:
 
 # ---------------------------------------------------------------- 기록 읽고 쓰기
 def 틀(자: 자리, k: str, p: Path, units: list, 앞선: str = '') -> str:
-    rel = nfc(str(p.relative_to(자.사건))) if 자.사건 in p.parents else nfc(str(p))
+    rel = nfc(p.relative_to(자.사건).as_posix()) if 자.사건 in p.parents else nfc(str(p))   # 두 PC가 함께 보는 기록이라 / 로 적는다
     수 = f'{len(units)}면' if units and isinstance(units[0], int) else f'{len(units)}개'
     줄 = [f'# {자.제목(k)} 읽기 기록', '',
           f'파일: {rel}', f'해시: {해시(p)} · {수}', f'만든 날: {dt.date.today().isoformat()}',
@@ -228,9 +233,9 @@ def 옮겨_오기(자: '자리', k: str, p: Path, units: list, 원본: Path) -> 
     r = 기록_읽기(t)
     if not set(units) <= r['채운'] or not r['방식']:
         return None
-    rel = nfc(str(p.relative_to(자.사건))) if 자.사건 in p.parents else nfc(str(p))
+    rel = nfc(p.relative_to(자.사건).as_posix()) if 자.사건 in p.parents else nfc(str(p))
     try:
-        출처 = nfc(str(원본.resolve().relative_to(뿌리().resolve())))
+        출처 = nfc(원본.resolve().relative_to(뿌리().resolve()).as_posix())
     except ValueError:
         출처 = nfc(str(원본))
     수 = f'{len(units)}면' if units and isinstance(units[0], int) else f'{len(units)}개'
@@ -482,7 +487,8 @@ def cmd_make(a) -> int:
         if len(새) == 1:
             t = f.read_text(encoding='utf-8')
             t = re.sub(r'^# .+? 읽기 기록', f'# {자.제목(새[0])} 읽기 기록', t, count=1, flags=re.M)
-            t = re.sub(r'^파일:.*$', f'파일: {nfc(str(전체[새[0]].relative_to(자.사건)))}', t, count=1, flags=re.M)
+            새경로 = nfc(전체[새[0]].relative_to(자.사건).as_posix())
+            t = re.sub(r'^파일:.*$', lambda _: f'파일: {새경로}', t, count=1, flags=re.M)
             자.기록_파일(새[0]).write_text(t, encoding='utf-8')
             f.unlink()
             옛글 = 자.글 / f'{k_old}.txt'
