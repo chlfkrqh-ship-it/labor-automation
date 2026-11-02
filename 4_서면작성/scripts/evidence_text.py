@@ -13,8 +13,9 @@ PDF 가 아닌 호증도 단위(압축 안 파일, 엑셀 시트, 문서 전체)
   형식대로 다시 뽑는다. 텍스트(.txt·.csv): UTF-16 머리표가 있으면 UTF-16, 그 밖은 utf-8, 안 되면 cp949.
 - 문서 안의 그림은 아주 작은 것(아이콘·글머리표, 64×64 화소 미만)만 빼고 모두 그림으로 볼 것이 된다. 바로 열 수 없는 그림
   (워드에 붙인 .emf·.wmf 등)은 Pillow(윈도)나 LibreOffice 로 PNG 로 바꾸고, 바꾸지 못하면 그 까닭을 돌려준다.
-- 옛 형식(.doc·.xls·.hwp)은 PDF 로 바꾸어(한글 파일은 이 PC의 한글, 그 밖은 LibreOffice) 면마다 읽게 한다(`PDF로`). 그림이 든
-  면도 그림으로 볼 면이 되어 빠지지 않는다. .msg 는 extract_msg 로 읽는다. 바꿀 길이 없으면 그 까닭을 돌려준다.
+- 옛 형식 .doc·.xls 는 이 PC의 워드·엑셀(없으면 LibreOffice)로 .docx·.xlsx 로 바꾸어 위와 같이 읽는다(`새형식`. PDF 로 바꾸면
+  숨긴 시트·행·열과 메모가 빠진다). .hwp 는 이 PC의 한글로 PDF 로 바꾸어 면마다 읽게 한다(`PDF로`). 그림이 든 면도 그림으로 볼 면이
+  되어 빠지지 않는다. .msg 는 extract_msg 로 읽는다. 바꿀 길이 없으면 그 까닭을 돌려준다.
   한글 파일(.hwp)은 한글 자동화가 있는 PC에서만 읽힌다. 그런 호증은 제출용 PDF 를 만들어 두면 그 PDF 로 읽는다.
 
 2026. 11. 3. 담당 노무사 "압축·엑셀·문서 호증도 확인표 넣어줘".
@@ -217,8 +218,9 @@ _기호 = {'A8': '☐', 'FE': '☑', 'FD': '☒', '78': '☒', 'FC': '✓', 'FB'
 
 
 def _w_글(el) -> str:
-    """문단 하나의 글(글상자 안 글 포함). 지운 글은 '[지움: …]'으로 남긴다. 옛 판 대체본(mc:Fallback)은 같은 글이라 건너뛴다."""
-    out = []
+    """문단 하나의 글(글상자 안 글 포함). 지운 글은 '[지움: …]'으로 남긴다(이어진 지운 조각은 하나로). 옛 판 대체본(mc:Fallback)은
+    같은 글이라 건너뛴다."""
+    out = []      # 글 조각. 지운 글은 ('지움', 글)
 
     def 걷기(x):
         for c in x:
@@ -227,7 +229,10 @@ def _w_글(el) -> str:
             if c.tag == W + 't':
                 out.append(c.text or '')
             elif c.tag == W + 'delText':
-                out.append(f'[지움: {c.text or ""}]')
+                if out and isinstance(out[-1], tuple):
+                    out[-1] = ('지움', out[-1][1] + (c.text or ''))
+                else:
+                    out.append(('지움', c.text or ''))
             elif c.tag == W + 'tab':
                 out.append('\t')
             elif c.tag in (W + 'br', W + 'cr'):
@@ -237,7 +242,7 @@ def _w_글(el) -> str:
                 out.append(_기호.get(ch[-2:], '[기호]') if ch[:2] in ('F0', '00') else '[기호]')
             걷기(c)
     걷기(el)
-    return ''.join(out)
+    return ''.join(f'[지움: {x[1]}]' if isinstance(x, tuple) else x for x in out)
 
 
 def _w_몸(몸) -> list:
@@ -624,11 +629,54 @@ def _한글_PDF(data: bytes, ext: str) -> bytes | None:
 
 
 def PDF로(이름: str, data: bytes) -> bytes | None:
-    """옛 형식(.doc·.xls·.hwp)을 PDF 로. 한글 파일은 한글, 그 밖은 LibreOffice. 바꾸지 못하면 None."""
+    """한글 파일(.hwp)을 PDF 로. 이 PC의 한글, 없으면 LibreOffice. 바꾸지 못하면 None."""
+    return _한글_PDF(data, '.hwp') or _libre(data, '.hwp', 'pdf')
+
+
+def _오피스_바꾸기(data: bytes, ext: str) -> bytes | None:
+    """윈도의 워드·엑셀로 .doc → .docx, .xls → .xlsx(`evidence_cite_review.py` 의 워드 자동화와 같은 꼴). 없으면 None.
+    암호가 걸린 파일은 암호 창을 띄우지 않게 빈 암호를 주어 못 연 것으로 친다."""
+    if sys.platform != 'win32':
+        return None
+    try:
+        import win32com.client as win32
+    except ImportError:
+        return None
+    with 임시_폴더() as d:
+        src, out = Path(d) / f'원본{ext}', Path(d) / ('바꿈.docx' if ext == '.doc' else '바꿈.xlsx')
+        src.write_bytes(data)
+        try:
+            if ext == '.doc':
+                app = win32.DispatchEx('Word.Application')
+                app.Visible, app.DisplayAlerts = False, 0
+                try:
+                    doc = app.Documents.Open(str(src), ConfirmConversions=False, ReadOnly=True, AddToRecentFiles=False, PasswordDocument='')
+                    doc.SaveAs2(str(out), FileFormat=16)      # wdFormatXMLDocument
+                    doc.Close(False)
+                finally:
+                    if app.Documents.Count == 0:
+                        app.Quit()
+            else:
+                app = win32.DispatchEx('Excel.Application')
+                app.Visible, app.DisplayAlerts = False, False
+                try:
+                    wb = app.Workbooks.Open(str(src), UpdateLinks=0, ReadOnly=True, Password='')
+                    wb.SaveAs(str(out), FileFormat=51)      # xlOpenXMLWorkbook
+                    wb.Close(False)
+                finally:
+                    if app.Workbooks.Count == 0:
+                        app.Quit()
+            return out.read_bytes() if out.is_file() else None
+        except Exception:
+            return None
+
+
+def 새형식(이름: str, data: bytes) -> bytes | None:
+    """옛 형식 .doc → .docx, .xls → .xlsx. 윈도의 워드·엑셀, 없으면 LibreOffice. 못 하면 None.
+    PDF 로 바꾸면 숨긴 시트·행·열과 메모가 빠지므로 새 형식으로 바꾸어 같은 방식(docx_글·xlsx_시트들)으로 읽는다."""
     ext = Path(이름).suffix.lower()
-    if ext == '.hwp':
-        return _한글_PDF(data, ext) or _libre(data, ext, 'pdf')
-    return _libre(data, ext, 'pdf')
+    b = _오피스_바꾸기(data, ext) or _libre(data, ext, 'docx' if ext == '.doc' else 'xlsx')
+    return b if b and b[:2] == b'PK' else None
 
 
 def msg_글(data: bytes) -> dict:
