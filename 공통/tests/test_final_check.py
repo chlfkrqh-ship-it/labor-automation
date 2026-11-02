@@ -99,8 +99,11 @@ class BriefGateTest(unittest.TestCase):
             er.main(['make', str(self.case), '--no-ocr'])
         rec = self.case / '증거관리' / '호증읽기' / '사6.md'
         t = rec.read_text(encoding='utf-8')
-        t = t.replace('읽은 방식: \n', '읽은 방식: 글자층 전 면\n').replace('- 1면: ', '- 1면: 안전 문자').replace('- 2면: ', '- 2면: 안전 문자')
-        t = t.replace('- 3면: ', '- 3면: 시험 기기 사용 금지').replace('면)\n\n- \n', '면)\n\n- 3면 "작업 중 시험 기기 사용 금지"\n')
+        확인 = dict(re.findall(r'\[(\d+)면 끝 · 확인표 ([A-Z0-9]{4})\]',
+                              (self.case / '증거관리' / '호증글자' / '사6.txt').read_text(encoding='utf-8')))   # 면마다 끝까지 열어 본 증표
+        t = t.replace('읽은 방식: \n', '읽은 방식: 글자층 전 면\n').replace('- 1면: ', f'- 1면: 안전 문자 확인표 {확인["1"]}')
+        t = t.replace('- 2면: ', f'- 2면: 안전 문자 확인표 {확인["2"]}').replace('- 3면: ', f'- 3면: 시험 기기 사용 금지 확인표 {확인["3"]}')
+        t = t.replace('면)\n\n- \n', '면)\n\n- 3면 "작업 중 시험 기기 사용 금지"\n')
         rec.write_text(t, encoding='utf-8')
         REAL_RUN([ROOT / '4_서면작성/scripts/evidence_words.py', self.case, '--낱말', '시험', '--no-ocr'])
         표 = self.r / '작업' / '쟁점낱말_대조.md'

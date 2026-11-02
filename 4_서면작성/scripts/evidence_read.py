@@ -3,6 +3,7 @@
     python -B 4_서면작성/scripts/evidence_read.py make  "<사건 폴더>" [--호증 사6 노 ...] [--no-ocr] [--no-text]
     python -B 4_서면작성/scripts/evidence_read.py make  "<사건 폴더>" --다시 사6        # 파일이 바뀐 호증의 기록을 새로 짠다
     python -B 4_서면작성/scripts/evidence_read.py check "<사건 폴더>" [--호증 ...]
+    python -B 4_서면작성/scripts/evidence_read.py 그림  "<사건 폴더>" --호증 을105-8 [--면 3 7] [--전부]   # 그림으로 볼 면을 확인표와 함께 연다
     python -B 4_서면작성/scripts/evidence_read.py make  "1_검토의견/사건/{의뢰인}_{검토내용}" --자료 "<첨부 폴더>"   # 호증 번호 없는 자료
 
 make  서면 사건은 호증마다(우리·상대, PDF 가 아닌 원자료 포함) `증거관리/호증읽기/{호증키}.md` 틀을 만든다. 틀에는 파일·해시·단위 수와
@@ -11,7 +12,15 @@ make  서면 사건은 호증마다(우리·상대, PDF 가 아닌 원자료 포
       `--자료` 를 주면 그 폴더의 파일마다 `작업/자료읽기/{파일 이름}.md` 와 `작업/자료글자/{파일 이름}.txt` 를 만든다.
       호증 번호를 다시 매겨 기록의 호증키와 파일이 어긋나면, 해시가 같은 파일의 호증키로 기록을 옮긴다.
 check 모든 호증(자료)에 기록이 있는지, 기록한 뒤 파일이 바뀌지 않았는지(해시), 모든 단위가 채워졌는지, '읽은 방식'과
-      '쟁점에 닿는 문구'가 적혔는지 본다. 하나라도 어긋나면 종료 코드 1 이다.
+      '쟁점에 닿는 문구'가 적혔는지, 면마다 확인표가 맞는지, 다 읽지 않았다는 표현(모음 그림, '…중심으로 읽음')이 없는지 본다.
+      하나라도 어긋나면 종료 코드 1 이다.
+그림  그림으로 볼 면(스캔한 표, 사진, 문자인식이 깨진 면)과 그림 호증을 원본에 가까운 크기로 그려 아래 띠에 확인표를 적어
+      시스템 임시 폴더에 둔다(OneDrive 에 쌓지 않는다). 작성 세션은 그 그림을 한 장씩 열어 읽는다.
+
+확인표: 면별 글의 면마다 끝에 '[3면 끝 · 확인표 K7QF]'가 있고, 그림으로 볼 면은 `그림` 이 그린 그림 아래 띠에 있다. 그 면을 끝까지 열어
+본 세션만 알 수 있으므로 기록의 그 면 줄('- 3면: … 확인표 K7QF')에 옮겨 적는다. 묶은 줄('- 5~9면:')에는 그 면들의 확인표를 모두 적는다.
+확인표는 사건 폴더 이름·파일 해시·면 번호로 정해지므로 다른 사건의 기록을 옮겨 와도 맞지 않는다. 스크립트로 확인표만 뽑거나 줄을 걸러 읽지 않는다.
+모음 그림(여러 면을 줄여 한 장에 모은 그림)은 글자를 읽을 수 없으므로 읽은 것으로 치지 않는다.
 
 작성 세션은 면별 글과 그림으로 모든 면을 읽고 면마다 그 면에 무엇이 있는지 적는다. 같은 꼴의 면(일자별 문자, 월별 대장)은
 '- 5~9면:' 처럼 묶을 수 있으나 면마다 다른 것(날짜·대상·문구)을 함께 적는다. '같음', '반복', '…' 만 적은 줄은 빈 줄로 센다.
@@ -20,6 +29,9 @@ check 모든 호증(자료)에 기록이 있는지, 기록한 뒤 파일이 바�
 2026. 11. 2. GGM 정직 3월: 사 제6호증(38면, 글자층 없음)을 첫 면만 읽고 '반복 기재'로 요약하여 3면의 쟁점 문구를 답변서(1)·(2)와
 그 뒤의 자체 재검토에서 모두 놓친 일로 만들었다. 담당 노무사 "노동사건자동화는 결국 문체, 증거, 판례 세 가지에 어떠한 하자도
 없어야", "증거(편철, 파악, 이해 등 모든 걸 포함)".
+2026. 11. 3. 한전 태양광 22명(노정일): 스캔 계좌내역 5건 95면(기록이 찬 25건 글자의 72.6%)을 문자인식 줄을 임시 스크립트로 걸러 금액이 큰 줄과
+이름 줄 중심으로 읽고 나머지를 모음 그림으로 보았는데 '그림 전 면(모음 그림)'이라는 자기 신고로 check 를 지났다. 그 범위에서 원고 문답서와
+부딪히는 거래가 나왔다. 확인표와 스캔 표 줄 복원을 넣었다. 담당 노무사 "법률자료작성이므로 완결성 100%에 수렴해야 한다고 대충 읽고 쓰면 그게 되겠니".
 """
 from __future__ import annotations
 
@@ -28,8 +40,10 @@ import datetime as dt
 import hashlib
 import importlib.util
 import os
+import math
 import re
 import sys
+import tempfile
 import unicodedata
 import zipfile
 from pathlib import Path
@@ -48,6 +62,20 @@ DOCS = IMAGE + ('.pdf', '.zip', '.xlsx', '.xlsm', '.xls', '.docx', '.doc', '.hwp
 면_줄 = re.compile(r'^-\s*(\d+)\s*(?:~\s*(\d+)\s*)?면\s*:\s*(.*)$')
 단위_줄 = re.compile(r'^-\s*\[(파일|시트)\]\s*(.+?)\s*:\s*(.*)$')
 전체_줄 = re.compile(r'^-\s*전체\s*:\s*(.*)$')
+확인_글자 = 'ACDEFGHJKLMNPQRTUVWXY3479'      # 헷갈리는 글자(0·O, 1·I, 2·Z, 5·S, 6·G, 8·B)는 쓰지 않는다
+# 다 읽지 않았다는 표현. 내용 설명('안전 수칙을 중심으로 진행')에 걸리지 않게 읽는 말과 붙은 것만 본다
+거른말 = re.compile(r'모음\s*그림|썸네일|축소\s*그림'
+                 r'|(?:중심으로|위주로)\s*(?:만\s*)?(?:읽|보|봄|확인)'
+                 r'|(?:일부|몇\s*줄)\s*(?:만\s*)?(?:줄\s*(?:만\s*)?)?(?:읽|보고|보았|봄)'
+                 r'|(?:걸러|골라|추려|훑어|대강|대충)\s*(?:서\s*)?(?:읽|보|봄|확인)'
+                 r'|나머지(?:는|도|\s*면은|\s*줄은)?\s*(?:모음|그림으로만|생략|훑|보지|읽지)'
+                 r'|(?:면|줄|쪽)(?:은|을|는)?\s*건너')
+
+
+def 확인표(사건: Path, 해: str, no, 갈래: str) -> str:
+    """면마다 끝에 붙는 확인표. 갈래는 '글'(면별 글) 또는 '그림'·'그림2'…(그림으로 본 면·조각). 그 면을 끝까지 열어 본 세션만 안다."""
+    h = hashlib.sha1(f'{nfc(Path(사건).resolve().name)}|{해}|{no}|{갈래}'.encode('utf-8')).digest()
+    return ''.join(확인_글자[b % len(확인_글자)] for b in h[:4])
 
 
 def nfc(s: str) -> str:
@@ -195,7 +223,8 @@ def 틀(자: 자리, k: str, p: Path, units: list, 앞선: str = '') -> str:
           f'파일: {rel}', f'해시: {해시(p)} · {수}', f'만든 날: {dt.date.today().isoformat()}',
           '읽은 방식: ', '',
           '<!-- 모든 면을 읽고 면마다 그 면에 무엇이 있는지 적는다. 같은 꼴의 면은 "- 5~9면:" 으로 묶되 면마다 다른 것(날짜·대상·문구)을 함께 적는다. '
-          '"읽은 방식"에는 글자층·문자인식·그림 가운데 실제로 본 방식과 그림으로 본 면을 적는다. -->', '',
+          '"읽은 방식"에는 글자층·문자인식·그림 가운데 실제로 본 방식과 그림으로 본 면을 적는다. '
+          '면별 글의 면 끝 확인표(그림으로 볼 면은 `그림` 이 그린 그림 아래 띠의 확인표)를 그 면 줄에 옮긴다. 줄을 걸러 읽거나 모음 그림으로 갈음하지 않는다. -->', '',
           '## 면별 내용', '']
     for u in units:
         줄.append(f'- {u}면: ' if isinstance(u, int) else f'- {u}: ')
@@ -239,7 +268,8 @@ def 옮겨_오기(자: '자리', k: str, p: Path, units: list, 원본: Path) -> 
     except ValueError:
         출처 = nfc(str(원본))
     수 = f'{len(units)}면' if units and isinstance(units[0], int) else f'{len(units)}개'
-    면별 = [re.sub(r'^(\s*-\s*[^:]+?:\s*)', r'\1(옮김) ', l) if re.match(r'^\s*-', l) else l for l in 절(t, '면별 내용') if l.strip()]
+    면별 = [re.sub(r'\s*확인표\s*[A-Z0-9]{4}', '', re.sub(r'^(\s*-\s*[^:]+?:\s*)', r'\1(옮김) ', l)) if re.match(r'^\s*-', l) else l
+           for l in 절(t, '면별 내용') if l.strip()]
     줄 = [f'# {자.제목(k)} 읽기 기록', '',
           f'파일: {rel}', f'해시: {r["해시"]} · {수}', f'만든 날: {dt.date.today().isoformat()}',
           f'옮겨 온 기록: {출처} (같은 파일이다. 그 사건에서 읽은 면별 내용을 참고로 옮겼다. 그 사건이 읽은 방식: {r["방식"]})',
@@ -307,6 +337,67 @@ def 기록_읽기(text: str) -> dict:
             '문구': [x for x in 문구 if x]}
 
 
+def 단위_줄들(text: str) -> list:
+    """'면별 내용'의 줄마다 (그 줄이 덮는 단위, 내용)."""
+    out = []
+    for line in 절(text, '면별 내용'):
+        line = line.strip()
+        m = 면_줄.match(line)
+        if m:
+            out.append((set(range(int(m.group(1)), int(m.group(2) or m.group(1)) + 1)), m.group(3)))
+            continue
+        m = 단위_줄.match(line)
+        if m:
+            out.append(({f'[{m.group(1)}] {nfc(m.group(2))}'}, m.group(3)))
+            continue
+        m = 전체_줄.match(line)
+        if m:
+            out.append(({'전체'}, m.group(1)))
+    return out
+
+
+def 그림_면들(자: 자리, k: str) -> tuple:
+    """면별 글에서 (그림으로 볼 면, 확인표가 있는 판인지). 면별 글이 없으면 (None, False)."""
+    f = 자.글_파일(k)
+    if not f.is_file():
+        return None, False
+    t = f.read_text(encoding='utf-8', errors='replace')
+    return {int(x) for x in re.findall(r'^=== (\d+)면 .*? — 그림으로 볼 면\(', t, re.M)}, '면 끝 · ' in t
+
+
+def 그림_조각수(p: Path) -> int:
+    """그림 호증을 몇 조각으로 여는지. 긴 화면 갈무리는 한 장으로 줄이면 글자를 못 읽으므로 폭의 1.4배 높이로 자른다. 못 열면 0."""
+    try:
+        d = _ecr.pymupdf.open(p)
+    except Exception:
+        return 0
+    try:
+        r = d[0].rect
+        return max(1, math.ceil(r.height / (r.width * 1.4))) if r.width > 0 else 0
+    except Exception:
+        return 0
+    finally:
+        d.close()
+
+
+def 기대_확인표(자: 자리, k: str, p: Path) -> dict | None:
+    """단위 → 그 단위 줄에 있어야 할 확인표들. PDF 와 그림 호증만 보고, 그 밖(압축·엑셀·문서·소리)은 None 이다(읽은 방식의 신고로 본다)."""
+    suf = p.suffix.lower()
+    if suf == '.pdf':
+        그림, _ = 그림_면들(자, k)
+        if 그림 is None:
+            return None
+        해 = 해시(p)
+        return {no: [확인표(자.사건, 해, no, '그림' if no in 그림 else '글')] for no in 단위들(p)}
+    if suf in IMAGE:
+        n = 그림_조각수(p)
+        if not n:
+            return None
+        해 = 해시(p)
+        return {1: [확인표(자.사건, 해, 1, '그림' if i == 1 else f'그림{i}') for i in range(1, n + 1)]}
+    return None
+
+
 def 문제들(자: 자리, k: str, p: Path) -> list:
     f = 자.기록_파일(k)
     if not f.is_file():
@@ -334,6 +425,26 @@ def 문제들(자: 자리, k: str, p: Path) -> list:
             out.append(f"그림으로 볼 면 {면_표시(못본)}면을 그림으로 본 기록이 없다('읽은 방식'에 '그림 {'·'.join(map(str, 못본[:5]))}면'처럼 적는다)")
     if not r['문구']:
         out.append("'쟁점에 닿는 문구'가 비었다(원문 그대로와 면. 없으면 '없음')")
+    text = f.read_text(encoding='utf-8')
+    if p.suffix.lower() == '.pdf':
+        그림, 새판 = 그림_면들(자, k)
+        if 그림 is None:
+            out.append('면별 글이 없다 — `make` 로 만들고 면마다 끝까지 읽는다(면 끝의 확인표를 기록에 옮긴다)')
+        elif not 새판:
+            out.append('면별 글이 확인표가 없는 옛 판이다 — `make` 를 다시 돌려 새로 쓰고 면마다 다시 읽어 확인표를 옮긴다')
+    기대 = 기대_확인표(자, k, p)
+    if 기대:
+        줄들 = 단위_줄들(text)
+        틀린 = [u for u, toks in 기대.items()      # 띄어 옮겨도('F Q U G') 맞게 본다
+              if not all(x in re.sub(r'\s', '', ' '.join(c for us, c in 줄들 if u in us)).upper() for x in toks)]
+        if 틀린:
+            out.append(f"확인표가 없거나 맞지 않는 면 {len(틀린)}/{len(기대)}: {면_표시(틀린)}면 — 면별 글은 그 면 끝까지 읽고, 그림으로 볼 면과 그림 호증은 "
+                       f"`evidence_read.py 그림` 이 그린 그림을 한 장씩 열어 끝의 확인표를 그 면 줄에 옮긴다(줄을 걸러 읽거나 모음 그림으로 갈음하지 않는다)")
+    거른 = [m.group(0) for 줄 in [r['방식']] + [c for _, c in 단위_줄들(text)] for m in [거른말.search(줄)] if m]
+    if 거른:
+        말들 = "', '".join(dict.fromkeys(거른))
+        out.append(f"다 읽지 않았다는 표현이 있다('{말들}') — 그 면을 처음부터 끝까지 읽고 기록을 고친다. "
+                   '모음 그림은 글자를 읽을 수 없어 읽은 것으로 치지 않는다')
     return out
 
 
@@ -370,6 +481,26 @@ def 표_줄(page, units: list) -> tuple:
     return 밖, 표
 
 
+def 줄_복원(units: list) -> list:
+    """문자인식 면의 조각을 높이가 같은 것끼리 왼쪽부터 한 줄로 잇는다. 스캔한 표(계좌내역·대장)는 칸이 조각으로 따로 읽혀
+    거래 한 건이 여러 줄로 흩어지므로 칸을 '|'로 이어 줄로 돌린다. 글자는 하나도 빼지 않는다(2026. 11. 3. 한전 계좌내역)."""
+    조각 = [(줄_꼴(t), b) for t, b in units if 줄_꼴(t)]
+    if not 조각:
+        return []
+    높이 = sorted(max(1.0, b[3] - b[1]) for _, b in 조각)
+    h = 높이[len(높이) // 2]
+    줄들 = []
+    for 글, b in sorted(조각, key=lambda u: ((u[1][1] + u[1][3]) / 2, u[1][0])):
+        yc = (b[1] + b[3]) / 2
+        if 줄들 and abs(yc - 줄들[-1][0]) <= h * 0.6:
+            줄들[-1][1].append((b[0], 글))
+            n = len(줄들[-1][1])
+            줄들[-1][0] = (줄들[-1][0] * (n - 1) + yc) / n
+        else:
+            줄들.append([yc, [(b[0], 글)]])
+    return ['| ' + ' | '.join(g for _, g in sorted(c)) + ' |' if len(c) > 1 else c[0][1] for _, c in 줄들]
+
+
 def 숫자표_같나(줄들: list) -> bool:
     """문자인식 면이 숫자 표(대장·명세)로 보이는가. 칸이 섞여 읽히므로 그림으로 본다."""
     숫자줄 = 0
@@ -389,6 +520,7 @@ def 글_쓰기(자: 자리, k: str, p: Path, use_ocr: bool) -> tuple:
     사진·도표가 큰 면)만 '그림으로 볼 면'으로 표시한다. 그 면은 반드시 그림으로 열고, 기록의 '읽은 방식'에 면 번호를 적는다."""
     if p.suffix.lower() != '.pdf':
         return '', {}
+    해 = 해시(p)
     캐시 = 자.글
     ocr_dirs = [str(x) for x in 자.사건.glob('라운드*/작업/증거인용검토*/ocr')] + [str(캐시 / 'ocr')]
     ex = _ecr.Exhibit(자.이름(k), p, 캐시, ocr_dirs=ocr_dirs, use_ocr=use_ocr)
@@ -413,6 +545,8 @@ def 글_쓰기(자: 자리, k: str, p: Path, use_ocr: bool) -> tuple:
                 그림[no] = '글자 적음'
             elif src.startswith('글자층') and 그림_비율(ex.doc[no - 1]) >= 0.25:
                 그림[no] = '사진·도표 있음'
+            if 그림.get(no) == '숫자 표(칸 맞춤)':      # 칸을 줄로 돌려 읽게 하고, 숫자는 그림으로 맞댄다
+                줄들 = 줄_복원(e['units'])
             면들.append((no, src, 줄들, 표))
     finally:
         ex.close()
@@ -429,7 +563,10 @@ def 글_쓰기(자: 자리, k: str, p: Path, use_ocr: bool) -> tuple:
         for t in sorted((t for t, c in 셈.items() if c >= 기준 and len(t) >= 4), key=lambda t: -셈[t]):
             번호[t] = len(번호) + 1
     머리 = [f'# {자.제목(k)} 면별 글 — {nfc(p.name)}', '',
-            f'{n}면. 그림으로 볼 면: ' + (', '.join(f'{no}면({why})' for no, why in sorted(그림.items())) if 그림 else '없음')]
+            f'{n}면. 그림으로 볼 면: ' + (', '.join(f'{no}면({why})' for no, why in sorted(그림.items())) if 그림 else '없음'),
+            '면마다 끝까지 읽고 끝의 확인표를 기록의 그 면 줄에 옮긴다. 그림으로 볼 면은 '
+            f'`python -B 4_서면작성/scripts/evidence_read.py 그림 "<사건 폴더>" --호증 {k}` 이 그린 그림을 한 장씩 열어 읽고 그림 아래 띠의 확인표를 옮긴다. '
+            '줄을 걸러 읽거나 모음 그림으로 갈음하지 않는다.']
     if 번호:
         머리 += ['', f'## 여러 면에 되풀이되는 줄 {len(번호)}개 — 면마다 [되풀이 줄: 번호]로 적는다(그 면에 그 줄이 있다는 뜻)', '']
         머리 += [f'- R{i}: {t}' for t, i in sorted(번호.items(), key=lambda x: x[1])]
@@ -439,7 +576,9 @@ def 글_쓰기(자: 자리, k: str, p: Path, use_ocr: bool) -> tuple:
             든 = sorted({번호[t] for t in 줄들 if t in 번호})
             줄들 = [t for t in 줄들 if t not in 번호] + ([f'[되풀이 줄: {", ".join(f"R{i}" for i in 든)}]'] if 든 else [])
         표시 = f' — 그림으로 볼 면({그림[no]})' if no in 그림 else ''
-        본문.append(f'=== {no}면 ({src}){표시} ===\n' + '\n'.join(줄들 + 표) + '\n')
+        끝 = (f'[{no}면 끝 · 그림으로 볼 면 — 확인표는 `그림` 이 그린 그림 아래 띠에 있다]' if no in 그림
+             else f'[{no}면 끝 · 확인표 {확인표(자.사건, 해, no, "글")}]')
+        본문.append(f'=== {no}면 ({src}){표시} ===\n' + '\n'.join(줄들 + 표 + [끝]) + '\n')
     자.글_파일(k).parent.mkdir(parents=True, exist_ok=True)
     자.글_파일(k).write_text('\n'.join(머리) + '\n\n' + '\n'.join(본문), encoding='utf-8')
     return (f'그림으로 볼 면 {면_표시(sorted(그림))}' if 그림 else ''), 그림
@@ -514,7 +653,8 @@ def cmd_make(a) -> int:
             t = next((x for x in (옮겨_오기(자, k, p, units, g) for g in 색인.get(현재해시[k], [])) if x), None)
             f.write_text(t or 틀(자, k, p, units), encoding='utf-8')
             (옮겨옴 if t else 새로).append(k)
-        if not a.no_text and (k in 새로 or k in 옮겨옴 or not 자.글_파일(k).is_file()):
+        옛글 = p.suffix.lower() == '.pdf' and 자.글_파일(k).is_file() and not 그림_면들(자, k)[1]      # 확인표가 없는 옛 판
+        if not a.no_text and (k in 새로 or k in 옮겨옴 or not 자.글_파일(k).is_file() or 옛글):
             msg, 그림 = 글_쓰기(자, k, p, not a.no_ocr)
             if p.suffix.lower() == '.pdf':
                 그림면_적기(f, 그림)
@@ -531,7 +671,94 @@ def cmd_make(a) -> int:
         print(f'  바뀜: {자.제목(k)} — `make --다시 {k}` 로 새로 짠다')
     for s in 알림:
         print('  ' + s)
-    print('다음: 면별 글(' + str(자.글) + ')과 그림으로 모든 면을 읽고 기록을 채운 뒤 `check` 를 돌린다.')
+    print('다음: 면별 글(' + str(자.글) + ')을 면마다 끝까지 읽고, 그림으로 볼 면과 그림 호증은 `그림 --호증 {호증}` 이 그린 그림을 한 장씩 열어 '
+          '읽은 뒤 면마다 끝의 확인표를 그 면 줄에 옮겨 기록을 채우고 `check` 를 돌린다.')
+    return 0
+
+
+def 띠_붙여_저장(pix, 글: str, 표: str, out: Path):
+    """그림 아래에 띠를 붙여 왼쪽에 호증·면을, 오른쪽 끝에 확인표를 적어 저장한다. 그림 위는 덮지 않는다.
+    띠의 글자는 한 장씩 열면 읽히고 여러 장을 줄여 모으면 읽히지 않는다. 확인표는 글자 사이가 벌어지지 않게 영문 글꼴로 적는다."""
+    띠 = 40
+    크기 = max(14, pix.width / 75)      # 본문 작은 글자만 하게: 한 장으로 열면 읽히고, 넉 장 넘게 줄여 모으면 읽히지 않는다
+    d = _ecr.pymupdf.open()
+    try:
+        pg = d.new_page(width=pix.width, height=pix.height + 띠)
+        pg.insert_image(_ecr.pymupdf.Rect(0, 0, pix.width, pix.height), pixmap=pix)
+        try:
+            pg.insert_text((14, pix.height + 26), 글 + ' · 확인표', fontsize=크기, fontname='korea')
+        except Exception:
+            pg.insert_text((14, pix.height + 26), 'check code', fontsize=크기)
+        x = pix.width - _ecr.pymupdf.get_text_length(표, fontname='hebo', fontsize=크기) - 14
+        pg.insert_text((x, pix.height + 26), 표, fontsize=크기, fontname='hebo')
+        pg.get_pixmap(dpi=72).save(str(out))
+    finally:
+        d.close()
+
+
+def cmd_그림(a) -> int:
+    """그림으로 볼 면(PDF)과 그림 호증을 원본에 가까운 크기로 그려 아래 띠에 확인표를 적는다. 시스템 임시 폴더에 둔다."""
+    자, 목록, _ = 대상(a)
+    if not 목록:
+        print('읽을 호증(자료)이 없습니다:', a.case)
+        return 2
+    뿌리_폴더 = Path(a.out) if a.out else Path(tempfile.gettempdir()) / '증거그림' / nfc(자.사건.resolve().name)
+    for k in sorted(목록, key=호증_정렬):
+        p = 목록[k]
+        suf = p.suffix.lower()
+        if suf not in ('.pdf',) + IMAGE:
+            continue
+        폴더 = 뿌리_폴더 / 자.이름(k)
+        폴더.mkdir(parents=True, exist_ok=True)
+        for old in 폴더.glob('*.png'):
+            old.unlink()
+        해, 만든 = 해시(p), []
+        if suf == '.pdf':
+            그림, _ = 그림_면들(자, k)
+            if 그림 is None:
+                print(f'{자.제목(k)}: 면별 글이 없다 — 먼저 `make` 를 돌린다')
+                continue
+            d = _ecr.pymupdf.open(p)
+            try:
+                면 = list(range(1, len(d) + 1)) if a.전부 else sorted(a.면 or 그림)
+                for no in 면:
+                    if not 1 <= no <= len(d):
+                        continue
+                    pg = d[no - 1]
+                    z = min(150 / 72, 2200 / max(pg.rect.width, pg.rect.height))
+                    pix = pg.get_pixmap(matrix=_ecr.pymupdf.Matrix(z, z))
+                    out = 폴더 / f'{no:03d}면.png'
+                    띠_붙여_저장(pix, f'{자.제목(k)} {no}면', 확인표(자.사건, 해, no, '그림' if no in 그림 else '글'), out)
+                    만든.append(out)
+            finally:
+                d.close()
+        else:
+            n = 그림_조각수(p)
+            if not n:
+                print(f'{자.제목(k)}: 그림을 열지 못했다({nfc(p.name)}) — 원본을 직접 열어 읽고 \'읽은 방식\'에 적는다')
+                continue
+            d = _ecr.pymupdf.open(p)
+            try:
+                pg = d[0]
+                r = pg.rect
+                try:
+                    폭 = _ecr.pymupdf.Pixmap(str(p)).width
+                except Exception:
+                    폭 = r.width
+                z = min(폭, 1600) / r.width
+                단 = r.width * 1.4
+                for i in range(n):
+                    clip = _ecr.pymupdf.Rect(0, i * 단, r.width, min(r.height, (i + 1) * 단 + 단 * 0.04))
+                    pix = pg.get_pixmap(matrix=_ecr.pymupdf.Matrix(z, z), clip=clip)
+                    out = 폴더 / f'{i + 1:02d}조각.png'
+                    띠_붙여_저장(pix, f'{자.제목(k)} {i + 1}/{n}조각', 확인표(자.사건, 해, 1, '그림' if i == 0 else f'그림{i + 1}'), out)
+                    만든.append(out)
+            finally:
+                d.close()
+        print(f'{자.제목(k)}: {len(만든)}장 → {폴더}')
+        for f in 만든:
+            print(f'  {f}')
+    print('다음: 그림을 한 장씩 원본 크기로 열어 읽고 그림 아래 띠의 확인표를 기록의 그 면 줄에 옮긴다. 여러 장을 줄여 모은 그림으로 보지 않는다.')
     return 0
 
 
@@ -563,7 +790,7 @@ def cmd_check(a) -> int:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description='호증(자료)을 모든 면 읽었는지 기록하고 확인한다')
     sub = ap.add_subparsers(dest='cmd', required=True)
-    for name in ('make', 'check'):
+    for name in ('make', 'check', '그림'):
         s = sub.add_parser(name)
         s.add_argument('case')
         s.add_argument('--자료', nargs='+', help='호증 번호 없는 자료 폴더(검토의견의 첨부 등)')
@@ -572,8 +799,12 @@ def main(argv=None) -> int:
             s.add_argument('--다시', nargs='+', help='파일이 바뀐 이 호증키의 기록을 새로 짠다(앞선 기록은 끝에 옮겨 둔다)')
             s.add_argument('--no-ocr', action='store_true')
             s.add_argument('--no-text', action='store_true', help='면별 글을 만들지 않는다')
+        if name == '그림':
+            s.add_argument('--면', nargs='+', type=int, help='이 면만(PDF). 주지 않으면 그림으로 볼 면')
+            s.add_argument('--전부', action='store_true', help='PDF 의 모든 면을 그린다(글 면도 그림으로 읽을 때)')
+            s.add_argument('--out', help='그림을 둘 폴더(주지 않으면 시스템 임시 폴더. OneDrive 에 쌓지 않는다)')
     a = ap.parse_args(argv)
-    return cmd_make(a) if a.cmd == 'make' else cmd_check(a)
+    return cmd_make(a) if a.cmd == 'make' else cmd_check(a) if a.cmd == 'check' else cmd_그림(a)
 
 
 if __name__ == '__main__':

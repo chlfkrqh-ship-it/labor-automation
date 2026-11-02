@@ -8,6 +8,7 @@ import importlib.util
 import io
 import os
 from pathlib import Path
+import re
 import tempfile
 import unittest
 from unittest import mock
@@ -32,6 +33,16 @@ def make_pdf(path: Path, pages):
     for t in pages:
         d.new_page().insert_text((40, 72), t, fontsize=7, fontname='korea')
     d.save(path)
+
+
+def tok(case: Path, key: str, no: int) -> str:
+    """그 면의 확인표. 글 면은 면별 글의 면 끝에서 읽고, 그림으로 볼 면은 `그림` 이 그린 띠의 값(같은 셈)이다."""
+    글자 = (case / '증거관리' / '호증글자' / f'{key}.txt').read_text(encoding='utf-8')
+    m = re.search(r'\[%d면 끝 · 확인표 ([A-Z0-9]{4})\]' % no, 글자)
+    if m:
+        return m.group(1)
+    rec = (case / '증거관리' / '호증읽기' / f'{key}.md').read_text(encoding='utf-8')
+    return er.확인표(case, er.해시(case / re.search(r'^파일: (.+)$', rec, re.M).group(1)), no, '그림')
 
 
 def run(*args):
@@ -103,13 +114,19 @@ class EvidenceReadTest(unittest.TestCase):
         self.assertIn('읽지 않았거나 비운 단위 2/3: 2~3면', out)
         self.fill('사6', '- 1면: 안전 안내 문자(10. 1.)\n- 2~3면: 반복 기재')   # 묶어서 '반복'만 적은 기록
         self.assertEqual(run('check', self.case, '--호증', '사6')[0], 1)
-        self.fill('사6', '- 1면: 안전 안내 문자(10. 1.)\n- 2면: 안전 안내 문자(10. 2.)\n- 3면: 실천사항 "작업 중 시험 기기 사용 금지"')
+        다 = '- 1면: 안전 안내 문자(10. 1.){}\n- 2면: 안전 안내 문자(10. 2.){}\n- 3면: 실천사항 "작업 중 시험 기기 사용 금지"{}'
+        self.fill('사6', 다.format('', '', ''))                 # 칸은 찼지만 면을 끝까지 열어 본 증표(확인표)가 없다
+        code, out = run('check', self.case, '--호증', '사6')
+        self.assertEqual(code, 1)
+        self.assertIn('확인표가 없거나 맞지 않는 면 3/3: 1~3면', out)
+        self.fill('사6', 다.format(*(f' 확인표 {tok(self.case, "사6", n)}' for n in (1, 2, 3))))
         code, out = run('check', self.case, '--호증', '사6')
         self.assertEqual(code, 0, out)
 
     def test_ranges_and_other_units_count(self):
         run('make', self.case, '--no-ocr')
-        self.fill('사6', '- 1~3면: 일자별 안전 문자(10. 1.~10. 3.), 3면에 시험 기기 사용 금지')
+        확인 = ' '.join(tok(self.case, '사6', n) for n in (1, 2, 3))
+        self.fill('사6', f'- 1~3면: 일자별 안전 문자(10. 1.~10. 3.), 3면에 시험 기기 사용 금지 (확인표 {확인})')
         self.fill('사3', '- [파일] a.jpg: 출입문 사진\n- [파일] b.jpg: 작업대 사진', 문구='없음')
         self.fill('사4', '- [시트] 1월: 1월 근무표\n- [시트] 2월: 2월 근무표', 문구='없음')
         self.assertEqual(run('check', self.case, '--호증', '사6', '사3', '사4')[0], 0)
@@ -124,7 +141,7 @@ class EvidenceReadTest(unittest.TestCase):
 
     def test_changed_file_is_blocked_and_redo_keeps_old_notes(self):
         run('make', self.case, '--no-ocr', '--호증', '사6')
-        self.fill('사6', '- 1면: 가\n- 2면: 나\n- 3면: 다')
+        self.fill('사6', '\n'.join(f'- {n}면: {x} 확인표 {tok(self.case, "사6", n)}' for n, x in ((1, '가'), (2, '나'), (3, '다'))))
         self.assertEqual(run('check', self.case, '--호증', '사6')[0], 0)
         make_pdf(self.ours / '사 제6호증 문자.pdf', [글 + '1면', 글 + '2면', 글 + '3면', 글 + '새로 붙은 4면'])
         code, out = run('check', self.case, '--호증', '사6')
@@ -135,14 +152,14 @@ class EvidenceReadTest(unittest.TestCase):
         t = self.rec('사6').read_text(encoding='utf-8')
         self.assertIn('- 4면: \n', t)
         self.assertIn('## 앞선 기록', t)
-        self.assertIn('- 3면: 다', t.split('## 앞선 기록')[1])
+        self.assertIn('- 3면: 다 확인표', t.split('## 앞선 기록')[1])
         code, out = run('check', self.case, '--호증', '사6')
         self.assertEqual(code, 1)                           # 앞선 기록은 세지 않는다. 다시 읽어 채워야 한다
         self.assertIn('1~4면', out)
 
     def test_renumbered_exhibit_carries_its_record(self):
         run('make', self.case, '--no-ocr', '--호증', '사6')
-        self.fill('사6', '- 1면: 가\n- 2면: 나\n- 3면: 다')
+        self.fill('사6', '\n'.join(f'- {n}면: {x} 확인표 {tok(self.case, "사6", n)}' for n, x in ((1, '가'), (2, '나'), (3, '다'))))
         (self.ours / '사 제6호증 문자.pdf').rename(self.ours / '사 제9호증 문자.pdf')
         code, out = run('make', self.case, '--no-ocr', '--호증', '사9')
         self.assertIn('옮김: 사6 → 사9', out)
@@ -243,7 +260,10 @@ class CheaperReadingTest(unittest.TestCase):
         self.assertIn('그림으로 볼 면: 2면(글자 거의 없음)', t)
         rec = self.rec(self.case, '사4')
         self.assertIn('그림으로 볼 면: 2면(글자 거의 없음)', rec.read_text(encoding='utf-8'))
-        body = '- 1면: 급여 지급 안내와 2명의 1·2월 지급액 표\n- 2면: 담당자 서명'
+        body = (f'- 1면: 급여 지급 안내와 2명의 1·2월 지급액 표 확인표 {tok(self.case, "사4", 1)}\n'
+                f'- 2면: 담당자 서명 확인표 {tok(self.case, "사4", 2)}')
+        self.assertIn('[2면 끝 · 그림으로 볼 면', t)                 # 그림으로 볼 면의 확인표는 글에 없고 그림에만 있다
+        self.assertNotIn(tok(self.case, '사4', 2), t)
         t = rec.read_text(encoding='utf-8')
         head, rest = t.split('## 면별 내용', 1)
         tail = rest.split('## 쟁점에 닿는 문구', 1)[1].replace('\n- \n', '\n- 없음\n', 1)
@@ -254,6 +274,15 @@ class CheaperReadingTest(unittest.TestCase):
         self.assertIn('그림으로 볼 면 2면을 그림으로 본 기록이 없다', out)
         rec.write_text(rec.read_text(encoding='utf-8').replace('읽은 방식: 글자층 1면', '읽은 방식: 글자층 1면, 그림 2면'), encoding='utf-8')
         self.assertEqual(run('check', self.case)[0], 0)
+        그림폴더 = self.root / '그림'
+        code, out = run('그림', self.case, '--호증', '사4', '--out', 그림폴더)
+        self.assertEqual(code, 0, out)
+        png = 그림폴더 / '사4' / '002면.png'
+        self.assertTrue(png.is_file(), out)                          # 그림으로 볼 면만 그린다
+        self.assertFalse((그림폴더 / '사4' / '001면.png').exists())
+        쪽 = pymupdf.open(self.ours / '사 제4호증 급여.pdf')[1].rect
+        pix = pymupdf.Pixmap(str(png))
+        self.assertGreater(pix.height, pix.width * 쪽.height / 쪽.width + 30)      # 그림 아래에 확인표 띠가 붙는다
 
     def test_same_file_read_in_another_case_is_offered_but_must_be_read_again(self):
         쪽 = [글 + f'{n}면 안내' for n in range(1, 4)]
@@ -261,8 +290,10 @@ class CheaperReadingTest(unittest.TestCase):
         run('make', self.case, '--no-ocr')
         rec = self.rec(self.case, '사6')
         t = rec.read_text(encoding='utf-8')
-        t = t.replace('읽은 방식: \n', '읽은 방식: 글자층 전 면\n').replace('- 1면: ', '- 1면: 안전 안내(1)').replace('- 2면: ', '- 2면: 안전 안내(2)')
-        t = t.replace('- 3면: ', '- 3면: 안전 안내(3)').replace('면)\n\n- \n', '면)\n\n- 3면 "안내"\n')
+        t = t.replace('읽은 방식: \n', '읽은 방식: 글자층 전 면\n')
+        for n in (1, 2, 3):
+            t = t.replace(f'- {n}면: ', f'- {n}면: 안전 안내({n}) 확인표 {tok(self.case, "사6", n)}')
+        t = t.replace('면)\n\n- \n', '면)\n\n- 3면 "안내"\n')
         rec.write_text(t, encoding='utf-8')
         self.assertEqual(run('check', self.case)[0], 0)
         other = self.root / '4_서면작성' / '사건' / 'GGM_경영설명회'
@@ -273,13 +304,116 @@ class CheaperReadingTest(unittest.TestCase):
         t = self.rec(other, '갑2').read_text(encoding='utf-8')
         self.assertIn('옮겨 온 기록: 4_서면작성/사건/GGM_정직/증거관리/호증읽기/사6.md', t)
         self.assertIn('- 1면: (옮김) 안전 안내(1)', t)
+        self.assertNotIn('확인표', t.split('## 면별 내용')[1].split('## 쟁점')[0])     # 그 사건의 확인표는 옮기지 않는다
         self.assertIn('## 옮겨 온 기록의 쟁점 문구', t)
         code, out = run('check', other)
         self.assertEqual(code, 1)                                   # 다른 사건의 기록으로 갈음하지 않는다
         self.assertIn('다른 사건 기록에서 옮긴 줄 3개', out)
         t = t.replace('(옮김) ', '').replace('읽은 방식: \n', '읽은 방식: 글자층 전 면\n').replace('면)\n\n- \n', '면)\n\n- 없음\n', 1)
         self.rec(other, '갑2').write_text(t, encoding='utf-8')
+        code, out = run('check', other)
+        self.assertEqual(code, 1)                                   # 같은 파일이어도 이 사건에서 면마다 다시 열어 보아야 한다
+        self.assertIn('확인표가 없거나 맞지 않는 면 3/3', out)
+        self.assertNotEqual(tok(other, '갑2', 1), tok(self.case, '사6', 1))
+        for n in (1, 2, 3):
+            t = t.replace(f'- {n}면: 안전 안내({n})', f'- {n}면: 안전 안내({n}) 확인표 {tok(other, "갑2", n)}')
+        self.rec(other, '갑2').write_text(t, encoding='utf-8')
         self.assertEqual(run('check', other)[0], 0)
+
+
+class ProofOfReadingTest(unittest.TestCase):
+    """면을 끝까지 열어 본 증표(확인표) 없이는 지나가지 못하는지 본다.
+    2026. 11. 3. 한전 태양광 22명: 스캔 계좌내역 95면을 문자인식 줄을 걸러 금액이 큰 줄 중심으로 읽고 나머지를 모음 그림으로 보았는데
+    '그림 전 면(모음 그림)'이라는 신고로 check 를 지났다. 담당 노무사 "법률자료작성이므로 완결성 100%에 수렴해야 한다고 대충 읽고 쓰면 그게 되겠니"."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.case = Path(self.tmp.name) / '한전_태양광'
+        self.ours = self.case / '라운드1' / '우리증거'
+        self.ours.mkdir(parents=True)
+        make_pdf(self.ours / '을 제105호증의8 계좌내역.pdf', [글 + f'{n}면 거래' for n in range(1, 5)])
+        run('make', self.case, '--no-ocr')
+        self.rec = self.case / '증거관리' / '호증읽기' / '을105-8.md'
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def fill(self, 줄들, 방식='글자층 전 면'):
+        t = self.rec.read_text(encoding='utf-8')
+        head, rest = t.split('## 면별 내용', 1)
+        tail = rest.split('## 쟁점에 닿는 문구', 1)[1].replace('\n- \n', '\n- 없음\n', 1)
+        head = re.sub(r'^읽은 방식:.*$', lambda _: f'읽은 방식: {방식}', head, count=1, flags=re.M)
+        self.rec.write_text(head + '## 면별 내용\n\n' + 줄들 + '\n\n## 쟁점에 닿는 문구' + tail, encoding='utf-8')
+
+    def check(self):
+        return run('check', self.case)
+
+    def test_self_declared_filtered_reading_is_blocked(self):
+        모두 = '\n'.join(f'- {n}면: 거래 내역 확인표 {tok(self.case, "을105-8", n)}' for n in range(1, 5))
+        self.fill(모두)
+        self.assertEqual(self.check()[0], 0)
+        for 방식 in ('문자인식 줄을 걸러 금액이 큰 줄 중심으로 읽음', '그림 전 면(모음 그림)', '1면만 읽고 나머지는 모음 그림으로 봄'):
+            self.fill(모두, 방식)
+            code, out = self.check()
+            self.assertEqual(code, 1, 방식)
+            self.assertIn('다 읽지 않았다는 표현이 있다', out)
+        self.fill(모두.replace('- 2면: 거래 내역', '- 2면: 거래 내역(가족 이름 줄 위주로 봄)'))
+        self.assertIn('위주로 봄', self.check()[1])
+        self.fill(모두.replace('- 2면: 거래 내역', '- 2면: 안전 수칙을 중심으로 진행된 교육'))    # 내용 설명은 막지 않는다
+        self.assertEqual(self.check()[0], 0)
+
+    def test_each_page_needs_its_own_code(self):
+        코드 = [tok(self.case, '을105-8', n) for n in range(1, 5)]
+        self.fill('\n'.join(f'- {n}면: 거래 확인표 {코드[0]}' for n in range(1, 5)))      # 첫 면의 확인표를 되풀이
+        code, out = self.check()
+        self.assertEqual(code, 1)
+        self.assertIn('확인표가 없거나 맞지 않는 면 3/4: 2~4면', out)
+        self.fill(f'- 1~4면: 거래 확인표 {코드[0]} {코드[1]} {코드[3]}')                    # 묶은 줄에 한 면이 빠짐
+        self.assertIn('확인표가 없거나 맞지 않는 면 1/4: 3면', self.check()[1])
+        self.fill(f'- 1~4면: 거래 확인표 {" ".join(코드).lower()}')                         # 대소문자는 가리지 않는다
+        self.assertEqual(self.check()[0], 0)
+
+    def test_old_text_without_codes_is_rewritten_by_make(self):
+        글파일 = self.case / '증거관리' / '호증글자' / '을105-8.txt'
+        글파일.write_text(re.sub(r'\n\[\d+면 끝 · [^\n]*\]', '', 글파일.read_text(encoding='utf-8')), encoding='utf-8')
+        self.fill('\n'.join(f'- {n}면: 거래' for n in range(1, 5)))
+        code, out = self.check()
+        self.assertEqual(code, 1)
+        self.assertIn('확인표가 없는 옛 판', out)
+        run('make', self.case, '--no-ocr')
+        self.assertIn('[1면 끝 · 확인표', 글파일.read_text(encoding='utf-8'))
+        self.assertIn('- 1면: 거래', self.rec.read_text(encoding='utf-8'))          # 기록은 그대로 두고 면별 글만 새로 쓴다
+
+    def test_scanned_table_pieces_are_joined_into_rows(self):
+        조각 = [('2023-01-05', (10, 100, 80, 112)), ('입금', (100, 101, 130, 113)), ('1,000,000', (150, 99, 220, 111)), ('홍길동', (240, 100, 280, 112)),
+              ('2023-01-06', (10, 130, 80, 142)), ('1,200,000', (150, 131, 220, 143)), ('출금', (100, 129, 130, 141)), ('합계 없음', (10, 170, 200, 182))]
+        self.assertEqual(er.줄_복원(조각), ['| 2023-01-05 | 입금 | 1,000,000 | 홍길동 |', '| 2023-01-06 | 출금 | 1,200,000 |', '합계 없음'])
+        self.assertEqual(sorted(x for 줄 in er.줄_복원(조각) for x in re.split(r'\s*\|\s*', 줄) if x),
+                         sorted(t for t, _ in 조각))                                   # 글자는 하나도 빠지지 않는다
+
+    def test_tall_screenshot_is_read_in_pieces_each_with_its_code(self):
+        d = pymupdf.open()
+        pg = d.new_page(width=300, height=1300)
+        for y in range(60, 1300, 120):
+            pg.insert_text((20, y), f'{y} 대화', fontsize=12, fontname='korea')
+        pg.get_pixmap(dpi=72).save(str(self.ours / '을 제106호증 대화 갈무리.png'))
+        run('make', self.case, '--no-ocr')
+        rec = self.case / '증거관리' / '호증읽기' / '을106.md'
+        t = rec.read_text(encoding='utf-8')
+        h = er.해시(self.ours / '을 제106호증 대화 갈무리.png')
+        코드 = [er.확인표(self.case, h, 1, '그림' if i == 1 else f'그림{i}') for i in range(1, 5)]
+        head, rest = t.split('## 면별 내용', 1)
+        tail = rest.split('## 쟁점에 닿는 문구', 1)[1].replace('\n- \n', '\n- 없음\n', 1)
+        head = head.replace('읽은 방식: \n', '읽은 방식: 그림 전 면\n')
+        rec.write_text(head + f'## 면별 내용\n\n- 1면: 대화 확인표 {코드[0]}\n\n## 쟁점에 닿는 문구' + tail, encoding='utf-8')
+        code, out = run('check', self.case, '--호증', '을106')
+        self.assertEqual(code, 1)                                     # 1300 높이는 폭의 1.4배로 네 조각이다
+        self.assertIn('확인표가 없거나 맞지 않는 면 1/1', out)
+        rec.write_text(rec.read_text(encoding='utf-8').replace(f'확인표 {코드[0]}', '확인표 ' + ' '.join(코드)), encoding='utf-8')
+        self.assertEqual(run('check', self.case, '--호증', '을106')[0], 0)
+        code, out = run('그림', self.case, '--호증', '을106', '--out', Path(self.tmp.name) / '그림')
+        self.assertEqual(sorted(p.name for p in (Path(self.tmp.name) / '그림' / '을106').glob('*.png')),
+                         ['01조각.png', '02조각.png', '03조각.png', '04조각.png'])
 
 
 if __name__ == '__main__':
