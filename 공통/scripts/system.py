@@ -57,7 +57,8 @@ GUIDE_SETS = {
     '문체검증': COMMON + [STYLE + 'SKILL.md', STYLE + 'references/문체-용례.md', '.claude/commands/문체검증.md'],
     # 한글 양식에 값을 채우는 작업이다. 서면 문체 지침과 사건상태를 읽지 않고 통지서와 이미 낸 대리인 서류만 본다.
     '노동위서류': COMMON + ['4_서면작성/CLAUDE.md', '.claude/commands/노동위서류.md'],
-    '예상질의': COMMON + CITE + BRIEF + ['.claude/commands/예상질의.md', '4_서면작성/절차/심문회의-예상질의.md', '공통/사건상태.md'],
+    # 답은 서면 계열(BRIEF), 회색 메모는 검토의견 계열(1_검토의견/CLAUDE.md 3절)이다.
+    '예상질의': COMMON + CITE + BRIEF + ['1_검토의견/CLAUDE.md', '.claude/commands/예상질의.md', '4_서면작성/절차/심문회의-예상질의.md', '공통/사건상태.md'],
     '녹취': COMMON + ['5_녹취록/CLAUDE.md', '5_녹취록/녹취서-작성-가이드.md', '.claude/commands/녹취.md'],
     '손배계산': COMMON + ['6_손해배상계산/CLAUDE.md', '.claude/commands/손배계산.md', '6_손해배상계산/노동금액-계산기준.md'],
     '손배검산': COMMON + ['6_손해배상계산/CLAUDE.md', '.claude/commands/손배검산.md', '6_손해배상계산/노동금액-계산기준.md'],
