@@ -10,6 +10,8 @@ import json
 import os
 import re
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -371,6 +373,15 @@ class CaseLawGateTest(unittest.TestCase):
         self.assertEqual(self.judge([('2.가.(2)', 가), ('2.가.(2)', 나)], [('2.가.(2)', '2019두1', ''), ('2.가.(2)', '2020누1', '판단')]), ['2.가.(2)(판단 부분인지)'])
         self.assertEqual(self.judge([('3. 라. 둘째', 가)], [('3. 라.(2줄)', '2019두1', '판단'), ('3. 라.', '2019두1', '')]), ['3. 라. 둘째(판단 부분인지)'])
 
+    def test_row_with_blank_judgment_cell_covers_only_its_own_line(self):
+        """2026. 11. 3. 점검: '판결' 칸이 빈 표 줄 하나가 번호가 겹치는 다른 판결의 인용 줄('2.가.(1) 각주')까지 통과시켰다.
+        판결 칸이 비었으면 이름이 꼭 같고 그 이름으로 인용한 판결이 하나일 때만 그 줄로 본다."""
+        가, 나 = '대법원 2020. 1. 1. 선고 2019두1 판결', '대법원 2021. 1. 1. 선고 2020두2 판결'
+        self.assertEqual(self.judge([('2.가.(1)', 가), ('2.가.(1) 각주', 나)], [('2.가.(1)', '', '판단')]), ['2.가.(1) 각주(줄 없음)'])
+        self.assertEqual(self.judge([('2.가.(1)', 가), ('2.가.(1)', 나)], [('2.가.(1)', '', '판단')]), ['2.가.(1)(줄 없음)', '2.가.(1)(줄 없음)'])
+        self.assertEqual(self.judge([('2.가.(1)', 가)], [('2.가.(1)', '', '판단')]), [])
+        self.assertEqual(self.judge([('2.가.(1)', 가), ('2.가.(1) 각주', 나)], [('2.가.(1)', '2019두1', '판단'), ('2.가.(1) 각주', '2020두2', '판단')]), [])
+
     def test_source_file_may_be_written_from_any_level_of_the_case(self):
         """2026. 11. 3. 첫 점검에서 원문 칸의 파일이 있는데도 98줄을 '원문 파일이 없다'로 막았다(라운드·사건 폴더 기준 경로, 백틱 없는 경로)."""
         작업 = self.d / '사건1' / '라운드1' / '작업'
@@ -385,12 +396,18 @@ class CaseLawGateTest(unittest.TestCase):
         self.assertEqual([x.split(':')[0] for x in 막], ['5', '6'])
 
     def test_bottom_list_lines_are_not_body_citations(self):
-        """하단 ②의 줄은 '참고(하단 ②)'로 적든 '② 2.'로 적든 본문 인용이 아니다(2026. 11. 3.). 본문 줄은 그대로 본다."""
-        table = self.d / '인용대조표.md'
-        table.write_text('| 번호 | 사건 표시 | 원문 문장 |\n|---|---|---|\n| 3. 가. | 대법원 2020. 1. 1. 선고 2019두1 판결 | 가 |\n'
-                         '| ② 2. | 대법원 2021. 1. 1. 선고 2020두2 판결 | 나 |\n| 참고(하단 ②) | 대법원 2022. 1. 1. 선고 2021두3 판결 | 다 |\n| ② 1. 뺌 | 대법원 2023. 1. 1. 선고 2022두4 판결 | 라 |\n',
-                         encoding='utf-8')
-        self.assertEqual([r['번호'] for r in fc.본문_줄(table)], ['3. 가.'])
+        """서면 하단 ②의 줄은 '참고(하단 ②)'로 적든 '② 2.'로 적든 본문 인용이 아니다(2026. 11. 3.). 본문 줄은 그대로 본다.
+        하단 세 목록은 서면 초안에만 있다. 검토의견은 질의 번호를 ①②로 적기도 하므로 그 대조표의 ①② 줄은 본문 인용이다."""
+        표 = ('| 번호 | 사건 표시 | 원문 문장 | 본문 문장 |\n|---|---|---|---|\n| 3. 가. | 대법원 2020. 1. 1. 선고 2019두1 판결 | 가 | 가 |\n'
+             '| ② 2. | 대법원 2021. 1. 1. 선고 2020두2 판결 | 나 | 나 |\n| 참고(하단 ②) | 대법원 2022. 1. 1. 선고 2021두3 판결 | 다 | 다 |\n'
+             '| ② 1. 뺌 | 대법원 2023. 1. 1. 선고 2022두4 판결 | 라 | 라 |\n| 4. | 대법원 2024. 1. 1. 선고 2023두5 판결 | 마 | 뺌(고친 판에서 뺐다) |\n')
+        서면 = self.d / '사건' / '라운드1' / '작업' / '인용대조표.md'
+        검토 = self.d / '자문' / '작업' / '인용대조표.md'
+        for table in (서면, 검토):
+            table.parent.mkdir(parents=True)
+            table.write_text(표, encoding='utf-8')
+        self.assertEqual([r['번호'] for r in fc.본문_줄(서면)], ['3. 가.'])
+        self.assertEqual([r['번호'] for r in fc.본문_줄(검토)], ['3. 가.', '② 2.'])
 
     def test_same_reason_is_grouped_so_other_reasons_are_not_cut(self):
         self.assertEqual(fc.까닭별로(['2.가.: 원문 파일이 없다', '2.가.: 원문 파일이 없다', '4.가.: 원문 파일이 없다', '4.가.: 확정 칸을 다시 본다']),
@@ -418,21 +435,19 @@ class CaseLawGateTest(unittest.TestCase):
         self.assertIn('문제 1건', 말)
         self.assertNotIn('대조.md', 말)
 
-    def test_pointer_to_the_report_is_not_its_handling(self):
-        """2026. 11. 3. '수확 목록'이라는 말이 사건상태의 파일 안내에 한 번만 있어도 기록에 없는 줄 전부를 가린 것으로 보았다."""
-        안내 = '- 의뢰인주장 대조 `작업/의뢰인주장_대조.md`, 수확 목록 재확인 `작업/수확목록_재확인.md`\n'
-        self.assertFalse(fc.수확_처리_적음(안내))
-        for 글자 in ('수확 목록 재확인: 걸린 169건 중 기록에 없던 161건 — 관련 8건 본문 확인, 나머지는 사안이 다름\n',
-                   '`작업/수확목록_재확인.md` 의 나머지 줄은 사안이 달라 미반영이다.\n',
-                   '받아 둔 목록을 다시 훑어 새로 찾은 행정해석을 본문에 반영하였다.\n'):
-            self.assertTrue(fc.수확_처리_적음(안내 + 글자), 글자)
+    def test_pointer_or_one_grouped_sentence_is_not_the_handling_of_each_row(self):
+        """2026. 11. 3. '수확 목록'이라는 말이 사건상태의 파일 안내에 한 번만 있어도 기록에 없는 줄 전부를 가린 것으로 보았고,
+        고친 뒤에도 '나머지는 사안이 다름' 한 문장으로 161건이 지나갔다. 처리는 보고서의 줄마다 적는다."""
         폴더 = self.d / '라운드1'
         (폴더 / '작업').mkdir(parents=True)
         for f in ('작업/LBOX_목록.tsv', '작업/법제처_목록.json'):
             (폴더 / f).write_text('x', encoding='utf-8')
-        (폴더 / '작업' / '검색기록.md').write_text('검색어 표\n', encoding='utf-8')
-        (폴더 / '작업' / '사건상태.md').write_text(안내, encoding='utf-8')
-        self.assertEqual(status(self.scan_with(폴더, self.report(1), 1), '찾은 판례 다시 훑기'), '막힘')
+        (폴더 / '작업' / '검색기록.md').write_text('수확 목록 재확인: 걸린 169건 중 기록에 없던 161건 — 관련 8건 본문 확인, 나머지는 사안이 다름\n',
+                                               encoding='utf-8')
+        (폴더 / '작업' / '사건상태.md').write_text('- 수확 목록 재확인 `작업/수확목록_재확인.md`\n', encoding='utf-8')
+        res = self.scan_with(폴더, self.report(1), 1)
+        self.assertEqual(status(res, '찾은 판례 다시 훑기'), '막힘')
+        self.assertIn("'처리' 칸이 빈 줄 1건: 2023구합1", res.줄[-1][2])
 
     def test_gate_does_not_rewrite_the_case_report(self):
         """밤 점검이 판결원문_PDF대조.md 를 고치면 다음 밤에 또 손댄 사건으로 잡힌다(2026. 11. 2. 첫 밤 점검)."""
@@ -454,13 +469,14 @@ class CaseLawGateTest(unittest.TestCase):
         cmd = next(a for a in seen if a[0].endswith('cite_pdf_check.py'))
         self.assertNotIn(str(폴더), cmd[cmd.index('--out') + 1])
 
-    def scan_with(self, 폴더, 재확인, 없음, 번호='2023구합1', 목록=''):
-        """저장한 재확인 보고서와, 다시 훑으면 나올 보고서를 주고 검색_완결을 돌린다."""
+    def scan_with(self, 폴더, 재확인, 없음, 번호='2023구합1', 목록='', 처리=''):
+        """저장한 재확인 보고서와, 다시 훑으면 나올 보고서(처리는 harvest_titles.py 가 앞 보고서에서 이어 적은 것)를 주고 검색_완결을 돌린다."""
         (폴더 / '작업' / '수확목록_재확인.md').write_text(재확인, encoding='utf-8')
 
         def run(args):
             args = [str(a) for a in args]
-            Path(args[args.index('--out') + 1]).write_text(self.report(없음, 번호, 목록), encoding='utf-8')
+            self.assertIn('--잇기', args)                       # 앞 보고서의 처리를 이어 오게 한다
+            Path(args[args.index('--out') + 1]).write_text(self.report(없음, 번호, 목록, 처리), encoding='utf-8')
             return 0, ''
 
         res = fc.결과()
@@ -469,32 +485,63 @@ class CaseLawGateTest(unittest.TestCase):
         return res
 
     @staticmethod
-    def report(없음, 번호='2023구합1', 목록=''):
+    def report(없음, 번호='2023구합1', 목록='', 처리=''):
         return ('# 수확 목록 제목 다시 훑기 — 라운드1\n\n낱말: 시험기기\n법제처 목록 1개 파일 · 3줄' + 목록 + '\n'
-                '걸린 줄 3건 — 기록에 있음 1건, 없음 %d건(그 가운데 법제처 본문을 받은 것 0건), 번호가 없어 가리지 못한 것 0건\n\n'
-                '## 기록에 없는 줄(본문을 읽고 반영하거나 유사 사례 표에 미반영 이유를 적는다)\n\n'
-                '| 출처 | 사건번호·문서번호 | 일자 | 기관·법원 | 제목 | 걸린 낱말 | 기록 | 본문 |\n|---|---|---|---|---|---|---|---|\n'
-                '| LBOX | %s | 2024 | 서울행정법원 | 정직 | 시험기기 | 없음 | — |\n' % (없음, 번호))
+                '걸린 줄 3건 — 기록에 있음 1건, 없음 %d건(그 가운데 법제처 본문을 받은 것 0건), 번호가 없어 가리지 못한 것 0건\n'
+                '처리 칸이 빈 줄 %d건\n\n'
+                '## 기록에 없는 줄(본문을 읽고 반영하거나 유사 사례 표에 미반영 이유를 적고, 줄마다 \'처리\' 칸에 적는다)\n\n'
+                '| 출처 | 사건번호·문서번호 | 일자 | 기관·법원 | 제목 | 걸린 낱말 | 기록 | 본문 | 처리 |\n|---|---|---|---|---|---|---|---|---|\n'
+                % (없음, 0 if 처리 else 없음)
+                + ''.join('| LBOX | %s | 2024 | 서울행정법원 | 정직 | 시험기기 | 없음 | — | %s |\n' % (번호, 처리) for _ in range(min(없음, 1))))
 
-    def test_rows_in_the_report_pass_once_their_handling_is_written(self):
-        """사안이 전혀 다른 줄은 묶어서 한 줄로 적으므로(`/검토의견` 4-2단계) 번호가 기록에 없어도 처리를 적었으면 지나간다."""
+    def test_rows_not_in_the_record_pass_once_each_row_has_its_handling(self):
+        """기록에 번호가 없는 줄은 보고서의 '처리' 칸에 줄마다 무엇을 하였는지 적어야 지나간다. 사안이 전혀 다른 줄도 묶지 않는다."""
         폴더 = self.d / '라운드1'
         (폴더 / '작업').mkdir(parents=True)
         for f in ('작업/LBOX_목록.tsv', '작업/법제처_목록.json'):
             (폴더 / f).write_text('x', encoding='utf-8')
         (폴더 / '작업' / '검색기록.md').write_text('검색어 표\n', encoding='utf-8')
         res = self.scan_with(폴더, self.report(1), 1)
-        self.assertEqual(status(res, '찾은 판례 다시 훑기'), '막힘')           # 어떻게 가렸는지 적지 않았다
-        self.assertIn('어떻게 가렸는지', res.줄[-1][2])
-        (폴더 / '작업' / '검색기록.md').write_text('`작업/수확목록_재확인.md` 의 나머지 줄은 사안이 달라 미반영이다.\n', encoding='utf-8')
-        self.assertEqual(status(self.scan_with(폴더, self.report(1), 1), '찾은 판례 다시 훑기'), '통과')
-        res = self.scan_with(폴더, self.report(1), 1, '2024구합9')           # 보고서 뒤에 새로 걸린 줄은 막는다
+        self.assertEqual(status(res, '찾은 판례 다시 훑기'), '막힘')           # 처리를 적지 않았다
+        self.assertIn("'처리' 칸이 빈 줄 1건", res.줄[-1][2])
+        res = self.scan_with(폴더, self.report(1), 1, 처리='사안 다름: 공무원 징계')
+        self.assertEqual(status(res, '찾은 판례 다시 훑기'), '통과')
+        self.assertIn('줄마다 처리를 적음', res.줄[-1][2])
+        res = self.scan_with(폴더, self.report(1), 1, '2024구합9')           # 보고서 뒤에 새로 걸린 줄은 처리가 이어지지 않아 막는다
         self.assertEqual(status(res, '찾은 판례 다시 훑기'), '막힘')
         self.assertIn('2024구합9', res.줄[-1][2])
-        옛 = self.report(1, '%EC%84%9C%EC%9A%B8-2023%EA%B5%AC%ED%95%A91')    # 주소 꼴로 적힌 옛 보고서의 번호도 같은 줄로 본다
-        self.assertEqual(status(self.scan_with(폴더, 옛, 1, '서울-2023구합1'), '찾은 판례 다시 훑기'), '통과')
         res = self.scan_with(폴더, self.report(0), 0, 목록=' / LBOX 목록 0개 파일 · 0줄(같은 줄 합친 뒤 0줄)')
         self.assertEqual(status(res, '찾은 판례 다시 훑기'), '막힘')           # 훑을 목록이 없으면 '없음 0건'은 통과가 아니다
+
+    def test_handling_written_in_the_report_carries_over_on_rescan(self):
+        """작성 세션이 보고서에 적은 처리를 최종 관문이 다시 훑을 때 이어 오는지 실제 harvest_titles.py 로 본다(묶은 한 문장은 처리가 아니다)."""
+        폴더 = self.d / '라운드1'
+        (폴더 / '작업').mkdir(parents=True)
+        (폴더 / '작업' / '법제처_목록.json').write_text('{}', encoding='utf-8')
+        (폴더 / '작업' / '검색기록.md').write_text('수확 목록 재확인: 나머지는 사안이 다름\n', encoding='utf-8')
+        (폴더 / '작업' / 'LBOX_목록.tsv').write_text('id\t법원\t선고일\t사건\t출처\t스니펫\n' + ''.join(
+            f'서울행정법원-2023구합{i}\t서울행정법원\t24-01-01\t정직처분취소\tq\t시험기기 관련\n' for i in (1, 2, 3)), encoding='utf-8')
+        보고서 = 폴더 / '작업' / '수확목록_재확인.md'
+        훑기 = [sys.executable, '-B', str(fc.SC / 'harvest_titles.py'), 'scan', str(폴더), '--낱말', '시험기기', '--out', str(보고서)]
+        subprocess.run(훑기, capture_output=True, check=True)
+        res = fc.결과()
+        fc.검색_완결(res, 폴더)
+        self.assertEqual(status(res, '찾은 판례 다시 훑기'), '막힘')
+        self.assertIn("'처리' 칸이 빈 줄 3건", res.줄[-1][2])
+        글 = 보고서.read_text(encoding='utf-8')
+        for i, 처리 in ((1, '본문 반영(3.가.)'), (2, '사안 다름: 공무원 징계'), (3, '같음')):     # '같음'만 적은 칸은 빈 칸이다
+            글 = re.sub(r'(\| 서울행정법원-2023구합%d \|.*\| 없음 \| — \|)[ \t]*\|' % i, lambda m: m.group(1) + f' {처리} |', 글)
+        보고서.write_text(글, encoding='utf-8')
+        res = fc.결과()
+        fc.검색_완결(res, 폴더)
+        self.assertIn("'처리' 칸이 빈 줄 1건: 서울행정법원-2023구합3", res.줄[-1][2])
+        subprocess.run(훑기, capture_output=True, check=True)              # 같은 --out 으로 다시 돌려도 적어 둔 처리는 남는다
+        self.assertIn('| 사안 다름: 공무원 징계 |', 보고서.read_text(encoding='utf-8'))
+        글 = 보고서.read_text(encoding='utf-8').replace('| 없음 | — |  |', '| 없음 | — | 사안 다름: 민사 대여금 |')
+        보고서.write_text(글, encoding='utf-8')
+        res = fc.결과()
+        fc.검색_완결(res, 폴더)
+        self.assertEqual(status(res, '찾은 판례 다시 훑기'), '통과')
 
     def test_search_records_of_earlier_rounds_count_and_the_report_round_is_rescanned(self):
         """뒤 라운드의 판례는 앞 라운드 검색에서 나오기도 한다. 앞 라운드 목록을 훑은 보고서이면 그 라운드를 다시 훑는다."""
@@ -531,9 +578,9 @@ class CaseLawGateTest(unittest.TestCase):
             seen['args'] = [str(a) for a in args]
             out = Path(seen['args'][seen['args'].index('--out') + 1])
             out.write_text('# 수확\n\n낱말: 시험기기\n법제처 목록\n걸린 줄 3건 — 기록에 있음 1건, 없음 %d건(그 가운데 법제처 본문을 받은 것 0건), 번호가 없어 가리지 못한 것 0건\n\n'
-                           '## 기록에 없는 줄(본문을 읽고 반영하거나 유사 사례 표에 미반영 이유를 적는다)\n\n'
-                           '| 출처 | 사건번호·문서번호 | 일자 | 기관·법원 | 제목 | 걸린 낱말 | 기록 | 본문 |\n|---|---|---|---|---|---|---|---|\n'
-                           '| LBOX | 2023구합1 | 2024 | 서울행정법원 | 정직 | 시험기기 | 없음 | — |\n' % 없음, encoding='utf-8')
+                           '## 기록에 없는 줄(본문을 읽고 반영하거나 유사 사례 표에 미반영 이유를 적고, 줄마다 \'처리\' 칸에 적는다)\n\n'
+                           '| 출처 | 사건번호·문서번호 | 일자 | 기관·법원 | 제목 | 걸린 낱말 | 기록 | 본문 | 처리 |\n|---|---|---|---|---|---|---|---|---|\n' % 없음
+                           + '| LBOX | 2023구합1 | 2024 | 서울행정법원 | 정직 | 시험기기 | 없음 | — |  |\n' * min(없음, 1), encoding='utf-8')
             return 0, ''
 
         res = fc.결과()

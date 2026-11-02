@@ -8,7 +8,8 @@
   1) 원문 문장이 '원문' 칸의 파일에 글자 그대로 있는가(공백·줄바꿈·따옴표 모양은 무시, 가운데 줄임 … 은 앞뒤 조각이 차례로 있는지)
   2) 그 파일에 사건번호(문서번호)와 선고일(회시일)이 있는가
   3) 산출물에 그 사건번호와 선고일, 대조표의 본문 문장이 그대로 있는가
-  4) 산출물에 나오는 사건번호 가운데 대조표에 줄이 없는 것
+  4) 산출물에 나오는 사건번호 가운데 대조표에 줄이 없는 것. 본문(서면 MD 는 '---' 위, DOCX 는 전부)에 나오는 번호는 본문 인용 줄이나
+     참고 줄이 있어야 하고, 하단 목록 줄(서면 대조표의 ①②③·'참고(하단 ②)')이나 뺀 줄만 있으면 불일치이다
   5) '확정' 칸에 심리불속행으로 적은 대법원 번호가 산출물에 나오면 그 곁에 '심리불속행'이 있는가
 원문이 LBOX 보관함·화면에만 있어 파일이 없는 줄은 '원문' 칸에 '보관함 일치'나 '화면 확인'이라고 적혀 있으면 그렇게 세고,
 없으면 원문 미확인으로 알린다. 불일치가 하나라도 있으면 종료 코드 1, 원문 미확인만 있으면 0 이다(보고에 따로 적는다).
@@ -98,11 +99,38 @@ def in_order(text, parts):
     return None
 
 
-def is_body(row):
-    """본문 인용 줄인가. 번호 칸에 '참고'·'뺌'이 있거나 하단 목록의 번호(①②③)로 시작하는 줄은 본문 인용이 아니다.
-    2026. 11. 3. '② 2.'처럼 적은 하단 메모 줄까지 판결문 PDF 와 '사람 판정'을 요구하였다."""
+RULE = re.compile(r"^\s*-{3,}\s*$")      # 서면 초안의 본문과 하단 세 목록을 가르는 줄(docx_merge.py·citation_check.py 와 같은 규칙)
+
+
+def brief_table(table):
+    """서면의 대조표인가(라운드 폴더 아래). 하단 세 목록(①②③)은 서면 초안에만 있다."""
+    return any(re.fullmatch(r"라운드\d+", seg) for seg in re.split(r"[\\/]", os.path.abspath(table)))
+
+
+def is_gone(row):
+    """뺀 인용 줄(번호 칸이나 본문 문장 칸에 '뺌')."""
+    return "뺌" in row.get("번호", "") or row.get("본문 문장", "").strip().startswith("뺌")
+
+
+def is_body(row, table=None):
+    """본문 인용 줄인가. 번호 칸에 '참고'가 있는 줄, 뺀 줄, 서면 대조표에서 하단 목록의 번호(①②③)로 시작하는 줄은 본문 인용이 아니다.
+    2026. 11. 3. '② 2.'처럼 적은 하단 메모 줄까지 판결문 PDF 와 '사람 판정'을 요구하였다. 검토의견은 질의 번호를 '[질의 ①]'처럼 적으므로
+    (`1_검토의견/CLAUDE.md` 공단 자문 짜임) 그 대조표의 ①②③ 줄은 본문 인용으로 본다. table 을 주지 않으면 서면 대조표로 본다."""
     no = row.get("번호", "").strip()
-    return not any(w in no for w in ("참고", "뺌")) and not re.match(r"[①②③]", no)
+    if "참고" in no or is_gone(row):
+        return False
+    return not (re.match(r"[①②③]", no) and (table is None or brief_table(table)))
+
+
+def body_and_bottom(path, text):
+    """산출물의 본문과 하단 목록. 서면 MD 는 첫 줄이 아닌 '---' 줄 아래가 하단 세 목록이고(`4_서면작성/CLAUDE.md`), DOCX 에는 하단 목록이 없다."""
+    if path.lower().endswith(".docx"):
+        return text, ""
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        if i and RULE.match(line):
+            return "\n".join(lines[:i]), "\n".join(lines[i + 1:])
+    return text, ""
 
 
 def source_files(cell, table_path):
@@ -175,7 +203,7 @@ def check(table_path, targets):
             if day and not (day & dates(src)):
                 bad += 1; notes.append("불일치: 원문 파일에 날짜 %s 없음" % sorted(day))
         # 3) 산출물
-        gone = not is_body(r) or r.get("본문 문장", "").startswith("뺌")      # 뺀 인용과 참고 줄(원심, 하단 목록 등)은 산출물과 맞대지 않는다
+        gone = not is_body(r, table_path)      # 뺀 인용과 참고 줄(원심, 하단 목록 등)은 산출물과 맞대지 않는다
         for p, t in ([] if gone else tgt):
             n = norm(t)
             if key and key not in n:
@@ -189,13 +217,31 @@ def check(table_path, targets):
                 if says and c in n and not re.search(r"%s.{0,15}심리불속행|심리불속행.{0,15}%s" % (c, c), n):
                     bad += 1; notes.append("불일치: 산출물의 대법원 %s 확정 표기에 심리불속행이 없다(%s)" % (c, os.path.basename(p)))
         lines.append(("%s — %s" % (name, " / ".join(notes) if notes else "일치")))
-    # 4) 대조표에 줄이 없는 사건번호
-    known = set()
-    for r in rows:
-        known |= cases(" ".join(r.values()))
+    # 4) 대조표에 줄이 없는 사건번호. 본문(서면 MD 는 '---' 위, DOCX 는 전부)의 번호는 본문 인용 줄이나 참고 줄(가리킴·다른 심급)이 받쳐야 한다.
+    #    하단 목록 줄과 뺀 줄만 있는 번호가 본문에 있으면 그 문장은 3)을 거치지 않는다(2026. 11. 3. 점검: '② 2.' 줄이나 '뺌' 줄 하나로 본문 인용이 빠져나갔다)
+    def nums(rs):
+        out = set()
+        for r in rs:
+            out |= cases(" ".join(r.values()))
+        return out
+    ref = [r for r in rows if "참고" in r.get("번호", "") and "하단" not in r.get("번호", "") and not is_gone(r)]
+    body_known = nums([r for r in rows if is_body(r, table_path)] + ref)
+    bottom_known = nums([r for r in rows if not is_gone(r) and not is_body(r, table_path)])
+    gone_known = nums([r for r in rows if is_gone(r)])
     for p, t in tgt:
-        for c in sorted(cases(t) - known):
-            bad += 1; lines.append("불일치: 산출물의 %s 가 대조표에 없다(%s)" % (c, os.path.basename(p)))
+        body, bottom = body_and_bottom(p, t)
+        seen = set()
+        for part, ok in ((body, body_known), (bottom, body_known | bottom_known)):
+            for c in sorted(cases(part) - ok - seen):
+                seen.add(c)
+                bad += 1
+                if c in bottom_known:
+                    lines.append("불일치: 산출물 본문의 %s 가 대조표에 하단 목록 줄로만 있다 — 본문 인용이면 번호 칸을 본문의 항·문단으로 적은 줄을 둔다(%s)"
+                                 % (c, os.path.basename(p)))
+                elif c in gone_known:
+                    lines.append("불일치: 뺀 인용의 %s 가 산출물에 남아 있다 — 지우거나, 남길 것이면 본문 인용 줄을 둔다(%s)" % (c, os.path.basename(p)))
+                else:
+                    lines.append("불일치: 산출물의 %s 가 대조표에 없다(%s)" % (c, os.path.basename(p)))
     return {"줄": len(rows), "불일치": bad, "원문미확인": unseen, "사건표시만": only, "내용": lines}
 
 

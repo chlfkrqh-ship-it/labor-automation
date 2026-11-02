@@ -90,7 +90,7 @@ def check_upper(cell, own, files, targets, used):
 
 
 def check(table, pdfdir, targets=None):
-    rows = [r for r in table_rows(table) if is_body(r) and "법원" in r.get("사건 표시", "")]
+    rows = [r for r in table_rows(table) if is_body(r, table) and "법원" in r.get("사건 표시", "")]
     files = {}
     for n in sorted(os.listdir(pdfdir)):
         if n.lower().endswith(".pdf"):
