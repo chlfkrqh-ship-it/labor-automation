@@ -40,6 +40,8 @@ import zipfile
 from pathlib import Path
 
 덩이_크기 = 3000      # 덩이 하나의 글자 수(줄을 자르지 않고 맞춘다). 덩이마다 끝에 확인표가 붙는다
+줄_폭 = 1000         # 면별 글 한 줄의 글자 수 상한. 읽기 도구(Read)는 2,000자 넘는 줄을 잘라 보여 주므로(잘린 줄은 실측에서 읽지 않은 줄이 된다)
+                     # 그보다 짧게 나눈다
 그림_꼴 = ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tif', '.tiff', '.webp')
 바꿀_그림_꼴 = ('.emf', '.wmf', '.emz', '.wmz', '.heic', '.heif', '.svg', '.jfif', '.pict', '.wdp', '.jxr')
 작은_그림 = 64 * 64      # 이보다 작은 그림(아이콘·글머리표)만 따로 열게 하지 않는다. 직인·서명 그림은 이보다 크다
@@ -86,17 +88,27 @@ def zip_목록(z) -> list:
                    and i.filename.rsplit('/', 1)[-1].lower() not in 군더더기), key=lambda x: x[0])
 
 
+def 긴줄_나누기(줄: str, 폭: int = 줄_폭) -> list:
+    """폭보다 긴 줄을 여러 줄로 나눈다. 표의 칸 경계(' | ')나 빈칸에서 끊을 수 있으면 거기서, 아니면 글자로 끊는다.
+    끊은 자리의 빈칸 말고는 글자를 하나도 빼지 않는다."""
+    out = []
+    while len(줄) > 폭:
+        끊 = 줄.rfind(' | ', 폭 // 2, 폭)
+        if 끊 < 0:
+            끊 = 줄.rfind(' ', 폭 // 2, 폭)
+        if 끊 <= 0:
+            끊 = 폭
+        out.append(줄[:끊].rstrip())
+        줄 = 줄[끊:].lstrip()
+    out.append(줄)
+    return out
+
+
 def 덩이로(글: str) -> list:
-    """글을 줄을 자르지 않고 덩이_크기 안팎으로 나눈다. 한 줄이 너무 길면 그 줄만 글자로 자른다. 빈 글이면 []."""
+    """글을 줄을 자르지 않고 덩이_크기 안팎으로 나눈다. 줄_폭보다 긴 줄은 먼저 여러 줄로 나눈다. 빈 글이면 []."""
     out, 지금 = [], []
     크기 = 0
-    for 줄 in 글.replace('\r\n', '\n').split('\n'):
-        while len(줄) > 덩이_크기:
-            if 지금:
-                out.append('\n'.join(지금))
-                지금, 크기 = [], 0
-            out.append(줄[:덩이_크기])
-            줄 = 줄[덩이_크기:]
+    for 줄 in (x for 원 in 글.replace('\r\n', '\n').split('\n') for x in 긴줄_나누기(원)):
         if 크기 + len(줄) > 덩이_크기 and 지금:
             out.append('\n'.join(지금))
             지금, 크기 = [], 0
