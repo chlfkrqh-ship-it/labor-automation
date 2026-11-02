@@ -2,6 +2,7 @@
 
     python -B 4_서면작성/scripts/evidence_words.py "<사건 폴더>" --낱말 스피 피커 블루투 음악 [--라운드 N] [--호증 사 노]
            [--out "<라운드N>/작업/쟁점낱말_대조.md"] [--ocr-dir <폴더> ...] [--no-ocr] [--글 사6 ...]
+    python -B 4_서면작성/scripts/evidence_words.py "<사건 폴더>" --확인      # '판단'이 빈 줄이 있으면 종료 코드 1(`/서면` 8-1단계)
 
 호증 전부를 면마다 글자층(없거나 깨지면 Windows 문자인식, `ocr_win.ps1`)으로 읽어 낱말이 든 면을 표로 낸다. 낱말 글자 사이의 띄어쓰기는 무시한다.
 문자인식은 글자를 잘못 읽으므로 낱말은 짧게 쓰고 일부('스피', '피커')도 함께 넣는다.
@@ -52,6 +53,17 @@ def 서면_본문(사건: Path) -> str:
     return '\n'.join(글)
 
 
+def 면_목록(식: str) -> set:
+    """'3', '3~5', '3, 5', '3·5~7' 꼴을 면 번호 모음으로 바꾼다. 쉼표·가운뎃점은 낱낱의 면이고 물결만 범위이다."""
+    면들 = set()
+    for 조각 in re.split(r'\s*[,·ㆍ]\s*', 식):
+        a, _, b = 조각.partition('~')
+        if a.strip().isdigit():
+            시작 = int(a)
+            면들.update(range(시작, (int(b) if b.strip().isdigit() else 시작) + 1))
+    return 면들
+
+
 def 인용_상태(본문: str, k: str, 면: int) -> str:
     m = re.match(r'(\D+)(\d+)(?:-(\d+))?$', k)
     if not m:
@@ -59,9 +71,9 @@ def 인용_상태(본문: str, k: str, 면: int) -> str:
     호 = rf'{m.group(1)}\s*제\s*{m.group(2)}\s*호증' + (rf'\s*의\s*{m.group(3)}' if m.group(3) else '') + r'(?!\s*의)'
     if not re.search(호, 본문):
         return '인용 없음'
-    for x in re.finditer(호 + r'[^()\n]{0,40}?(\d+)\s*(?:[~,]\s*(\d+)\s*)?면', 본문):
-        a, b = int(x.group(1)), int(x.group(2) or x.group(1))
-        if a <= 면 <= b:
+    # 면 표시는 그 호증 뒤에 다른 호증이 끼지 않은 것만 본다('사 제6호증, 사 제7호증 3면'의 3면은 사 제7호증의 것이다)
+    for x in re.finditer(호 + r'(?:(?!호증)[^()\n]){0,40}?(\d+(?:\s*[~,·ㆍ]\s*\d+)*)\s*(?:면|쪽)', 본문):
+        if 면 in 면_목록(x.group(1)):
             return '이 면 인용'
     return '호증만 인용'
 
@@ -70,17 +82,60 @@ def 표_글(s: str) -> str:
     return re.sub(r'\s+', ' ', s).replace('|', '｜').strip()
 
 
-def main() -> int:
+def 표시_키(표시: str):
+    m = re.match(r'(\D+?)\s*제(\d+)호증(?:의(\d+))?$', 표시)
+    return f'{m.group(1)}{m.group(2)}' + (f'-{m.group(3)}' if m.group(3) else '') if m else None
+
+
+def 표_읽기(out: Path) -> list:
+    """앞서 만든 표의 줄. [(호증 표시, 면, 낱말, 앞뒤 글, 서면 인용, 읽은 방식, 판단)]"""
+    if not out.is_file():
+        return []
+    줄 = []
+    for line in out.read_text(encoding='utf-8').splitlines():
+        if not line.startswith('| ') or line.startswith('| 호증 |'):
+            continue
+        cells = [c.strip() for c in line.strip()[1:-1].split('|')]
+        if len(cells) >= 7 and cells[1].isdigit():
+            줄.append((cells[0], int(cells[1]), cells[2], cells[3], cells[4], cells[5], '|'.join(cells[6:]).strip()))
+    return 줄
+
+
+def 확인(out: Path, 본문: str) -> int:
+    """`/서면` 8-1단계: 표가 있고, 서면이 그 면을 인용하지 않은 줄마다 '판단'이 적혔는지 본다. 서면 인용은 지금 초안으로 다시 본다."""
+    if not out.is_file():
+        print(f'쟁점 낱말 대조표가 없습니다: {out} (`/서면` 6-1단계를 먼저 한다)')
+        return 1
+    줄들, 빈 = 표_읽기(out), []
+    for 표시, no, w, ctx, st, src, 판단 in 줄들:
+        k = 표시_키(표시)
+        지금 = 인용_상태(본문, k, no) if k else st
+        if 지금 != '이 면 인용' and not 판단:
+            빈.append(f'{표시} {no}면({w}, {지금}): {ctx[:80]}')
+    if 빈:
+        print(f"'판단' 칸이 빈 줄 {len(빈)}개 — 원본 그림으로 읽고 적는다({out})")
+        for s in 빈:
+            print('  - ' + s)
+        return 1
+    print(f"쟁점 낱말 대조표 {len(줄들)}줄, '판단'이 빈 줄 없음 → {out}")
+    return 0
+
+
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description='쟁점 낱말을 호증 전체의 전 면에서 찾는다')
     ap.add_argument('case')
-    ap.add_argument('--낱말', nargs='+', required=True)
+    ap.add_argument('--낱말', nargs='*', default=[])
     ap.add_argument('--라운드', type=int)
     ap.add_argument('--호증', nargs='*', help='호증 머리글자만 볼 때(사 노 등). 없으면 전부')
     ap.add_argument('--out')
     ap.add_argument('--ocr-dir', action='append', default=[])
     ap.add_argument('--no-ocr', action='store_true')
-    ap.add_argument('--글', nargs='*', default=[], help='이 호증키(사6 등)의 면별 글을 화면에 보여 준다')
-    a = ap.parse_args()
+    ap.add_argument('--글', nargs='*', default=[], help='이 호증키(사6 등)의 면별 글을 화면에 보여 준다. 낱말 없이 쓰면 표를 쓰지 않는다')
+    ap.add_argument('--확인', action='store_true',
+                    help="호증을 다시 읽지 않고, 서면이 인용하지 않은 줄의 '판단' 칸이 다 찼는지 본다(빈 줄이 있으면 종료 코드 1)")
+    a = ap.parse_args(argv)
+    if not (a.낱말 or a.글 or a.확인):
+        ap.error('--낱말, --글, --확인 가운데 하나는 준다')
 
     사건 = Path(a.case)
     라운드들 = sorted((p for p in 사건.glob('라운드*') if p.is_dir()), key=lambda p: int(re.sub(r'\D', '', p.name) or 0))
@@ -89,6 +144,8 @@ def main() -> int:
         return 2
     라운드 = 사건 / f'라운드{a.라운드}' if a.라운드 else 라운드들[-1]
     out = Path(a.out) if a.out else 라운드 / '작업' / '쟁점낱말_대조.md'
+    if a.확인:
+        return 확인(out, 서면_본문(사건))
     캐시 = 사건 / '증거관리' / '호증글자'
     ocr_dirs = list(a.ocr_dir) + [str(p) for p in 사건.glob('라운드*/작업/증거인용검토/ocr')] + [str(캐시 / 'ocr')]
 
@@ -139,14 +196,39 @@ def main() -> int:
             if k and not f.lower().endswith('.pdf') and k not in 호증들 and (not a.호증 or any(k.startswith(x) for x in a.호증)):
                 비pdf.append(unicodedata.normalize('NFC', f))
 
-    먼저 = {'인용 없음': 0, '호증만 인용': 1, '이 면 인용': 2}
-    줄들.sort(key=lambda r: (먼저[r[4]], 호증_정렬(r[0]), r[1]))
-    글 = [f'# 쟁점 낱말 대조 — {사건.name} {라운드.name}', '',
-          f"낱말: {', '.join(a.낱말)}", f"읽은 호증 {len(호증들)}건 · 글자층 {합계['글자층']}면 · 문자인식 {합계['문자인식']}면 · 글자 없음 {합계['글자 없음']}면 · 걸린 줄 {len(줄들)}개", '',
-          "`4_서면작성/scripts/evidence_words.py` 가 만든다. '판단' 칸은 원본 그림을 읽고 적는다(본문에 씀, 하단 ②에 적음, 쓰지 않음과 그 이유).", '',
-          '| 호증 | 면 | 낱말 | 앞뒤 글 | 서면 인용 | 읽은 방식 | 판단 |', '|---|---|---|---|---|---|---|']
+    if not a.낱말:                        # --글 만: 면별 글을 보여 주기만 하고 표는 그대로 둔다
+        return 0
+
+    # 다시 돌려도 앞서 적은 '판단'을 잃지 않는다. 이번에 찾지 않은 낱말·호증의 줄은 그대로 두고 서면 인용만 새로 본다
+    옛줄 = 표_읽기(out)
+    옛판단 = {(표시, no, w): 판단 for 표시, no, w, *_, 판단 in 옛줄 if 판단}
+    면판단 = {}
+    for 표시, no, w, *_, 판단 in 옛줄:
+        if 판단:
+            면판단.setdefault((표시, no), 판단)
+    이번 = set(a.낱말)
+    새줄, 이어받음, 남김 = [], 0, []
     for k, no, w, ctx, st, src in 줄들:
-        글.append(f'| {호증_표시(k)} | {no} | {w} | {ctx} | {st} | {src} |  |')
+        판단 = 옛판단.get((호증_표시(k), no, w)) or 면판단.get((호증_표시(k), no), '')
+        이어받음 += bool(판단)
+        새줄.append((k, no, w, ctx, st, src, 판단))
+    for 표시, no, w, ctx, st, src, 판단 in 옛줄:
+        k = 표시_키(표시)
+        if not k or (w in 이번 and k in 호증들):
+            continue
+        새줄.append((k, no, w, ctx, 인용_상태(본문, k, no), src, 판단))
+        남김.append(w)
+    낱말들 = list(dict.fromkeys(list(a.낱말) + 남김))
+
+    먼저 = {'인용 없음': 0, '호증만 인용': 1, '이 면 인용': 2}
+    새줄.sort(key=lambda r: (먼저.get(r[4], 0), 호증_정렬(r[0]), r[1]))
+    글 = [f'# 쟁점 낱말 대조 — {사건.name} {라운드.name}', '',
+          f"낱말: {', '.join(낱말들)}", f"읽은 호증 {len(호증들)}건 · 글자층 {합계['글자층']}면 · 문자인식 {합계['문자인식']}면 · 글자 없음 {합계['글자 없음']}면 · 걸린 줄 {len(새줄)}개", '',
+          "`4_서면작성/scripts/evidence_words.py` 가 만든다. '판단' 칸은 원본 그림을 읽고 적는다(본문에 씀, 하단 ②에 적음, 쓰지 않음과 그 이유). "
+          "다시 돌리면 같은 면의 '판단'은 이어받고, 이번에 찾지 않은 낱말의 줄은 남긴다. 다 적었는지는 `--확인` 으로 본다.", '',
+          '| 호증 | 면 | 낱말 | 앞뒤 글 | 서면 인용 | 읽은 방식 | 판단 |', '|---|---|---|---|---|---|---|']
+    for k, no, w, ctx, st, src, 판단 in 새줄:
+        글.append(f'| {호증_표시(k)} | {no} | {w} | {ctx} | {st} | {src} | {판단} |')
     글 += ['', '## 글자로 찾지 못한 곳(눈으로 본다)', '']
     for k in sorted(없는면, key=호증_정렬):
         글.append(f"- {호증_표시(k)}: {', '.join(map(str, 없는면[k]))}면")
@@ -154,8 +236,10 @@ def main() -> int:
         글.append(f'- PDF 가 아닌 호증: {f}')
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text('\n'.join(글) + '\n', encoding='utf-8')
-    안쓴 = sum(1 for r in 줄들 if r[4] != '이 면 인용')
-    print(f"호증 {len(호증들)}건, 글자층 {합계['글자층']}면, 문자인식 {합계['문자인식']}면, 글자 없음 {합계['글자 없음']}면 / 걸린 줄 {len(줄들)}개, 이 면을 인용하지 않은 줄 {안쓴}개 → {out}")
+    안쓴 = [r for r in 새줄 if r[4] != '이 면 인용']
+    빈 = sum(1 for r in 안쓴 if not r[6])
+    print(f"호증 {len(호증들)}건, 글자층 {합계['글자층']}면, 문자인식 {합계['문자인식']}면, 글자 없음 {합계['글자 없음']}면 / 걸린 줄 {len(새줄)}개, "
+          f"이 면을 인용하지 않은 줄 {len(안쓴)}개(판단이 빈 줄 {빈}개, 이어받은 판단 {이어받음}줄) → {out}")
     return 0
 
 

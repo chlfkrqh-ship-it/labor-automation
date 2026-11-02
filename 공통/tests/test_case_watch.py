@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from datetime import datetime, timezone
 
 SCRIPT = Path(__file__).parents[1] / 'scripts' / 'case_watch.py'
@@ -197,6 +198,20 @@ class CaseWatchTests(unittest.TestCase):
         self.assertTrue(r.stdout.isascii())
         out = json.loads(r.stdout)
         self.assertIn('OES_부당해고 구제신청', out['hookSpecificOutput']['additionalContext'])
+
+    def test_feedback_messages_are_logged_for_the_nightly_check(self):
+        """지적으로 보이는 메시지만 `공통/사건/_지적기록/{PC}.jsonl` 에 적고, `공통/사건/` 이 없으면(클라우드) 적지 않는다."""
+        base = self.root / '공통' / '사건'
+        self.assertIsNone(cw.log_feedback({'prompt': '왜 첫 면만 읽었지?', 'session_id': 's'}, self.root))
+        base.mkdir(parents=True, exist_ok=True)
+        with mock.patch.dict(os.environ, {'COMPUTERNAME': 'HOME-PC'}):
+            self.assertIsNone(cw.log_feedback({'prompt': '좋아 진행해', 'session_id': 's'}, self.root))
+            path = cw.log_feedback({'prompt': '증거를 왜 빠뜨렸는지 확인하고 재발 방지', 'session_id': 's', 'cwd': 'x'}, self.root)
+        self.assertEqual(path, base / '_지적기록' / 'HOME-PC.jsonl')
+        rows = [json.loads(l) for l in path.read_text(encoding='utf-8').splitlines()]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['글'], '증거를 왜 빠뜨렸는지 확인하고 재발 방지')
+        self.assertEqual(rows[0]['PC'], 'HOME-PC')
 
     def test_old_baselines_are_pruned(self):
         self.state.mkdir(parents=True)
