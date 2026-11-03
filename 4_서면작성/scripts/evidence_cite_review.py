@@ -8,9 +8,17 @@ scan  본문('---' 위)의 증거 인용 괄호마다 그 괄호가 받치는 �
       찾아 `라운드N/작업/증거인용검토/`(서면초안_{이름}.md 는 `증거인용검토_{이름}/`) 에 review.json·review.txt·crops/ 를 만든다.
       - 호증 파일은 사건 폴더의 우리증거·상대증거·제출/증거·노동위원회_기록에서 파일 이름의 호증번호로 찾는다
         ('갑 제3호증 …', '갑3-1_…', 전자소송 내려받기 '…(을104-2_…)…'). 같은 라운드의 원본을 먼저 쓴다.
-      - 글자층이 없거나 깨진 면은 Windows 문자인식(`ocr_win.ps1`)으로 읽는다. 결과는 증거인용검토/ocr/ 에 남겨 다시 쓰고,
+      - 글자층이 없거나 깨진 면은 Windows 문자인식(`ocr_win.ps1`)으로 읽는다. 결과는 증거인용검토/ocr/{호증키}/ 에 남겨 다시 쓰고,
         글자가 깨져 나오면 90도·270도로 돌려 한 번 더 읽는다. 이미 만든 결과는 --ocr-dir(호증키 하위 폴더나
         '<호증키>_p01.png' 묶음)·--ocr-map(호증키=폴더)으로 넘긴다.
+      - 문자인식 결과는 그것을 만든 호증 파일의 해시로 묶는다(`Exhibit._foreign`). 결과 폴더의 `파일해시.txt` 표지가 지금 호증
+        파일의 해시(파일 바이트 sha1 앞 12자리, `evidence_read.py` 의 `해시` 와 같은 꼴)와 다르면 그 결과를 쓰지 않는다.
+        표지가 없는 옛 결과는 쓰던 대로 쓰되, 증거인용검토 폴더의 것은 그 review.json 이 그 호증에 다른 파일의 해시를 적었으면
+        쓰지 않는다. 자기 캐시는 다른 파일의 것이면 지우고, 표지가 없는 옛 캐시에는 지금 파일의 표지를 붙인다. 여러 호증을 모은
+        묶음의 표지는 줄마다 '호증키 해시'로 적는다(호증이 하나뿐인 폴더는 해시만 적는다).
+        2026. 11. 3. 그전에는 호증키로만 묶어, 같은 번호에 다른 PDF(더 나은 스캔본 등)를 넣으면 앞 파일의 글과 그림을 새 파일의
+        것으로 썼고, 이 결과를 다시 쓰는 전 면 읽기(`evidence_read.py`)의 면별 글과 쟁점 낱말 대조(`evidence_words.py`)에도
+        들어갈 수 있었다.
       - 비교는 날짜(2018. 2. 8. ↔ 2018-02-08)·금액(2,750만 원 ↔ 27,500,000)을 같은 꼴로 바꾸고 기호·띄어쓰기를 지운 뒤
         두 글자 묶음이 겹치는 정도로 한다. 구절의 날짜·금액·따옴표 말이 인용한 면에 없으면 '못찾음'으로 적는다.
 doc   review.json 과 판정 파일 `증거인용검토/notes.json` 으로 `증거인용 대조표(확대).docx` 를 만들고, Word 가 있으면 PDF 로도 낸다.
@@ -38,6 +46,7 @@ import sys
 import tempfile
 import time
 import unicodedata
+from functools import cached_property
 from pathlib import Path
 
 import pymupdf
@@ -86,6 +95,7 @@ FILE_COURT = re.compile(r'\((' + PREFIX + r')(\d+)(?:-(\d+))?_')
 FILE_LEAD = re.compile(r'^(' + PREFIX + r')\s*(?:제\s*)?(\d+)\s*(?:호증)?\s*(?:(?:의|-)\s*(\d+))?(?=[\s_.()\-]|호증|$)')
 FONT_PATH = 'C:/Windows/Fonts/malgun.ttf'
 OUT_NAME = '증거인용 대조표(확대)'
+OCR_MARK = '파일해시.txt'      # 문자인식 결과 폴더의 표지: 그 결과를 만든 호증 파일의 해시(`hash_file`)
 
 
 # ---------------------------------------------------------------- 글 비교
@@ -335,8 +345,53 @@ def _read_ocr_json(path: Path) -> list:
     return [data] if isinstance(data, dict) else data
 
 
+def hash_file(path) -> str:
+    """파일 바이트의 sha1 앞 12자리. `evidence_read.py` 의 `해시` 와 같은 꼴이고, review.json 의 file_hash 와 문자인식 표지가 이것이다."""
+    h = hashlib.sha1()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            h.update(chunk)
+    return h.hexdigest()[:12]
+
+
+def read_mark(folder: Path, key: str):
+    """문자인식 결과 폴더의 표지(`OCR_MARK`)가 호증키 key 에 적은 파일 해시. 표지가 없거나 묶음의 표지에 그 호증의 줄이 없으면 None,
+    비었거나 읽히지 않으면 ''(어느 파일과도 맞지 않는다). 호증 하나의 폴더는 해시만 적고, 묶음은 줄마다 '호증키 해시'로 적는다."""
+    f = folder / OCR_MARK
+    if not f.is_file():
+        return None
+    try:
+        lines = f.read_text(encoding='utf-8-sig').splitlines()
+    except (OSError, ValueError):
+        return ''
+    one, per = '', {}
+    for line in lines:
+        k, _, h = ' '.join(line.split()).rpartition(' ')
+        if k:
+            per[unicodedata.normalize('NFC', k)] = h
+        elif h:
+            one = h
+    key = ' '.join(unicodedata.normalize('NFC', key).split())
+    if key in per:
+        return per[key]
+    return one or (None if per else '')
+
+
+def recorded_hashes(review: Path) -> dict:
+    """증거인용검토 폴더의 review.json 이 호증키마다 대조한 호증 파일의 해시 {호증키: {해시…}}. review.json 이 없거나 깨지면 {}."""
+    try:
+        rows = json.loads((review / 'review.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return {}
+    out = {}
+    for r in rows if isinstance(rows, list) else []:
+        if isinstance(r, dict) and r.get('key') and r.get('file_hash'):
+            out.setdefault(unicodedata.normalize('NFC', str(r['key'])), set()).add(str(r['file_hash']))
+    return out
+
+
 class Exhibit:
-    """호증 하나의 면별 글. 글자층을 쓰고, 없거나 깨진 면은 문자인식."""
+    """호증 하나의 면별 글. 글자층을 쓰고, 없거나 깨진 면은 문자인식. 문자인식 결과는 호증 파일의 해시 표지로 묶는다(`_foreign`)."""
 
     def __init__(self, key, path, cache: Path, ocr_dirs=(), ocr_map=None, use_ocr=True):
         self.key, self.path = key, path
@@ -344,9 +399,39 @@ class Exhibit:
         self.cache = cache / 'ocr' / key
         self.ocr_dirs, self.ocr_map, self.use_ocr = list(ocr_dirs), dict(ocr_map or {}), use_ocr
         self.pages = {}
+        self.stale = []                           # 다른 파일의 것이어서 쓰지 않은 문자인식 결과 폴더
+
+    @cached_property
+    def file_hash(self) -> str:
+        return hash_file(self.path)
 
     def __len__(self):
         return len(self.doc)
+
+    def _foreign(self, folder: Path) -> bool:
+        """folder 의 문자인식 결과가 다른 파일의 것인가. 표지가 있으면 표지로 가린다. 표지가 없는 옛 결과는 다른 파일의 것으로 보지
+        않되(다시 문자인식하면 PC에서 오래 걸린다), 증거인용검토 폴더의 것(`{검토 폴더}/ocr/{호증키}`)은 그 review.json 이 그 호증키에
+        지금 파일과 다른 해시만 적었으면 다른 파일의 것으로 본다. 그 대조 뒤에 호증 파일을 바꾸었거나, 라운드마다 같은 번호의 파일이 다르다."""
+        mark = read_mark(folder, self.key)
+        if mark is None and folder.parent.name == 'ocr':
+            seen = recorded_hashes(folder.parent.parent).get(unicodedata.normalize('NFC', folder.name))
+            foreign = bool(seen) and self.file_hash not in seen
+        else:
+            foreign = mark is not None and mark != self.file_hash
+        if foreign and str(folder) not in self.stale:
+            self.stale.append(str(folder))
+        return foreign
+
+    def _own_cache(self):
+        """자기 캐시를 지금 파일에 맞춘다. 다른 파일의 것이면 지워 다시 읽게 하고, 표지가 없는 옛 캐시는 그대로 쓰되 지금 파일의 표지를 붙인다
+        (그 뒤에 파일을 바꾸면 표지로 가린다). 넘겨받은 결과 폴더(--ocr-dir·--ocr-map, 다른 도구의 캐시)는 지우지도 표지를 붙이지도 않는다."""
+        c = self.cache
+        if not c.is_dir():
+            return
+        if self._foreign(c):
+            shutil.rmtree(c, ignore_errors=True)
+        elif read_mark(c, self.key) is None and any((c / n).is_file() for n in ('pages.json', 'ocr.json')):
+            (c / OCR_MARK).write_text(self.file_hash, encoding='utf-8')
 
     def prepare(self, wanted):
         need = []
@@ -360,6 +445,7 @@ class Exhibit:
             else:
                 need.append(no)
         if need:
+            self._own_cache()
             got = self._existing_ocr(need)
             rest = [n for n in need if n not in got]
             if rest and self.use_ocr:
@@ -386,6 +472,8 @@ class Exhibit:
         return self._printed
 
     def _existing_ocr(self, need) -> dict:
+        """이미 만든 문자인식 결과. --ocr-map, --ocr-dir 의 호증키 폴더, 자기 캐시, '<호증키>_p01.png' 묶음 순으로 찾고,
+        표지가 다른 파일을 가리키는 폴더는 건너뛴다(`_foreign`)."""
         got = {}
         cands = []
         if self.key in self.ocr_map:
@@ -394,7 +482,7 @@ class Exhibit:
         cands.append(self.cache)
         for c in cands:
             j = c / 'pages.json' if (c / 'pages.json').is_file() else c / 'ocr.json'
-            if not j.is_file():
+            if not j.is_file() or self._foreign(c):
                 continue
             if j.name == 'pages.json':
                 for no, e in json.loads(j.read_text(encoding='utf-8')).items():
@@ -409,7 +497,7 @@ class Exhibit:
                     got[no] = {'src': '문자인식', 'units': _ocr_lines(e), 'png': str(c / e['file'])}
         for d in self.ocr_dirs:                       # '<호증키>_p01.png' 묶음
             j = Path(d) / 'ocr.json'
-            if not j.is_file():
+            if not j.is_file() or self._foreign(Path(d)):
                 continue
             for e in _read_ocr_json(j):
                 m = re.match(re.escape(self.key) + r'_p(\d+)\.png$', e.get('file', ''))
@@ -466,9 +554,12 @@ class Exhibit:
                             got[no] = {'src': f'문자인식({r}도 돌림)', 'units': units, 'png': e['file'], 'q': q}
             for no, e in got.items():
                 shutil.copy2(work / e['png'], self.cache / e['png'])
-            old = json.loads((self.cache / 'pages.json').read_text(encoding='utf-8')) if (self.cache / 'pages.json').is_file() else {}
+            pj = self.cache / 'pages.json'
+            # 다른 파일의 결과에는 덧붙이지 않는다. 표지는 pages.json 뒤에 쓴다(먼저 쓰고 그 사이에 멈추면 다른 파일의 글에 지금 파일의 표지가 붙는다)
+            old = json.loads(pj.read_text(encoding='utf-8')) if pj.is_file() and not self._foreign(self.cache) else {}
             old.update({str(no): {'png': e['png'], 'units': e['units'], 'src': e['src']} for no, e in got.items()})
-            (self.cache / 'pages.json').write_text(json.dumps(old, ensure_ascii=False), encoding='utf-8')
+            pj.write_text(json.dumps(old, ensure_ascii=False), encoding='utf-8')
+            (self.cache / OCR_MARK).write_text(self.file_hash, encoding='utf-8')
             for no in got:
                 got[no]['png'] = str(self.cache / got[no]['png'])
             return got
@@ -712,10 +803,10 @@ def cmd_scan(args) -> int:
         if not path:
             report.append(r)
             continue
-        r['file_hash'] = hashlib.sha1(Path(path).read_bytes()).hexdigest()[:12]
         if c['key'] not in opened:
             opened[c['key']] = Exhibit(c['key'], path, out, args.ocr_dir or [], ocr_map, not args.no_ocr)
         ex = opened[c['key']]
+        r['file_hash'] = ex.file_hash                 # 문자인식 표지와 같은 해시(호증마다 한 번 읽는다)
         r['npages'] = len(ex)
         pages = expand_pages(c['pages'], len(ex))
         r['bad_pages'] = [p for p in pages if p > len(ex)]
@@ -765,6 +856,7 @@ def cmd_scan(args) -> int:
         report.append(r)
     for ex in opened.values():
         ex.close()
+    다른_파일 = [ex.key for ex in opened.values() if ex.stale]
     notes_path, old_path = out / 'notes.json', out / 'review.json'
     옮김_말 = ''
     if notes_path.is_file():
@@ -811,6 +903,9 @@ def cmd_scan(args) -> int:
           f"쪽 없음 {sum(1 for r in report if r['bad_pages'])} | 날짜·금액·따옴표 못찾음 {sum(1 for r in report if r['miss'])}")
     if 옮김_말:
         print(옮김_말)
+    if 다른_파일:
+        print(f'앞서 만든 문자인식 결과가 지금 호증 파일의 것이 아니어서 쓰지 않은 호증 {len(다른_파일)}건: {", ".join(다른_파일)}'
+              + (' (--no-ocr 이라 그 면은 글자층만으로 찾았다)' if args.no_ocr else ''))
     print('결과:', out / 'review.txt')
     print('다음: review.txt 를 한 건씩 원문과 맞대어 판정을 notes.json 에 적고 doc 을 돌린다. 문자인식이 깨진 면은 그림(crops/)을 직접 본다.')
     return 1 if nofile else 0

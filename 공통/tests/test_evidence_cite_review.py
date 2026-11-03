@@ -2,14 +2,18 @@
 
 서면의 인용 괄호를 호증별로 나누는지, 날짜·금액을 같은 꼴로 바꾸어 원문과 맞대는지, 파일 이름의 호증번호
 (전자소송 내려받기 '(을104-2_', 앞머리 '갑 제3호증'·'갑14-4_')로 호증 파일을 찾는지, scan·doc 이 끝까지 도는지 본다.
-문자인식(Windows)은 돌리지 않는다(--no-ocr).
+문자인식 결과를 호증 파일의 해시 표지로 묶는지도 본다(OcrCacheMarkTest).
+문자인식(Windows)은 돌리지 않는다(--no-ocr). 돌려야 하는 시험은 `run_windows_ocr` 를 흉내 낸다.
 """
+from contextlib import redirect_stdout
 import importlib.util
+import io
 import json
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import pymupdf
 
@@ -24,6 +28,7 @@ def load(name, rel):
 
 
 ecr = load('evidence_cite_review', '4_서면작성/scripts/evidence_cite_review.py')
+er = load('evidence_read', '4_서면작성/scripts/evidence_read.py')        # 이 도구의 문자인식 결과를 다시 쓰는 전 면 읽기
 
 MD = """- 다 음 -
 
@@ -55,6 +60,46 @@ def make_pdf(path: Path, pages):
             p.insert_text((50, y), line, fontsize=10)
             y += 14
     d.save(path)
+
+
+def scan_pdf(path: Path, n: int, 판: str):
+    """글자층이 없는 스캔 면 n 개. 판을 달리하면 바이트가 다른 파일(같은 번호에 넣은 다른 스캔본)이 된다."""
+    d = pymupdf.open()
+    for _ in range(n):
+        d.new_page()
+    d.set_metadata({'title': 판})
+    d.save(path)
+    d.close()
+
+
+def ocr_cache(folder: Path, pages: dict, mark=None):
+    """앞서 만든 문자인식 결과(pages.json). pages: {면: 글}. mark 가 있으면 표지를 붙이고, 없으면 표지를 뗀다."""
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / 'pages.json').write_text(json.dumps(
+        {str(no): {'png': f'p{no:03d}.png', 'units': [[t, [40, 60, 940, 100]]], 'src': '문자인식'} for no, t in pages.items()},
+        ensure_ascii=False), encoding='utf-8')
+    if mark is None:
+        (folder / ecr.OCR_MARK).unlink(missing_ok=True)
+    else:
+        (folder / ecr.OCR_MARK).write_text(mark, encoding='utf-8')
+
+
+def ocr_json(folder: Path, files: dict, mark=None):
+    """`ocr_win.ps1` 이 낸 꼴의 결과(ocr.json). files: {그림 이름: 글}. 호증키 폴더의 옛 판과 '<호증키>_p01.png' 묶음이 이 꼴이다."""
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / 'ocr.json').write_text(json.dumps(
+        [{'file': n, 'lines': [{'t': t, 'x': 40, 'y': 60, 'w': 900, 'h': 40}]} for n, t in files.items()], ensure_ascii=False),
+        encoding='utf-8')
+    if mark is not None:
+        (folder / ecr.OCR_MARK).write_text(mark, encoding='utf-8')
+
+
+def 흉내_문자인식(글: dict, 부름: list):
+    """Windows 문자인식(`run_windows_ocr`)을 흉내 낸다. 폴더의 그림마다 지금의 글['t'] 한 줄을 읽은 것으로 낸다."""
+    def run(folder):
+        부름.append(sorted(p.name for p in Path(folder).glob('*.png')))
+        return [{'file': n, 'lines': [{'t': 글['t'], 'x': 40, 'y': 60, 'w': 900, 'h': 40}]} for n in 부름[-1]]
+    return run
 
 
 class CanonTest(unittest.TestCase):
@@ -318,6 +363,178 @@ class PrintedPageTest(unittest.TestCase):
             make_pdf(plain, [['1', 'body text 300,000,000'], ['2', 'body text']])
             self.assertEqual(ecr.brief_page_numbers(cover), [None, 1, 2])
             self.assertEqual(ecr.brief_page_numbers(plain), [1, 2])
+
+
+class OcrCacheMarkTest(unittest.TestCase):
+    """문자인식 결과는 그것을 만든 호증 파일의 해시 표지(파일해시.txt)로 묶는다. 2026. 11. 3. 전에는 호증키로만 묶어, 같은 번호에
+    다른 PDF(더 나은 스캔본 등)를 넣으면 앞 파일의 글을 새 파일의 것으로 썼고, 전 면 읽기의 면별 글에도 들어갈 수 있었다.
+    표지가 없는 옛 결과는 쓰던 대로 쓴다(다시 문자인식하면 PC에서 오래 걸린다). 문자인식은 Windows 에서만 돌므로 흉내 낸다."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.pdf = self.root / '갑 제1호증 스캔.pdf'
+        scan_pdf(self.pdf, 4, '새 스캔본')
+        self.review = self.root / '라운드1' / '작업' / '증거인용검토'
+        self.own = self.review / 'ocr' / '갑1'                                   # 자기 캐시
+        self.글, self.부름 = {'t': '새 파일을 읽은 문자인식 글입니다'}, []
+        p = mock.patch.object(ecr, 'run_windows_ocr', 흉내_문자인식(self.글, self.부름))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def read(self, pages, **kw):
+        """호증을 읽고 닫는다. 돌려주는 것: ({면: (출처, 글)}, 쓰지 않은 결과 폴더)."""
+        ex = ecr.Exhibit('갑1', self.pdf, self.review, **kw)
+        try:
+            ex.prepare(pages)
+            return {no: (e['src'], ' '.join(t for t, _ in e['units'])) for no, e in ex.pages.items()}, ex.stale
+        finally:
+            ex.close()
+
+    def test_results_marked_for_another_file_are_not_used(self):
+        """표지가 지금 파일과 다른 결과는 쓰지 않는다. --ocr-map 폴더, --ocr-dir 의 호증키 폴더와 묶음, 자기 캐시가 모두 그렇다."""
+        옛 = 'deadbeef0000'
+        ocr_cache(self.own, {1: '앞 파일의 글(자기 캐시)'}, 옛)
+        ocr_cache(self.root / '넘긴결과' / '갑1', {2: '앞 파일의 글(호증키 폴더)'}, 옛)
+        ocr_cache(self.root / '지정', {3: '앞 파일의 글(--ocr-map)'}, 옛)
+        ocr_json(self.root / '묶음', {'갑1_p04.png': '앞 파일의 글(묶음)', '을2_p01.png': '다른 호증의 글'}, f'갑1 {옛}\n을2 0123456789ab\n')
+        kw = dict(ocr_dirs=[self.root / '넘긴결과', self.root / '묶음'], ocr_map={'갑1': str(self.root / '지정')})
+        면, 안씀 = self.read([1, 2, 3, 4], use_ocr=False, **kw)
+        self.assertEqual(면, {no: ('글자 없음', '') for no in (1, 2, 3, 4)})
+        self.assertEqual(len(안씀), 4)
+        self.assertFalse(self.own.exists())                                      # 자기 캐시는 지운다
+        for f in (self.root / '넘긴결과' / '갑1' / 'pages.json', self.root / '지정' / 'pages.json', self.root / '묶음' / 'ocr.json'):
+            self.assertTrue(f.is_file(), f)                                       # 넘겨받은 결과는 건드리지 않는다
+        면, _ = self.read([1, 2, 3, 4], **kw)                                     # 문자인식을 돌리면 지금 파일을 읽는다
+        self.assertEqual(면, {no: ('문자인식', '새 파일을 읽은 문자인식 글입니다') for no in (1, 2, 3, 4)})
+        self.assertEqual(self.부름, [['p001.png', 'p002.png', 'p003.png', 'p004.png']])
+
+    def test_results_without_mark_are_used_as_before(self):
+        """표지가 없는 옛 결과는 다시 문자인식하지 않고 쓴다. 표지가 지금 파일과 같은 결과도 쓴다. 표지는 자기 캐시에만 붙인다."""
+        ocr_cache(self.own, {1: '옛 자기 캐시의 글'})
+        ocr_cache(self.root / '넘긴결과' / '갑1', {2: '옛 호증키 폴더의 글'})
+        ocr_json(self.root / '지정', {'p003.png': '옛 판 ocr.json 의 글'})
+        ocr_json(self.root / '묶음', {'갑1_p04.png': '표지가 맞는 묶음의 글'}, f'을2 deadbeef0000\n갑1 {ecr.hash_file(self.pdf)}\n')
+        면, 안씀 = self.read([1, 2, 3, 4], ocr_dirs=[self.root / '넘긴결과', self.root / '묶음'], ocr_map={'갑1': str(self.root / '지정')})
+        self.assertEqual([면[no] for no in (1, 2, 3, 4)],
+                         [('문자인식', '옛 자기 캐시의 글'), ('문자인식', '옛 호증키 폴더의 글'),
+                          ('문자인식', '옛 판 ocr.json 의 글'), ('문자인식', '표지가 맞는 묶음의 글')])
+        self.assertEqual((self.부름, 안씀), ([], []))                             # 다시 문자인식하지 않았다
+        self.assertEqual((self.own / ecr.OCR_MARK).read_text(encoding='utf-8'), ecr.hash_file(self.pdf))
+        self.assertFalse((self.root / '넘긴결과' / '갑1' / ecr.OCR_MARK).exists())
+        self.assertFalse((self.root / '지정' / ecr.OCR_MARK).exists())
+
+    def test_new_ocr_writes_the_mark_with_pages(self):
+        """문자인식을 새로 하면 pages.json 과 함께 표지가 생긴다. 같은 파일이면 앞 결과에 덧붙이고, 다른 파일을 넣으면 앞 결과를 버린다."""
+        면들 = lambda: sorted(json.loads((self.own / 'pages.json').read_text(encoding='utf-8')))
+        self.read([1, 2])
+        self.assertEqual(면들(), ['1', '2'])
+        표지 = (self.own / ecr.OCR_MARK).read_text(encoding='utf-8')
+        self.assertEqual(표지, ecr.hash_file(self.pdf))
+        self.assertEqual(표지, er.해시(self.pdf))                                 # 전 면 읽기의 표지와 같은 꼴
+        self.read([1, 2, 3])                                                     # 같은 파일: 3면만 더 읽어 덧붙인다
+        self.assertEqual(self.부름, [['p001.png', 'p002.png'], ['p003.png']])
+        self.assertEqual(면들(), ['1', '2', '3'])
+        scan_pdf(self.pdf, 4, '더 나은 스캔본')                                   # 같은 번호에 다른 PDF
+        self.assertNotEqual(ecr.hash_file(self.pdf), 표지)
+        self.글['t'] = '더 나은 스캔본을 읽은 글입니다'
+        면, 안씀 = self.read([1])
+        self.assertEqual(면[1], ('문자인식', '더 나은 스캔본을 읽은 글입니다'))
+        self.assertEqual(안씀, [str(self.own)])
+        self.assertEqual(면들(), ['1'])                                           # 앞 파일의 2·3면은 버렸다
+        self.assertEqual((self.own / ecr.OCR_MARK).read_text(encoding='utf-8'), ecr.hash_file(self.pdf))
+
+    def test_mark_is_a_hash_or_lines_of_key_and_hash(self):
+        f = self.root / '표지'
+        f.mkdir()
+        self.assertIsNone(ecr.read_mark(f, '갑1'))                               # 표지 없음
+        (f / ecr.OCR_MARK).write_text('0123456789ab', encoding='utf-8')
+        self.assertEqual(ecr.read_mark(f, '갑1'), '0123456789ab')               # 호증 하나의 폴더
+        (f / ecr.OCR_MARK).write_text('﻿갑1  0123456789ab\r\n을2\t89abcdef0123\r\n', encoding='utf-8')
+        self.assertEqual((ecr.read_mark(f, '갑1'), ecr.read_mark(f, '을2')), ('0123456789ab', '89abcdef0123'))
+        self.assertIsNone(ecr.read_mark(f, '갑3'))                               # 묶음에 줄이 없는 호증은 옛 결과처럼 본다
+        (f / ecr.OCR_MARK).write_text('', encoding='utf-8')
+        self.assertEqual(ecr.read_mark(f, '갑1'), '')                            # 빈 표지는 어느 파일과도 맞지 않는다
+
+    def test_unmarked_results_are_dropped_when_review_records_another_file(self):
+        """표지가 없는 옛 결과라도 증거인용검토의 review.json 이 그 호증에 다른 파일의 해시를 적었으면 쓰지 않는다. 그 대조 뒤에 호증
+        파일을 바꾼 때(자기 캐시는 지운다)와 앞 라운드의 같은 번호 파일이 지금 것과 다른 때(넘겨받은 결과는 둔다)이다."""
+        def 대조기록(폴더: Path, rows):
+            폴더.mkdir(parents=True, exist_ok=True)
+            (폴더 / 'review.json').write_text(json.dumps(rows), encoding='utf-8')
+        지금 = ecr.hash_file(self.pdf)
+        앞라운드 = self.root / '라운드0' / '작업' / '증거인용검토'
+        ocr_cache(self.own, {1: '바꾸기 전 파일의 글'})
+        대조기록(self.review, [{'n': 1, 'key': '갑1', 'file_hash': 'deadbeef0000'}, {'n': 2, 'key': '을2', 'file_hash': 지금}])
+        ocr_cache(앞라운드 / 'ocr' / '갑1', {2: '앞 라운드 파일의 글'})
+        대조기록(앞라운드, [{'n': 1, 'key': '갑1', 'file_hash': 'deadbeef0000'}])
+        면, 안씀 = self.read([1, 2], ocr_dirs=[앞라운드 / 'ocr'], use_ocr=False)
+        self.assertEqual(면, {1: ('글자 없음', ''), 2: ('글자 없음', '')})
+        self.assertEqual(sorted(안씀), sorted([str(self.own), str(앞라운드 / 'ocr' / '갑1')]))
+        self.assertFalse(self.own.exists())
+        self.assertTrue((앞라운드 / 'ocr' / '갑1' / 'pages.json').is_file())
+        # review.json 이 지금 파일의 해시를 적었거나 해시를 적지 않은 옛 대조이면 쓴다
+        ocr_cache(self.own, {1: '지금 파일의 글'})
+        대조기록(self.review, [{'n': 1, 'key': '갑1', 'file_hash': 지금}])
+        대조기록(앞라운드, [{'n': 1, 'key': '갑1'}])
+        면, 안씀 = self.read([1, 2], ocr_dirs=[앞라운드 / 'ocr'], use_ocr=False)
+        self.assertEqual(면, {1: ('문자인식', '지금 파일의 글'), 2: ('문자인식', '앞 라운드 파일의 글')})
+        self.assertEqual(안씀, [])
+
+    def test_scan_reads_a_replaced_scan_again(self):
+        """대조를 다시 돌릴 때 같은 번호에 다른 스캔본을 넣었으면 앞 스캔본의 글을 쓰지 않고 다시 읽는다. 표지가 생기기 전에 만든
+        결과도 앞선 대조(review.json)가 적은 해시로 가린다."""
+        rnd = self.root / '사건D' / '라운드1'
+        (rnd / '출력').mkdir(parents=True)
+        (rnd / '우리증거').mkdir()
+        md = rnd / '출력' / '서면초안.md'
+        md.write_text('- 다 음 -\n\n가. 사실입니다(갑 제1호증 확인서 1면).\n', encoding='utf-8')
+        갑1 = rnd / '우리증거' / '갑 제1호증 확인서.pdf'
+        out = rnd / '작업' / '증거인용검토'
+
+        def 대조(글):
+            self.글['t'] = 글
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                self.assertEqual(ecr.main(['scan', str(md)]), 0)
+            r = json.loads((out / 'review.json').read_text(encoding='utf-8'))[0]
+            return r['windows'][0]['text'], r['file_hash'], buf.getvalue()
+
+        scan_pdf(갑1, 1, '첫 스캔본')
+        글, 해시, 말 = 대조('첫 스캔본을 읽은 글입니다')
+        self.assertEqual((글, 해시), ('첫 스캔본을 읽은 글입니다', ecr.hash_file(갑1)))
+        self.assertEqual((out / 'ocr' / '갑1' / ecr.OCR_MARK).read_text(encoding='utf-8'), 해시)
+        self.assertNotIn('쓰지 않은 호증', 말)
+        self.assertEqual(대조('다시 읽으면 안 되는 글입니다')[0], '첫 스캔본을 읽은 글입니다')   # 같은 파일은 다시 읽지 않는다
+        scan_pdf(갑1, 1, '더 나은 스캔본')
+        글, _, 말 = 대조('더 나은 스캔본을 읽은 글입니다')
+        self.assertEqual(글, '더 나은 스캔본을 읽은 글입니다')
+        self.assertIn('지금 호증 파일의 것이 아니어서 쓰지 않은 호증 1건: 갑1', 말)
+        (out / 'ocr' / '갑1' / ecr.OCR_MARK).unlink()                            # 표지가 생기기 전에 만든 결과
+        scan_pdf(갑1, 1, '세 번째 스캔본')
+        self.assertEqual(대조('세 번째 스캔본을 읽은 글입니다')[0], '세 번째 스캔본을 읽은 글입니다')
+        self.assertEqual(len(self.부름), 3)
+
+    def test_whole_page_reading_does_not_take_another_files_result(self):
+        """전 면 읽기(`evidence_read.py make`)도 증거인용검토의 문자인식 결과를 다시 쓴다. 표지가 다른 결과는 면별 글에 넣지 않고,
+        표지가 없는 옛 결과와 표지가 맞는 결과는 넣는다."""
+        case = self.root / '사건E'
+        ours = case / '라운드1' / '우리증거'
+        ours.mkdir(parents=True)
+        스캔 = ours / '갑 제1호증 스캔.pdf'
+        scan_pdf(스캔, 1, '새 스캔본')
+        결과 = case / '라운드1' / '작업' / '증거인용검토' / 'ocr' / '갑1'
+
+        def 면별_글(표지):
+            ocr_cache(결과, {1: '증거인용검토가 읽은 글입니다'}, 표지)
+            with redirect_stdout(io.StringIO()):
+                er.main(['make', str(case), '--no-ocr', '--호증', '갑1', '--글다시', '갑1'])
+            return (case / '증거관리' / '호증글자' / '갑1.txt').read_text(encoding='utf-8')
+
+        self.assertNotIn('증거인용검토가 읽은 글입니다', 면별_글('deadbeef0000'))
+        self.assertIn('증거인용검토가 읽은 글입니다', 면별_글(None))
+        self.assertIn('증거인용검토가 읽은 글입니다', 면별_글(er.해시(스캔)))
 
 
 if __name__ == '__main__':
