@@ -89,5 +89,45 @@ class UpperCourtTest(unittest.TestCase):
         self.assertFalse(cite_pdf_check.SHIMRI.search(norm("그러므로 상고를 기각한다")))
 
 
+def 틀(줄, 판결, 주의=()):
+    return {"줄": 줄, "판결": 판결, "자리": "본문 · 3. 판단", "주의": list(주의)}
+
+
+판정표 = ("## 사람 판정\n\n안내\n\n| 줄 | 판결 | PDF 의 자리 | 판단 부분인지 | 방향 | 사안 비교 | 비고 |\n|---|---|---|---|---|---|---|\n"
+       "| 2. 다. | 2023나33000 | 본문 · 2) | 예. 이유 3. 다. | 같음 | 택시 소정근로시간 |  |\n"
+       "| 2. 라. | 2020나2036954 | 본문 · 3) 새로운 법리 | 예. 이유 4. 다. 3) | 같음 | 근무일수 다름 |  |\n"
+       "| 2. 마. | 2016다7975 | 본문 · 2. | 예 | 같음 | 상여금 |  |")
+
+
+class JudgeSectionTest(unittest.TestCase):
+    """'사람 판정' 틀은 줄 이름과 판결로 가린다. 2026. 11. 3. SR노조 리서치에서 대조표의 '2. 라.' 에 판결을 하나 더했는데
+    틀에 그 줄이 들어가지 않아 틀을 지우고 다시 만든 뒤 판정을 옮겨 넣었다."""
+
+    def 줄들(self, 절):
+        return [l for l in 절.splitlines() if l.startswith("| ") and not l.startswith("| 줄 |")]
+
+    def test_new_judgment_under_an_existing_line_name_is_added_and_old_rulings_stay(self):
+        skel = [틀("2. 다.", "2023나33000"), 틀("2. 라.", "2020나2036954"), 틀("2. 라.", "2023나2020943", ["주장"]), 틀("2. 마.", "2016다7975")]
+        절 = cite_pdf_check.judge_section(판정표, skel)
+        줄들 = self.줄들(절)
+        self.assertEqual(len(줄들), 4)
+        self.assertEqual(줄들[0:2], [l for l in 판정표.splitlines() if l.startswith("| 2. 다.") or l.startswith("| 2. 라.")])
+        self.assertTrue(줄들[2].startswith("| 2. 라. | 2023나2020943 | 본문 · 3. 판단 — 주의: 앞 글에 주장 |"))      # 같은 이름의 줄 바로 뒤
+        self.assertTrue(줄들[3].startswith("| 2. 마. | 2016다7975 | 본문 · 2. | 예 | 같음 | 상여금 |"))
+        self.assertEqual(cite_pdf_check.judge_section(절.strip("\n"), skel), 절)      # 다시 돌려도 늘지 않는다
+
+    def test_same_judgment_twice_in_a_line_is_one_row(self):
+        절 = cite_pdf_check.judge_section("", [틀("2. 사.", "2023다216777"), 틀("2. 사.", "2023다216777", ["원심"])])
+        줄들 = self.줄들(절)
+        self.assertEqual(len(줄들), 1)
+        self.assertIn("주의: 앞 글에 원심", 줄들[0])      # 둘째 인용의 '주의'도 남아 비고를 채우게 한다
+
+    def test_old_row_without_judgment_cell(self):
+        옛 = "## 사람 판정\n\n| 줄 | 판결 | PDF 의 자리 | 판단 부분인지 | 방향 | 사안 비교 | 비고 |\n|---|---|---|---|---|---|---|\n| 1. 가. |  | 본문 | 예 | 같음 | 같음 |  |"
+        self.assertEqual(len(self.줄들(cite_pdf_check.judge_section(옛, [틀("1. 가.", "2012다89399")]))), 1)      # 그 이름의 판결이 하나면 그 줄로 본다
+        줄들 = self.줄들(cite_pdf_check.judge_section(옛, [틀("1. 가.", "2012다89399"), 틀("1. 가.", "2016다239680")]))
+        self.assertEqual([l.split("|")[2].strip() for l in 줄들], ["", "2012다89399", "2016다239680"])      # 둘이면 판결마다 줄을 둔다(final_check 와 같다)
+
+
 if __name__ == "__main__":
     unittest.main()

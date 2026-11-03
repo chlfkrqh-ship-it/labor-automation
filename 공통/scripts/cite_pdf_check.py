@@ -164,7 +164,10 @@ JUDGE_HEAD = ["줄", "판결", "PDF 의 자리", "판단 부분인지", "방향"
 def judge_section(old, skel):
     """'사람 판정' 절. 있으면 그대로 두되 본문 인용 줄마다 줄이 있게 하고 '사안 비교' 칸을 더한다. 없으면 틀을 만든다.
     판단 부분인지·방향·사안 비교(사실관계가 우리 사건과 같은 점·다른 점)는 작성 세션이 PDF 를 읽고 채운다. 'PDF 의 자리'에
-    '주의'가 붙은 줄(앞 글에 주장·원심·인정사실 등)은 비고에 판단 부분이라고 본 까닭을 적는다(공통/자체검토.md 4-1절 4.)."""
+    '주의'가 붙은 줄(앞 글에 주장·원심·인정사실 등)은 비고에 판단 부분이라고 본 까닭을 적는다(공통/자체검토.md 4-1절 4.).
+    판정 줄은 줄 이름과 판결로 가린다(final_check.py 사람판정_빈 과 같다). 줄 이름만으로 가리면 같은 이름('2. 라.')에 판결을
+    더해도 그 판결의 줄이 들어가지 않았다(2026. 11. 3. SR노조 리서치, 틀을 지우고 다시 만들어 판정을 옮겨 넣었다).
+    판결 칸이 빈 옛 줄은 그 이름의 판결이 하나일 때만 그 판결의 줄로 본다. 빠진 줄은 같은 이름의 줄 뒤에 넣는다."""
     head, rows, rest = None, [], []
     for line in (old or "").splitlines()[1:]:
         s = line.strip()
@@ -182,15 +185,39 @@ def judge_section(old, skel):
         at = next((i for i, h in enumerate(head) if "비고" in h), len(head))
         head.insert(at, "사안 비교")
         rows = [r[:at] + [""] + r[at:] for r in rows]
-    have = {r[0].strip() for r in rows if r}
+    i_no = next((i for i, h in enumerate(head) if h.startswith("줄") or h == "번호"), 0)
+    i_case = next((i for i, h in enumerate(head) if "판결" in h), None)
+    want = {}      # (줄, 판결) → 틀. 같은 판결을 같은 줄에서 두 번 인용했으면 한 줄로 두고 '주의'를 합친다
     for x in skel:
-        if x["줄"].strip() not in have:
-            row = [""] * len(head)
-            vals = {"줄": x["줄"], "판결": x["판결"],
-                    "PDF 의 자리": x["자리"] + (" — 주의: 앞 글에 %s" % "·".join(x["주의"]) if x["주의"] else "")}
-            for i, h in enumerate(head):
-                row[i] = vals.get(h, "")
-            rows.append(row)
+        k = (x["줄"].strip(), x["판결"].strip())
+        if k in want:
+            want[k]["자리"] = want[k]["자리"] or x["자리"]
+            want[k]["주의"] += [w for w in x["주의"] if w not in want[k]["주의"]]
+        else:
+            want[k] = dict(x, 주의=list(x["주의"]))
+    per_name = {}
+    for n, _ in want:
+        per_name[n] = per_name.get(n, 0) + 1
+
+    def present(n, case):
+        for r in rows:
+            if r[i_no].strip() != n:
+                continue
+            cell = r[i_case].strip() if i_case is not None else ""
+            if (not cell and per_name[n] == 1) or (cell and (cases(cell) & cases(case) or cell == case)):
+                return True
+        return False
+
+    for (n, case), x in want.items():
+        if present(n, case):
+            continue
+        row = [""] * len(head)
+        vals = {"줄": x["줄"], "판결": x["판결"],
+                "PDF 의 자리": x["자리"] + (" — 주의: 앞 글에 %s" % "·".join(x["주의"]) if x["주의"] else "")}
+        for i, h in enumerate(head):
+            row[i] = vals.get(h, "")
+        same = [i for i, r in enumerate(rows) if r[i_no].strip() == n]
+        rows.insert(same[-1] + 1 if same else len(rows), row)
     out = ["## 사람 판정", "",
            "판단 부분인지(판결요지·이유 중 판단인지), 방향(우리 주장과 같은지), 사안 비교(사실관계가 우리 사건과 같은 점·다른 점)를 PDF 를 읽고 채운다. "
            "'주의'가 붙은 줄은 비고에 판단 부분이라고 본 까닭을 적는다.", ""] + rest

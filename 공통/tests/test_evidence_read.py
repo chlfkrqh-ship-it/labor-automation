@@ -1382,5 +1382,154 @@ class HwpSignatureTest(unittest.TestCase):
             libre.assert_not_called()
 
 
+def 그림_pdf(path: Path, 면들, 가로=False):
+    """면마다 (글, [(상자, 화소 폭, 화소 높이, 투명)]) 로 PDF 를 만든다. 크기·투명이 같은 그림은 한 xref 로 들어간다(LBOX 워터마크처럼)."""
+    d = pymupdf.open()
+    for t, 그림들 in 면들:
+        pg = d.new_page(width=842, height=595) if 가로 else d.new_page()
+        pg.insert_text((40, 72), t, fontsize=7, fontname='korea')
+        for 상자, w, h, 투명 in 그림들:
+            pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, w, h), 1 if 투명 else 0)
+            pix.clear_with(90)
+            pg.insert_image(pymupdf.Rect(*상자), pixmap=pix)
+    d.save(path)
+
+
+워터마크 = ((188, 380, 408, 462), 592, 220, True)      # LBOX 워터마크: 면 가운데 220×82pt 투명 그림, 모든 면에 같은 그림
+서증표시 = ((240, 792, 355, 812), 172, 30, True)        # 전자소송 서증 표시: 첫 면 바닥 가운데 115×20pt
+표그림 = ((60, 200, 520, 300), 400, 90, False)          # 판결에 끼운 표 그림(면의 9%)
+
+
+class EmbeddedPictureTest(unittest.TestCase):
+    """글자층 면에 끼운 표·발췌 그림은 그 속 글이 글자층에 없으므로 그림으로 볼 면이다. 2026. 11. 3. SR노조 통상임금 리서치에서
+    판결의 단체협약 표·별지 표와 서면의 판결 발췌 박스가 그림이 면의 25% 를 넘지 않아 표시되지 않았고, check·실측이 그대로 지났다."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        실측 = mock.patch.object(er, '실측_문제', return_value=[])      # 실측은 아래 MeasuredEmbeddedPictureTest 가 본다
+        실측.start()
+        self.addCleanup(실측.stop)
+        self.case = Path(self.tmp.name) / 'SR노조_통상임금'
+        self.ours = self.case / '라운드1' / '우리증거'
+        self.ours.mkdir(parents=True)
+        그림_pdf(self.ours / '사 제6호증 판결.pdf', [
+            (글 + '1면', [워터마크]),
+            (글 + '2면 단체협약 표', [워터마크, 표그림]),
+            (글 + '3면', [워터마크, ((400, 600, 430, 630), 60, 60, False),       # 면의 0.18% 도장
+                          ((60, 150, 530, 156), 470, 6, False), 서증표시])])       # 6pt 띠, 바닥 가운데 표시
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def text(self):
+        return (self.case / '증거관리' / '호증글자' / '사6.txt').read_text(encoding='utf-8')
+
+    def rec(self):
+        return self.case / '증거관리' / '호증읽기' / '사6.md'
+
+    def fill(self, 방식):
+        t = self.rec().read_text(encoding='utf-8')
+        for n in (1, 2, 3):
+            t = t.replace(f'- {n}면: \n', f'- {n}면: {n}면 판결 이유 확인표 {tok(self.case, "사6", n)}\n')
+        t = re.sub(r'^읽은 방식:.*$', lambda _: f'읽은 방식: {방식}', t, count=1, flags=re.M)
+        self.rec().write_text(t.replace('면)\n\n- \n', '면)\n\n- 없음\n', 1), encoding='utf-8')
+
+    def test_text_page_with_a_table_picture_is_flagged_but_watermark_seal_bar_and_stamp_are_not(self):
+        run('make', self.case, '--no-ocr')
+        t = self.text()
+        self.assertIn('3면. 그림으로 볼 면: 2면(끼운 그림)', t)
+        self.assertIn('=== 2면 (글자층) — 그림으로 볼 면(끼운 그림) ===', t)
+        self.assertIn('끼운 그림: 글자층 면에 든 표·발췌·캡처 그림이다', t)
+        self.assertIn('[2면 끝 · 그림으로 볼 면', t)                    # 그 면의 확인표는 그림 띠에만 있다
+        self.assertIn('그림으로 볼 면: 2면(끼운 그림)', self.rec().read_text(encoding='utf-8'))
+        self.fill('글자층 전 면')
+        code, out = run('check', self.case)
+        self.assertEqual(code, 1)
+        self.assertIn('그림으로 볼 면 2면을 그림으로 본 기록이 없다', out)
+        self.fill('글자층 전 면, 그림 2면')
+        self.assertEqual(run('check', self.case)[0], 0)
+        폴더 = Path(self.tmp.name) / '그림'
+        self.assertEqual(run('그림', self.case, '--호증', '사6', '--out', 폴더)[0], 0)
+        self.assertEqual(sorted(p.name for p in (폴더 / '사6').glob('*.png')), ['002면.png'])
+
+    def test_old_text_written_before_the_marking_is_checked_from_the_pdf(self):
+        with mock.patch.object(er, '끼운_그림', return_value={}):      # 고치기 전의 make 가 낸 면별 글
+            run('make', self.case, '--no-ocr')
+        self.assertIn('그림으로 볼 면: 없음', self.text())
+        self.fill('글자층 전 면')                                       # 2면도 면별 글 끝의 '글' 확인표
+        code, out = run('check', self.case)
+        self.assertEqual(code, 1)
+        self.assertIn('끼운 그림(글자층 면에 든 표·발췌 그림)이 있는 면 2면을 그림으로 본 기록이 없다', out)
+        self.assertNotIn('확인표가 없거나', out)                         # 옛 면별 글을 읽고 옮긴 확인표는 그대로 맞는다
+        self.fill('글자층 전 면, 그림 2면')
+        self.assertEqual(run('check', self.case)[0], 0)
+        폴더 = Path(self.tmp.name) / '그림'
+        run('그림', self.case, '--호증', '사6', '--out', 폴더)
+        self.assertEqual(sorted(p.name for p in (폴더 / '사6').glob('*.png')), ['002면.png'])   # 표시가 없어도 그 면을 그린다
+
+    def test_one_page_documents(self):
+        """한 면짜리 문서는 되풀이로 거르지 못한다. 글자 위의 투명 워터마크와 바닥 가운데 서증 표시(가로 면 포함)는 빼고, 표 그림은 잡는다."""
+        d = pymupdf.open()
+        pg = d.new_page()
+        for y in range(380, 470, 12):
+            pg.insert_text((190, y), '판결 이유 본문 글줄입니다 워터마크가 이 글 밑에 깔린다', fontsize=9, fontname='korea')
+        for 상자, w, h, 투명 in (워터마크, 서증표시):
+            pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, w, h), 1 if 투명 else 0)
+            pix.clear_with(90)
+            pg.insert_image(pymupdf.Rect(*상자), pixmap=pix)
+        self.assertEqual(er.끼운_그림(d, [1]), {})
+        f = Path(self.tmp.name) / '가로.pdf'
+        그림_pdf(f, [(글, [((359, 545, 483, 565), 184, 30, True)])], 가로=True)      # 가로 면의 서증 표시(바닥에서 50pt 위)
+        self.assertEqual(er.끼운_그림(pymupdf.open(f), [1]), {})
+        f = Path(self.tmp.name) / '표.pdf'
+        그림_pdf(f, [(글, [표그림])])
+        self.assertEqual(list(er.끼운_그림(pymupdf.open(f), [1])), [1])
+
+
+class MeasuredEmbeddedPictureTest(unittest.TestCase):
+    """끼운 그림을 표시하기 전에 실측을 마친 기록은 그 면의 그림을 한 장씩 열었는지 다시 재야 지나간다."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.case = self.root / '2_판례검색' / '사건' / 'SR노조_통상임금'
+        self.ours = self.case / '라운드1' / '우리증거'
+        self.ours.mkdir(parents=True)
+        self.기록 = self.root / '세션기록'
+        self.env = mock.patch.dict(os.environ, {'EVIDENCE_READ_ROOT': str(self.root)})
+        self.env.start()
+        그림_pdf(self.ours / '사 제6호증 판결.pdf', [(글 + '1면', [워터마크]), (글 + '2면 단체협약 표', [워터마크, 표그림])])
+        with mock.patch.object(er, '끼운_그림', return_value={}):
+            run('make', self.case, '--no-ocr')
+        self.글파일 = self.case / '증거관리' / '호증글자' / '사6.txt'
+        self.rec = self.case / '증거관리' / '호증읽기' / '사6.md'
+        t = self.rec.read_text(encoding='utf-8').replace('읽은 방식: \n', '읽은 방식: 글자층 전 면, 그림 2면\n')
+        for n in (1, 2):
+            t = t.replace(f'- {n}면: \n', f'- {n}면: {n}면 이유 확인표 {tok(self.case, "사6", n)}\n')
+        self.rec.write_text(t.replace('면)\n\n- \n', '면)\n\n- 없음\n', 1), encoding='utf-8')
+        읽음 = ('Read', {'file_path': str(self.글파일)}, 줄번호(self.글파일.read_text(encoding='utf-8')))
+        세션(self.기록, '세션1', [읽음])
+        with mock.patch.object(er, '끼운_그림', return_value={}):      # 고치기 전의 실측: 그림 없음
+            self.assertEqual(run('실측', self.case, '--기록폴더', self.기록)[0], 0)
+        self.assertIn('· 그림 없음 ·', self.rec.read_text(encoding='utf-8'))
+
+    def tearDown(self):
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def test_old_measurement_must_be_redone_after_opening_the_picture(self):
+        code, out = run('check', self.case)
+        self.assertEqual(code, 1)
+        self.assertIn('실측이 끼운 그림이 있는 면 2면을 재지 않았다', out)
+        self.assertEqual(run('실측', self.case, '--기록폴더', self.기록)[0], 1)    # 그 면의 그림을 열지 않았다
+        폴더 = self.root / '그림'
+        run('그림', self.case, '--호증', '사6', '--out', 폴더)
+        세션(self.기록, '세션2', [('Read', {'file_path': str(폴더 / '사6' / '002면.png')}, 그림결과)])
+        code, out = run('실측', self.case, '--기록폴더', self.기록)
+        self.assertEqual(code, 0, out)
+        self.assertIn('· 그림 2면 ·', self.rec.read_text(encoding='utf-8'))
+        self.assertEqual(run('check', self.case)[0], 0)
+
+
 if __name__ == '__main__':
     unittest.main()
