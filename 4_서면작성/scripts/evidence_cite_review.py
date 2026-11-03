@@ -57,11 +57,13 @@ HEADER = re.compile(r'개인정보유출|제출자\s*:|제출일시|다운로드
 REF = re.compile(r'(' + PREFIX + r')\s*제\s*(\d+)\s*호증(?:\s*의\s*(\d+))?')
 REF_LIST = re.compile(r'(' + PREFIX + r')\s*제\s*(\d+(?:\s*[·ㆍ,]\s*\d+)+)\s*호증')
 GROUP = re.compile(r'[\(\[]([^()\[\]]*?(?:' + PREFIX + r')\s*제\s*\d+[^()\[\]]*)[\)\]]')
-PAGES = re.compile(r'(\d+(?:\s*~\s*\d+)?)\s*(?:면|쪽)')
-# 호증 표시 바로 뒤의 면 표시(`evidence_words.py`). '3면'·'제3면'·'3~5면'·'2, 4면'·'3·5~7면' 이 한 묶음이고, 묶음마다 '면'을
-# 붙여 이은 '5~7면, 9면, 16~17면' 도 한 표시이다. 쉼표·가운뎃점 뒤에 면 번호가 아닌 말(다른 호증, '제1심 판결문 13면')이 오면 끝난다.
+# 호증 표시 바로 뒤의 면 표시(`pages_after`). '3면'·'제3면'·'3~5면'·'2, 4면'·'3·5~7면' 이 한 묶음이고, 묶음마다 '면'을 붙여 이은
+# '5~7면, 9면, 16~17면' 도 한 표시이다. 쉼표·가운뎃점 뒤에 면 번호가 아닌 말(다른 호증, '제1심 판결문 13면')이 오면 끝난다.
+# 첫 묶음 앞의 호증 설명('원고 소명서')은 40자까지이고 다른 호증 표시·괄호·줄바꿈을 넘지 않는다. 설명 안의 쉼표는 천 단위 쉼표와
+# 면 표시 바로 앞의 쉼표('제3조 제2호, 15면')만 넘는다('방해영상3, 제1심 판결문 11면'의 11면은 판결문의 면이다).
 _PAGE_GROUP = r'(?:제\s*)?\d+(?:\s*[~,·ㆍ]\s*\d+)*\s*(?:면|쪽)'
-PAGE_LIST = _PAGE_GROUP + r'(?:\s*[,·ㆍ]\s*' + _PAGE_GROUP + r')*'
+_PAGE_AFTER = re.compile(r'(?:(?!호증|,(?!\d{3}(?!\d)))[^()\[\]\n]){0,40}?(?:,\s*)?('
+                         + _PAGE_GROUP + r'(?:\s*[,·ㆍ]\s*' + _PAGE_GROUP + r')*)')
 EVIDENCE_DIRS = ('우리증거', '상대증거', '증거', '노동위원회_기록')
 FILE_COURT = re.compile(r'\((' + PREFIX + r')(\d+)(?:-(\d+))?_')
 FILE_LEAD = re.compile(r'^(' + PREFIX + r')\s*(?:제\s*)?(\d+)\s*(?:호증)?\s*(?:(?:의|-)\s*(\d+))?(?=[\s_.()\-]|호증|$)')
@@ -154,8 +156,7 @@ def parse_citations(text: str) -> list:
             m_end = re.search(r'(?:다|\))\.(?:\s|$)', t[ge - 1:])
             sentence = t[sent_start:(ge - 1 + m_end.end()) if m_end else len(t)].strip()
             for part in re.split(r',\s*(?=(?:' + PREFIX + r')\s*제)', g.group(1)):
-                pages = []
-                refs = []
+                refs, pages = [], []                  # '을 제93·94·97호증' 처럼 호증이 여럿인 표시는 면을 나누지 않는다
                 ml = REF_LIST.search(part)
                 if ml:
                     refs = [(ml.group(1), int(n), None) for n in re.split(r'\s*[·ㆍ,]\s*', ml.group(2))]
@@ -163,29 +164,21 @@ def parse_citations(text: str) -> list:
                     m = REF.search(part)
                     if m:
                         refs = [(m.group(1), int(m.group(2)), int(m.group(3)) if m.group(3) else None)]
-                        pages = page_items(part[m.end():])      # 호증 표시 뒤의 면만(의3 의 3 을 면으로 읽지 않는다)
+                        pages = pages_after(part, m.end())
                 for pre, no, sub in refs:
                     key = f'{pre}{no}' + (f'-{sub}' if sub else '')
-                    rows.append({'line': ln, 'key': key, 'raw': part.strip(), 'pages': pages if len(refs) == 1 else [],
+                    rows.append({'line': ln, 'key': key, 'raw': part.strip(), 'pages': pages,
                                  'span': span, 'sentence': sentence, 'caption': caption})
             prev_end = ge
     return rows
 
 
-def page_items(s: str) -> list:
-    """호증 표시 뒤의 면 표시를 ['3', '5~7', '9'] 꼴로. '3·5~7면'·'2, 4면'·'5~7면, 9면' 모두 낱낱의 면과 범위로 나눈다.
-    2026. 11. 3. 쉼표·가운뎃점으로 이은 면('3·5면', '2, 4면')의 앞 면을 버려, 증거 인용 대조가 그 면을 보여 주지 않았다
-    (같은 날 `evidence_words.py` 에서 고친 것과 같은 하자)."""
-    out = []
-    for m in re.finditer(PAGE_LIST, s):
-        for grp in re.findall(r'(\d+(?:\s*[~,·ㆍ]\s*\d+)*)\s*(?:면|쪽)', m.group(0)):
-            out += [re.sub(r'\s', '', x) for x in re.split(r'\s*[,·ㆍ]\s*', grp) if x.strip()]
-    return out
-
-
-def page_numbers(s: str) -> set:
-    """면 표시(PAGE_LIST)를 면 번호 모음으로 바꾼다. 쉼표·가운뎃점은 낱낱의 면이고 물결만 범위이다('3, 5면'은 3면과 5면)."""
-    return {n for a, b in re.findall(r'(\d+)(?:\s*~\s*(\d+))?', s) for n in range(int(a), int(b or a) + 1)}
+def pages_after(text: str, pos: int) -> list:
+    """text 의 pos 가 호증 표시 바로 뒤일 때 그 호증의 면을 '3'·'5~7' 꼴로 낸다(`expand_pages` 가 펼친다). 면 표시가 없으면 [].
+    쉼표·가운뎃점은 낱낱의 면이고 물결만 범위이다('3, 5면'은 3면과 5면). `evidence_words.py` 도 이것으로 인용한 면을 가린다.
+    2026. 11. 3. 괄호 안의 'N면'을 모두 그 호증의 면으로 읽어 '사진 2면, 제1심 판결문 13면'의 13면까지 맞대던 것을 바꾸었다."""
+    m = _PAGE_AFTER.match(text, pos)
+    return [a + (f'~{b}' if b else '') for a, b in re.findall(r'(\d+)(?:\s*~\s*(\d+))?', m.group(1))] if m else []
 
 
 def headings(text: str) -> list:
