@@ -16,7 +16,8 @@ PDF 가 아닌 호증도 단위(압축 안 파일, 엑셀 시트, 문서 전체)
 - 옛 형식 .doc·.xls 는 이 PC의 워드·엑셀(없으면 LibreOffice)로 .docx·.xlsx 로 바꾸어 위와 같이 읽는다(`새형식`. PDF 로 바꾸면
   숨긴 시트·행·열과 메모가 빠진다). .hwp 는 이 PC의 한글로 PDF 로 바꾸어 면마다 읽게 한다(`PDF로`). 그림이 든 면도 그림으로 볼 면이
   되어 빠지지 않는다. .msg 는 extract_msg 로 읽는다. 바꿀 길이 없으면 그 까닭을 돌려준다.
-  한글 파일(.hwp)은 한글 자동화가 있는 PC에서만 읽힌다. 그런 호증은 제출용 PDF 를 만들어 두면 그 PDF 로 읽는다.
+  한글 파일(.hwp)은 한글 자동화가 있는 PC에서만 읽힌다(LibreOffice 는 한글 97 이하 형식만 읽는다). 그런 호증은 제출용 PDF 를 만들어
+  두면 그 PDF 로 읽는다. 머리 서명이 한글 문서가 아닌 .hwp 는 바꾸지 않는다(`한글_판`).
 
 2026. 11. 3. 담당 노무사 "압축·엑셀·문서 호증도 확인표 넣어줘".
 """
@@ -640,9 +641,28 @@ def _한글_PDF(data: bytes, ext: str) -> bytes | None:
                 pass
 
 
+OLE_서명 = b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1'      # 복합 문서(MS-CFB)의 머리 8바이트. HWP 5 와 .doc·.xls·.msg 가 이 꼴이다
+
+
+def 한글_판(data: bytes) -> int | None:
+    """.hwp 바이트의 머리 서명으로 본 한글 문서의 판. 5(한글 2002 이후), 3(한글 97 이하), 한글 문서가 아니면 None.
+    HWP 5 는 복합 문서이고 그 안의 FileHeader 스트림이 'HWP Document File'로 시작한다(스트림 이름은 복합 문서의 목록에 UTF-16 으로
+    적힌다). HWP 3 이하는 파일 첫 30바이트가 'HWP Document File V3.00 '(2.x 는 V2.00·V2.10)에 1A 01 02 03 04 05 를 붙인 것이다.
+    이름만 .hwp 인 hwpx(zip), 한글이 아닌 복합 문서(.doc 등), 깨진 파일은 None 이다."""
+    if data[:8] == OLE_서명:
+        return 5 if 'FileHeader'.encode('utf-16-le') in data and b'HWP Document File' in data else None
+    return 3 if data[:19] == b'HWP Document File V' else None
+
+
 def PDF로(이름: str, data: bytes) -> bytes | None:
-    """한글 파일(.hwp)을 PDF 로. 이 PC의 한글, 없으면 LibreOffice. 바꾸지 못하면 None."""
-    return _한글_PDF(data, '.hwp') or _libre(data, '.hwp', 'pdf')
+    """한글 파일(.hwp)을 PDF 로. 이 PC의 한글로 바꾸고, 한글이 못 하면 한글 97 이하(HWP 3) 형식만 LibreOffice 로 바꾼다. 못 하면 None.
+    머리 서명이 한글 문서가 아니면 바꾸지 않는다. LibreOffice 는 한글 거르개가 맞지 않는 바이트를 글 문서로 열어 PDF 를 만들고(가짜 .hwp 가
+    1면짜리 글이 되었다), HWP 5 는 읽지 못해 그 바이트를 글자로 그린다(1면짜리 서식이 902면의 깨진 글이 되었다. 2026. 11. 3. LibreOffice 26.8).
+    그렇게 만든 PDF 를 면마다 읽게 하면 문서를 읽지 않고도 check 를 지난다."""
+    판 = 한글_판(data)
+    if not 판:
+        return None
+    return _한글_PDF(data, '.hwp') or (_libre(data, '.hwp', 'pdf') if 판 == 3 else None)
 
 
 def _오피스_바꾸기(data: bytes, ext: str) -> bytes | None:

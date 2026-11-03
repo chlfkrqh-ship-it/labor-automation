@@ -1003,7 +1003,7 @@ class OtherFormatsTest(unittest.TestCase):
         run('make', case, '--자료', att, '--no-ocr')
         code, out = run('check', case, '--자료', att)
         self.assertEqual(code, 1)
-        self.assertIn('글을 뽑지 못한 곳: 전체(', out)
+        self.assertIn('글을 뽑지 못한 곳: 전체(.hwp 이름이지만 머리 서명이 한글 문서가 아니다', out)     # 한글·LibreOffice 가 있어도 바꾸지 않는다
         self.assertIn('word/media/image1.emf(문서 안의 .emf 그림을 그리지 못했다', out)
         make_pdf(att / '취업규칙.pdf', [글 + '제1조'])
         make_pdf(att / '계약서.pdf', [글 + '제1조'])
@@ -1011,6 +1011,36 @@ class OtherFormatsTest(unittest.TestCase):
         code, out = run('check', case, '--자료', att)
         self.assertNotIn('글을 뽑지 못한 곳', out)                                  # 같은 이름의 PDF 를 면마다 읽는다
         self.assertIn('취업규칙.pdf', out)
+
+    def test_text_made_from_a_fake_hwp_before_the_signature_check_is_written_again(self):
+        """고치기 전의 make 는 가짜 .hwp 를 LibreOffice 가 만든 글 PDF 로 면마다 냈다. 확인표가 맞아도 옛 판으로 막고, make 가 다시 쓴다."""
+        (self.ours / '사 제9호증 취업규칙.hwp').write_bytes(b'not a real hwp file \x00\x01')
+        with mock.patch.object(er._et, 'PDF로', return_value=pdf_bytes([글 + '제1조'])):
+            run('make', self.case, '--no-ocr', '--호증', '사9')
+        self.assertIn('확인표 단위: 전체 ⟶ 면 글', self.text('사9'))
+        with mock.patch.object(er._et, '한글_판', return_value=5):                # 머리 서명을 보지 않던 때에는 지나갔다
+            채우기(self.case, '사9', 기대표(self.case, '사9'))
+            self.assertEqual(run('check', self.case, '--호증', '사9')[0], 0)
+        code, out = run('check', self.case, '--호증', '사9')
+        self.assertEqual(code, 1)
+        self.assertIn('옛 판', out)
+        run('make', self.case, '--no-ocr', '--호증', '사9')
+        code, out = run('check', self.case, '--호증', '사9')
+        self.assertEqual(code, 1)
+        self.assertIn('글을 뽑지 못한 곳: 전체(.hwp 이름이지만 머리 서명이 한글 문서가 아니다', out)
+
+    def test_pictures_of_a_hwp_are_not_drawn_from_an_empty_pdf(self):
+        """한글 자동화가 없는 PC의 `그림` 은 .hwp 의 그림으로 볼 면을 빈 PDF 로 열어 아무것도 그리지 않고 지나가지 않는다."""
+        (self.ours / '사 제9호증 취업규칙.hwp').write_bytes(HwpSignatureTest.HWP5)
+        with mock.patch.object(er._et, 'PDF로', return_value=pdf_bytes(['직인'])):     # 한글 자동화가 바꾼 1면(글자가 거의 없는 면)
+            run('make', self.case, '--no-ocr', '--호증', '사9')
+        self.assertIn('확인표 단위: 전체 ⟶ 면 그림', self.text('사9'))
+        그림폴더 = Path(self.tmp.name) / '그림'
+        with mock.patch.object(er._et, 'PDF로', return_value=None):
+            code, out = run('그림', self.case, '--호증', '사9', '--out', 그림폴더)
+        self.assertEqual(code, 0, out)
+        self.assertIn('한글 자동화로 .hwp 를 PDF 로 바꾸지 못했다', out)
+        self.assertEqual(list(그림폴더.rglob('*.png')), [])
 
     def test_ocr_cache_of_a_replaced_file_is_not_reused(self):
         d = pymupdf.open()
@@ -1320,6 +1350,36 @@ class TextPiecesTest(unittest.TestCase):
     def test_same_attachment_names_are_kept_apart(self):
         self.assertEqual(er._et.고유('사진.png', ['사진.png', '사진 (2).png']), '사진 (3).png')
         self.assertEqual(er._et.고유('a.pdf', []), 'a.pdf')
+
+
+class HwpSignatureTest(unittest.TestCase):
+    """.hwp 는 머리 서명이 한글 문서일 때만 PDF 로 바꾸고, LibreOffice 는 한글 97 이하(HWP 3)만 맡는다. 한글·LibreOffice 가 없는 PC 에서도 같다.
+    2026. 11. 3. 가짜 .hwp 를 LibreOffice 가 1면짜리 글 PDF 로 바꾸어 check 가 막지 않았고, HWP 5 서식은 902면의 깨진 글이 되었다."""
+    HWP5 = (er._et.OLE_서명 + bytes(504) + 'FileHeader'.encode('utf-16-le') + bytes(54)       # 복합 문서 목록의 스트림 이름
+            + b'HWP Document File' + bytes(15))                                            # FileHeader 스트림의 첫 32바이트
+    HWP3 = b'HWP Document File V3.00 \x1a\x01\x02\x03\x04\x05' + bytes(100)
+
+    def test_version_comes_from_the_signature(self):
+        self.assertEqual(er._et.한글_판(self.HWP5), 5)
+        self.assertEqual(er._et.한글_판(self.HWP3), 3)
+        for 아님 in (b'not a real hwp file \x00\x01', b'', b'PK\x03\x04' + bytes(30),          # 이름만 .hwp 인 hwpx(zip)
+                     er._et.OLE_서명 + bytes(504) + 'WordDocument'.encode('utf-16-le')):     # 한글이 아닌 복합 문서(.doc)
+            self.assertIsNone(er._et.한글_판(아님), 아님[:12])
+
+    def test_only_hangul_documents_reach_the_converters(self):
+        불림 = []
+        with mock.patch.object(er._et, '_한글_PDF', side_effect=lambda *a: 불림.append('한글')), \
+                mock.patch.object(er._et, '_libre', side_effect=lambda *a: 불림.append('LibreOffice')):
+            self.assertIsNone(er._et.PDF로('취업규칙.hwp', b'not a real hwp file \x00\x01'))
+            self.assertEqual(불림, [])
+            self.assertIsNone(er._et.PDF로('서식.hwp', self.HWP5))
+            self.assertEqual(불림, ['한글'])                       # LibreOffice 는 HWP 5 를 바이트째 글자로 그린다
+            불림.clear()
+            self.assertIsNone(er._et.PDF로('옛 규정.hwp', self.HWP3))
+            self.assertEqual(불림, ['한글', 'LibreOffice'])
+        with mock.patch.object(er._et, '_한글_PDF', return_value=b'%PDF-1.7'), mock.patch.object(er._et, '_libre') as libre:
+            self.assertEqual(er._et.PDF로('서식.hwp', self.HWP5), b'%PDF-1.7')
+            libre.assert_not_called()
 
 
 if __name__ == '__main__':
