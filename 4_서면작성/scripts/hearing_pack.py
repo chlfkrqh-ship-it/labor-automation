@@ -11,7 +11,8 @@
 - 호증 면 목록: 호증마다 면 단추(2면 이상)와 그 호증을 인용한 서면 쪽 단추(우리 서면은 남색, 상대 서면은 회색).
 - 나머지 면: 원본 면 위에 띠를 덧대어 '◀ 처음'·'목차'(또는 '호증 목록')·'◀ 앞 호증'·'다음 호증 ▶' 단추와
   '사 제17호증 … 2/4면'·'답변서(1) … 23쪽' 같은 위치를 적는다. 원본 면의 내용 위에는 그리지 않는다
-  (회전 0·상자가 단순한 면은 면 상자를 위로 늘리고, 아니면 새 면에 원본 면을 그대로 놓는다). 끝에 면마다 원본과 그림을 맞댄다.
+  (회전된 면은 remove_rotation 으로 보이는 모양 그대로 회전을 푼 뒤, 상자가 단순한 면은 면 상자를 위로 늘리고, 아니면 새 면에
+  그 면을 그대로 놓는다). 끝에 면마다 원본과 그림을 맞댄다(전체 평균과 12pt 칸별 평균).
 - 면 이름(page label): '처음', '목차-1', '호증목록-1', 문서마다 '답1-23'(인쇄 쪽)·'사17-2' 꼴. 책갈피도 단다.
 - PDF 가 아닌 호증: 그림(jpg·png)은 면으로 넣고, 녹음·영상 등은 자리 면을 두고 파일을 출력 폴더의 '호증 파일/' 에 복사한다.
 
@@ -308,7 +309,13 @@ def 조각_읽기(설정: dict, 사건: Path, 경고: list) -> tuple:
         for h in 호증들:
             빈도[h["접두"]] = 빈도.get(h["접두"], 0) + 1
         순 = {p: i for i, (p, _) in enumerate(sorted(빈도.items(), key=lambda x: (x[0] == "참고자료", -x[1])))}
-        호증들.sort(key=lambda h: (순[h["접두"]], h["번호"], h["가지"] or 0))
+        호증들.sort(key=lambda h: (순[h["접두"]], h["번호"], h["가지"] or 0, h["파일"].suffix.lower() != ".pdf"))
+        이름들 = [h["이름"] for h in 호증들]
+        for h in 호증들:                        # 같은 호증의 표지 PDF 와 녹음·영상 파일: PDF 아닌 쪽에 '(mp4)' 처럼 붙인다
+            if 이름들.count(h["이름"]) > 1 and h["파일"].suffix.lower() != ".pdf":
+                확장 = h["파일"].suffix.lower().lstrip(".")
+                h["이름"] += f"({확장})"
+                h["짧은"] += 확장
         이름들 = [h["이름"] for h in 호증들]
         for n in set(이름들):
             if 이름들.count(n) > 1:
@@ -489,7 +496,9 @@ def 묶기(설정경로: Path):
     for g in 증거무리:
         for z in g["조각들"]:
             h = z["호증"]
-            호증별[(h["접두"], h["번호"], h["가지"])] = z
+            키 = (h["접두"], h["번호"], h["가지"])
+            if 키 not in 호증별 or 호증별[키]["종류"] != "pdf":      # 같은 번호면 PDF 쪽으로 인용을 모은다
+                호증별[키] = z
             z["인용"] = []
     for z in 순서:
         if not z.get("인용찾기"):
@@ -560,25 +569,32 @@ def 묶기(설정경로: Path):
     for _ in range(앞면수):
         out.new_page(width=A4[0], height=A4[1])
 
-    # 본 면 넣기(회전·상자가 단순하면 그대로 넣고 위 상자를 늘리고, 아니면 새 면에 놓는다)
+    # 본 면 넣기. 통째로 넣어 링크·주석을 살리고, 회전된 면은 remove_rotation 으로 보이는 모양 그대로 회전을 풀며,
+    # 상자가 단순하면 위로 늘려 띠를 덧대고, 아니면(원점이 0 이 아니거나 CropBox 가 다름) 새 면에 그 면을 그대로 놓는다.
+    # show_pdf_page 는 원본의 /Rotate 를 따르지 않아(2026. 11. 3. 시험) 회전된 면에 바로 쓰지 않는다.
+    def 단순면(pg):
+        return pg.rotation == 0 and pg.mediabox == pg.cropbox and pg.mediabox.x0 == 0 and pg.mediabox.y0 == 0
+
     for z in 순서:
-        z["시작"] = out.page_count
+        z["시작"] = 시작 = out.page_count
         src = z["원본"]
-        단순 = all(pg.rotation == 0 and pg.mediabox == pg.cropbox and pg.mediabox.x0 == 0 and pg.mediabox.y0 == 0 for pg in src)
-        if 단순:
-            out.insert_pdf(src, links=True, annots=True)
-            z["놓은방식"] = ["늘림"] * src.page_count
-        else:
-            z["놓은방식"] = []
-            for i, pg in enumerate(src):
-                if pg.rotation == 0 and pg.mediabox == pg.cropbox and pg.mediabox.x0 == 0 and pg.mediabox.y0 == 0:
-                    out.insert_pdf(src, from_page=i, to_page=i, links=False, annots=True)
-                    z["놓은방식"].append("늘림")
-                else:
-                    r = pg.rect
-                    np_ = out.new_page(width=r.width, height=r.height + S)
-                    np_.show_pdf_page(fitz.Rect(0, S, r.width, r.height + S), src, i)
-                    z["놓은방식"].append("놓음")
+        out.insert_pdf(src, links=True, annots=True)
+        z["놓은방식"] = []
+        for i in range(src.page_count):
+            op = out[시작 + i]
+            회전 = op.rotation
+            if 회전:
+                op.remove_rotation()
+            if 단순면(op):
+                z["놓은방식"].append("회전풀고늘림" if 회전 else "늘림")
+                continue
+            tmp = fitz.open()
+            tmp.insert_pdf(out, from_page=시작 + i, to_page=시작 + i)
+            r = tmp[0].rect
+            out.delete_page(시작 + i)
+            np_ = out.new_page(pno=시작 + i, width=r.width, height=r.height + S)
+            np_.show_pdf_page(fitz.Rect(0, S, r.width, r.height + S), tmp, 0)
+            z["놓은방식"].append("놓음")
     목차면_시작 = 1
     목록면_시작 = 1 + len(목차면들)
     목차면_자리 = {}
@@ -610,7 +626,7 @@ def 묶기(설정경로: Path):
     for z in 순서:
         for i in range(z["면수"]):
             pg = out[z["시작"] + i]
-            if z["놓은방식"][i] == "늘림":
+            if z["놓은방식"][i] != "놓음":
                 mb = pg.mediabox
                 pg.set_mediabox(fitz.Rect(mb.x0, mb.y0, mb.x1, mb.y1 + S))
             W = pg.rect.width
@@ -859,7 +875,7 @@ def 확인(설정경로: Path) -> int:
     문제 = 0
     다른면 = []
     손실 = bool(설정.get("그림"))
-    최대평균 = 0.0
+    최대평균, 최대칸 = 0.0, 0
     for z in 기록["조각"]:
         src_p = 사건 / z["파일"]
         if src_p.suffix.lower() != ".pdf":
@@ -874,13 +890,20 @@ def 확인(설정경로: Path) -> int:
             if abs(a.width - b.width) > 1 or abs(a.height - b.height) > 1:
                 다른면.append((z["이름"], i + 1, "크기"))
                 continue
-            hist = ImageChops.difference(a.crop((0, 0, w, h)), b.crop((0, 0, w, h))).histogram()
+            차 = ImageChops.difference(a.crop((0, 0, w, h)), b.crop((0, 0, w, h)))
+            hist = 차.histogram()
             합 = sum(hist)
             평균 = sum(k * v for k, v in enumerate(hist)) / 합
             큰차 = sum(hist[80:] if 손실 else hist[41:]) / 합
+            # 12pt 칸마다 두 그림의 평균 밝기를 견준다. 글자가 적은 면에서 글 위치가 어긋나도(회전 등) 전체 평균은 작으므로 칸으로 보고,
+            # 면 높이가 정수 pt 가 아니어서 생기는 1화소 미만 어긋남(흑백 글자 그림에서 화소 차이가 크게 나옴)에는 둔하도록 칸 평균끼리 뺀다.
+            # 2026. 11. 3. OES 정상 면 최대 6, 회전을 잘못 놓은 시험 면 36.
+            칸크기 = (max(1, w // 12), max(1, h // 12))
+            칸 = max(ImageChops.difference(a.crop((0, 0, w, h)).resize(칸크기, resample=2), b.crop((0, 0, w, h)).resize(칸크기, resample=2)).getdata())
             최대평균 = max(최대평균, 평균)
-            if (손실 and (평균 > 6 or 큰차 > 0.01)) or (not 손실 and 큰차 > 0.001):
-                다른면.append((z["이름"], i + 1, f"평균 {평균:.1f}, 큰 차이 {큰차:.2%}"))
+            최대칸 = max(최대칸, 칸)
+            if 칸 > (15 if 손실 else 10) or (손실 and 평균 > 6) or (not 손실 and 큰차 > 0.01):
+                다른면.append((z["이름"], i + 1, f"평균 {평균:.1f}, 큰 차이 {큰차:.2%}, 칸 최대 {칸}"))
     링크수, 바깥 = 0, 0
     for pg in d:
         for l in pg.get_links():
@@ -892,7 +915,7 @@ def 확인(설정경로: Path) -> int:
     이름 = [d[i].get_label() for i in (0, min(1, d.page_count - 1), d.page_count - 1)]
     print(f"확인: {출력.name} {d.page_count}면, {출력.stat().st_size / 1e6:.1f}MB")
     print(f"- 원본과 그림이 다른 본 면: {len(다른면)}" + ("" if not 다른면 else " → " + "; ".join(f"{a} {b}면({c})" for a, b, c in 다른면[:10]))
-          + f" (그림 다시 압축 {'함' if 손실 else '안 함'}, 면별 평균 차이 최대 {최대평균:.2f}/255)")
+          + f" (그림 다시 압축 {'함' if 손실 else '안 함'}, 면별 평균 차이 최대 {최대평균:.2f}/255, 12pt 칸 평균 차이 최대 {최대칸}/255)")
     print(f"- 면 안으로 가는 링크 {링크수}, 면 밖을 가리키는 링크 {바깥}")
     print(f"- 책갈피 {len(toc)}, 면 이름 예: {이름}")
     문제 = len(다른면) + 바깥 + (0 if toc else 1)
