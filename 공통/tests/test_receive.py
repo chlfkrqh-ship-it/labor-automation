@@ -101,6 +101,127 @@ class ReceiveTests(unittest.TestCase):
         text = (self.pc / '판례기록.md').read_bytes().decode('utf-8')
         self.assertEqual(text, '첫 줄(클라우드)\r\n둘째\r\n셋째\r\n넷째\r\n끝 줄\r\n더한 줄(PC)\r\n')   # 줄끝은 이 PC 것 그대로
 
+    def move_repo_to_appdata(self):
+        appdata = Path(self.tmp.name) / 'appdata'
+        (appdata / 'labor-automation').mkdir(parents=True)
+        shutil.move(str(self.pc / '.git'), str(appdata / 'labor-automation' / 'repo.git'))   # g.bat 과 같은 구성
+        return appdata
+
+    def test_unpushed_commit_is_stacked_on_remote_and_its_fix_kept(self):
+        # push 가 원격 진행으로 거절되어 남은 이 PC 커밋(2026. 11. 3. c192369 의 고침이 작업본에서 원격 판으로 되돌려졌다)
+        write(self.pc, 'c.md', 'pc\n')                                       # 원격은 그대로인 파일
+        write(self.pc, '판례기록.md', '첫 줄\n둘째\n셋째\n넷째\n끝 줄(PC 커밋)\n')   # 원격은 첫 줄을 고친 파일
+        git(self.pc, 'commit', '-q', '-am', 'unpushed fix')
+        write(self.pc, '판례기록.md', '첫 줄\n둘째\n셋째(다른 세션)\n넷째\n끝 줄(PC 커밋)\n')   # 다른 세션이 같은 파일을 고치는 중
+        r = self.run_receive()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.read('c.md'), 'pc\n')                          # 커밋의 고침이 작업본에 남는다
+        self.assertEqual(self.read('판례기록.md'), '첫 줄(클라우드)\n둘째\n셋째(다른 세션)\n넷째\n끝 줄(PC 커밋)\n')
+        self.assertEqual(self.read('지침/a.md'), '2\n')                       # 원격 고침도 받는다
+        self.assertFalse((self.pc / 'b.md').exists())
+        self.assertIn('옮겨 쌓았습니다', r.stdout)
+        self.assertEqual(git(self.pc, 'log', '--format=%s', 'origin/main..HEAD'), 'unpushed fix\n')
+        self.assertEqual(git(self.pc, 'rev-parse', 'HEAD^'), git(self.pc, 'rev-parse', 'origin/main'))   # 원격 main 바로 위
+        self.assertEqual(git(self.pc, 'show', 'HEAD:판례기록.md'), '첫 줄(클라우드)\n둘째\n셋째\n넷째\n끝 줄(PC 커밋)\n')
+        status = git(self.pc, '-c', 'core.quotepath=false', 'status', '--porcelain', '--untracked-files=all')
+        self.assertEqual(status.splitlines(), [' M 판례기록.md'])                # 다른 세션의 고침만 남는다
+        git(self.pc, 'push', '-q', 'origin', 'HEAD:main')                        # 같은 push 를 다시 하면 올라간다
+
+    def test_unpushed_commit_clashing_with_remote_stops_and_touches_nothing(self):
+        write(self.pc, 'd.md', 'pc\n')                                       # 원격도 d 를 고쳤다
+        git(self.pc, 'commit', '-q', '-am', 'unpushed fix')
+        write(self.pc, 'c.md', 'other session\n')                            # 다른 세션이 고치는 중
+        write(self.pc, 'n.md', 'staged\n')
+        git(self.pc, 'add', 'n.md')                                          # 다른 세션이 올리려고 담아 둠
+
+        def state():
+            return (git(self.pc, 'rev-parse', 'HEAD'), git(self.pc, 'ls-files', '-s'),
+                    git(self.pc, 'status', '--porcelain', '--untracked-files=all'),
+                    self.read('d.md'), self.read('지침/a.md'))
+
+        before = state()
+        r = self.run_receive()
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn('unpushed fix', r.stdout)
+        self.assertIn('원격도 같은 곳을 고침 — d.md', r.stdout)
+        self.assertEqual(state(), before)                                    # 커밋·색인·작업본 모두 그대로
+        r = self.run_auto(self.move_repo_to_appdata())                       # 시작 훅은 막지 않고 한 줄로 알린다
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(len(r.stdout.splitlines()), 1, r.stdout)
+        self.assertIn('[시스템 파일 받기] 건너뜀', r.stdout)
+        self.assertEqual((self.read('d.md'), self.read('지침/a.md')), ('pc\n', '1\n'))
+
+    def test_clash_merged_by_hand_with_both_parents_is_then_received(self):
+        # 종료 코드 3 뒤 운영.md 순서: 합친 tree 에서 충돌 파일만 손으로 합쳐, 부모가 origin/main 과 그 커밋인 커밋으로 올린다
+        write(self.pc, 'd.md', 'pc\n')
+        git(self.pc, 'commit', '-q', '-am', 'unpushed fix')
+        write(self.pc, 'c.md', 'other session\n')                            # 다른 세션이 고치는 중
+        self.assertEqual(self.run_receive().returncode, 3)
+        merged = subprocess.run(['git', 'merge-tree', '--write-tree', '--name-only', 'origin/main', 'HEAD'],
+                                cwd=self.pc, env=ENV, capture_output=True, text=True, encoding='utf-8').stdout.splitlines()
+        self.assertEqual(merged[1], 'd.md')                                  # 첫 줄은 합친 tree, 다음 줄부터 충돌 파일
+        blob = subprocess.run(['git', 'hash-object', '-w', '--stdin'], cwd=self.pc, env=ENV, input=b'2 and pc\n',
+                              capture_output=True, check=True).stdout.decode().strip()
+        index = dict(ENV, GIT_INDEX_FILE=str(Path(self.tmp.name) / 'merge-index'))
+        for args in (['read-tree', merged[0]], ['update-index', '--cacheinfo', f'100644,{blob},d.md']):
+            subprocess.run(['git', *args], cwd=self.pc, env=index, check=True)
+        tree = subprocess.run(['git', 'write-tree'], cwd=self.pc, env=index, capture_output=True, text=True,
+                              check=True).stdout.strip()
+        commit = git(self.pc, 'commit-tree', tree, '-p', 'origin/main', '-p', 'HEAD', '-m', 'merge by hand').strip()
+        git(self.pc, 'push', '-q', 'origin', f'{commit}:main')
+        r = self.run_receive()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(git(self.pc, 'rev-parse', 'HEAD').strip(), commit)
+        self.assertEqual((self.read('d.md'), self.read('c.md'), self.read('지침/a.md')),
+                         ('2 and pc\n', 'other session\n', '2\n'))
+
+    def test_unpushed_commit_on_unchanged_remote_is_left_as_it_is(self):
+        git(self.pc, 'fetch', '-q', 'origin', 'main')
+        git(self.pc, 'merge', '-q', '--ff-only', 'origin/main')             # 원격까지 받은 PC
+        write(self.pc, 'c.md', 'pc\n')
+        git(self.pc, 'commit', '-q', '-am', 'unpushed fix')                  # 아직 올리지 않았다(연결이 끊겨 push 실패 등)
+        head = git(self.pc, 'rev-parse', 'HEAD')
+        r = self.run_receive()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn('이 PC 커밋 1개를 그대로 두었습니다', r.stdout)
+        self.assertEqual(git(self.pc, 'rev-parse', 'HEAD'), head)
+        self.assertEqual(self.read('c.md'), 'pc\n')
+        self.assertEqual(git(self.pc, 'status', '--porcelain', '--untracked-files=all'), '')
+        r = self.run_auto(self.move_repo_to_appdata())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(len(r.stdout.splitlines()), 1, r.stdout)
+        self.assertIn('unpushed fix', r.stdout)
+
+    def test_unpushed_commit_already_on_remote_is_dropped(self):
+        # push 가 거절된 뒤 같은 고침을 원격 main 위에 따로 만들어 올린 경우(commit-tree 우회)
+        write(self.pc, 'c.md', 'pc\n')
+        git(self.pc, 'commit', '-q', '-am', 'unpushed fix')
+        write(self.cloud, 'c.md', 'pc\n')
+        git(self.cloud, 'commit', '-q', '-am', 'same fix on remote')
+        git(self.cloud, 'push', '-q', 'origin', 'HEAD:main')
+        r = self.run_receive()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn('unpushed fix  (고침이 이미 원격에 있는 이 PC 커밋)', r.stdout)
+        self.assertEqual(git(self.pc, 'rev-parse', 'HEAD'), git(self.pc, 'rev-parse', 'origin/main'))
+        self.assertEqual((self.read('c.md'), self.read('지침/a.md')), ('pc\n', '2\n'))
+        self.assertEqual(git(self.pc, 'status', '--porcelain', '--untracked-files=all'), '')
+
+    def test_changes_staged_by_another_session_stay_staged(self):
+        write(self.pc, 'c.md', 'staged\n')
+        write(self.pc, 'n.md', 'new\n')
+        write(self.pc, '판례기록.md', '첫 줄\n둘째\n셋째\n넷째\n끝 줄\n더한 줄\n')
+        git(self.pc, 'add', 'c.md', 'n.md', '판례기록.md')                    # 다른 세션이 올리려고 담아 둠
+        write(self.pc, 'c.md', 'staged\nstill editing\n')                    # 담은 뒤에도 고치는 중
+        r = self.run_receive()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.read('지침/a.md'), '2\n')
+        self.assertEqual(git(self.pc, 'show', ':c.md'), 'staged\n')
+        # 원격도 고친 판례기록은 담아 둔 판을 풀고(그대로 커밋하면 원격 고침을 되돌린다) 작업본에서 두 고침을 합친다
+        self.assertIn('풀림  판례기록.md', r.stdout)
+        self.assertEqual(self.read('판례기록.md'), '첫 줄(클라우드)\n둘째\n셋째\n넷째\n끝 줄\n더한 줄\n')
+        status = git(self.pc, '-c', 'core.quotepath=false', 'status', '--porcelain', '--untracked-files=all')
+        self.assertEqual(sorted(status.splitlines()), [' M 판례기록.md', 'A  n.md', 'MM c.md'])
+
     def run_auto(self, appdata, home=NOWHERE):
         return subprocess.run([sys.executable, '-B', str(SCRIPT), '--root', str(self.pc), '--auto'],
                               env=dict(ENV, LOCALAPPDATA=str(appdata), USERPROFILE=str(home)),
