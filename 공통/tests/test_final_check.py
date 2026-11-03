@@ -106,6 +106,7 @@ class BriefGateTest(unittest.TestCase):
         t = t.replace('면)\n\n- \n', '면)\n\n- 3면 "작업 중 시험 기기 사용 금지"\n')
         rec.write_text(t, encoding='utf-8')
         er.실측_적기(rec, f"실측: 시험 · 글 {er.해시(self.case / '증거관리' / '호증글자' / '사6.txt')}")      # 재는 일은 test_evidence_read 가 본다
+        self.상대서면_읽음()
         REAL_RUN([ROOT / '4_서면작성/scripts/evidence_words.py', self.case, '--낱말', '시험', '--no-ocr'])
         표 = self.r / '작업' / '쟁점낱말_대조.md'
         표.write_text(re.sub(r'(?m)^(\| 사 제6호증 .*\|) +\|$', r'\1 본문 1항에 씀 |', 표.read_text(encoding='utf-8')), encoding='utf-8')
@@ -117,6 +118,17 @@ class BriefGateTest(unittest.TestCase):
         (검토 / 'review.json').write_text(json.dumps([{'n': 1}, {'n': 2}]), encoding='utf-8')
         (검토 / 'notes.json').write_text(json.dumps({'1': ['일치', '…'], '2': ['일치', '…']}, ensure_ascii=False), encoding='utf-8')
         later(맞대기, 검토 / 'review.json')
+
+    def 상대서면_읽음(self):
+        """호증 번호가 없는 상대방 서면도 전 면 읽기 기록이 있어야 한다(2026. 11. 3. 완결성 원칙의 전면 적용)."""
+        k, p = '라운드1 상대 신청이유서(2).pdf', self.r / '상대증거' / '신청이유서(2).pdf'
+        자 = er.자리(self.case, False)
+        rec = 자.기록_파일(k)
+        표 = er.기대_확인표(자, k, p)
+        t = rec.read_text(encoding='utf-8').replace('읽은 방식: \n', '읽은 방식: 글자층 전 면, 그림 전 면\n')
+        t = t.replace('- 1면: ', f'- 1면: 사 제6호증에 문구가 없다는 주장 확인표 {" ".join(표[1])}').replace('면)\n\n- \n', '면)\n\n- 1면 "찾아볼 수 없습니다"\n', 1)
+        rec.write_text(t, encoding='utf-8')
+        er.실측_적기(rec, f"실측: 시험 · 글 {er.해시(자.글_파일(k))}")
 
     def test_missing_evidence_work_blocks_handoff(self):
         res = fc.서면(self.case)
@@ -249,6 +261,9 @@ class BriefGateTest(unittest.TestCase):
 
     def test_case_without_exhibits_skips_evidence_checks(self):
         (self.r / '우리증거' / '사 제6호증 문자.pdf').unlink()
+        res = fc.서면(self.case)
+        self.assertEqual(status(res, '증거 파악(전 면 읽기)'), '막힘')        # 호증이 없어도 상대방 서면은 읽는다
+        (self.r / '상대증거' / '신청이유서(2).pdf').unlink()
         res = fc.서면(self.case)
         self.assertEqual(status(res, '증거 파악(전 면 읽기)'), '해당 없음')
         self.assertEqual(status(res, '빠진 문구(쟁점 낱말)'), '해당 없음')
