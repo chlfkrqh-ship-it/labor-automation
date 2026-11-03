@@ -115,9 +115,15 @@ class BriefGateTest(unittest.TestCase):
                           encoding='utf-8')
         검토 = self.r / '작업' / '증거인용검토'
         검토.mkdir()
-        (검토 / 'review.json').write_text(json.dumps([{'n': 1}, {'n': 2}]), encoding='utf-8')
-        (검토 / 'notes.json').write_text(json.dumps({'1': ['일치', '…'], '2': ['일치', '…']}, ensure_ascii=False), encoding='utf-8')
+        self.대조_적기(검토, self.draft)
         later(맞대기, 검토 / 'review.json')
+
+    def 대조_적기(self, 검토: Path, 초안: Path):
+        """지금 초안의 인용으로 대조(review.json)와 판정(notes.json)을 적는다. 관문은 대조해 둔 인용이 지금 인용과 같은지 늘 본다."""
+        cites = fc.증거검토().parse_citations(초안.read_text(encoding='utf-8'))
+        items = [{'n': n, 'key': c['key'], 'pages': c['pages'], 'sentence': c['sentence']} for n, c in enumerate(cites, 1)]
+        (검토 / 'review.json').write_text(json.dumps(items, ensure_ascii=False), encoding='utf-8')
+        (검토 / 'notes.json').write_text(json.dumps({str(r['n']): ['일치', '…'] for r in items}, ensure_ascii=False), encoding='utf-8')
 
     def 상대서면_읽음(self):
         """호증 번호가 없는 상대방 서면도 전 면 읽기 기록이 있어야 한다(2026. 11. 3. 완결성 원칙의 전면 적용)."""
@@ -145,7 +151,10 @@ class BriefGateTest(unittest.TestCase):
         os.utime(self.draft, (time.time() + 20, time.time() + 20))
         res = fc.서면(self.case)
         self.assertEqual(status(res, '상대 서면 맞대기'), '막힘')
-        self.assertEqual(status(res, '증거 인용'), '막힘')
+        self.assertEqual(status(res, '증거 인용'), '통과')                  # 인용이 그대로이면 대조는 낡지 않았다
+        self.draft.write_text(self.draft.read_text(encoding='utf-8') + '\n시험 기기를 금지하였습니다(사 제6호증 3면).\n', encoding='utf-8')
+        res = fc.서면(self.case)
+        self.assertEqual(status(res, '증거 인용'), '막힘')                  # 인용이 늘면 다시 대조한다
 
     def test_opponent_brief_in_our_folder_blocks_instead_of_skipping_the_table(self):
         # 2026. 11. 3. 한전 태양광: 전자소송 기록을 한꺼번에 받아 피고 서면이 우리증거/ 에 있자 '상대 서면 맞대기'가 해당 없음으로 넘어갔다
@@ -158,7 +167,7 @@ class BriefGateTest(unittest.TestCase):
 
     def test_unjudged_citation_and_client_table(self):
         self.complete()
-        (self.r / '작업' / '증거인용검토' / 'notes.json').write_text(json.dumps({'1': ['일치', '…']}), encoding='utf-8')
+        (self.r / '작업' / '증거인용검토' / 'notes.json').write_text(json.dumps({'_요약': ['판정 전']}), encoding='utf-8')
         (self.r / '작업' / '의뢰인주장_대조.md').write_text(
             '| 문서·위치 | 주장·사실 원문 | 넣을 목차 | 반영 여부 |\n|---|---|---|---|\n| 소명서 1 | 가 | 1항 | 반영 |\n| 소명서 2 | 나 | 2항 |  |\n',
             encoding='utf-8')
@@ -251,6 +260,14 @@ class BriefGateTest(unittest.TestCase):
         self.assertEqual(상태, '막힘')                                         # 면을 바꾼 인용은 다시 맞댄다
         상태, 말 = 증거인용(본문.replace('안전 수칙을', '보호구 수칙을'))
         self.assertEqual(상태, '막힘')                                         # 문장을 고친 인용도 다시 맞댄다
+        # 대조가 초안보다 새것이어도, 옛 인용 읽기가 '1·3면'의 1면을 버리고 대조해 두었으면 낡은 것이다(2026. 11. 3.)
+        본문2 = 본문.replace('(사 제6호증 1면)', '(사 제6호증 1·3면)')
+        self.draft.write_text(본문2, encoding='utf-8')
+        옛표 = [{'n': 1, 'key': '사6', 'pages': ['3'], 'sentence': ecr.parse_citations(본문2)[0]['sentence']}]
+        (검토 / 'review.json').write_text(json.dumps(옛표, ensure_ascii=False), encoding='utf-8')
+        res = fc.서면(self.case)
+        self.assertEqual(status(res, '증거 인용'), '막힘')
+        self.assertIn('인용 읽기가 바뀌었다', next(m for n, _, m in res.줄 if n == '증거 인용'))
 
     def test_split_drafts_have_their_own_evidence_review(self):
         """서면을 나눈 라운드는 증거 인용 검토도 서면마다 있어야 한다. 2026. 11. 3. 어느 서면의 것도 아닌 review.json 하나를 그 서면의 것으로 보았다."""
@@ -265,6 +282,9 @@ class BriefGateTest(unittest.TestCase):
         검토 = self.r / '작업' / '증거인용검토_림프종'
         검토.mkdir()
         (검토 / 'review.json').write_text('[]', encoding='utf-8')
+        later(검토 / 'review.json')
+        self.assertEqual(status(fc.서면(self.case, 초안없음_허용=True, 초안=a), '증거 인용'), '막힘')     # 빈 대조는 지금 인용과 다르다
+        self.대조_적기(검토, a)
         later(검토 / 'review.json')
         self.assertEqual(status(fc.서면(self.case, 초안없음_허용=True, 초안=a), '증거 인용'), '통과')
 

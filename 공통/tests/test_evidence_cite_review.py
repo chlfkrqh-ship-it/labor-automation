@@ -89,6 +89,18 @@ class ParseTest(unittest.TestCase):
         self.assertTrue(rows[3]['caption'])
         self.assertNotIn('갑9', keys)                                        # '---' 아래는 세지 않는다
 
+    def test_every_page_of_a_listed_citation_is_read(self):
+        """2026. 11. 3. '3·5면'·'2, 4면'의 앞 면을 버려 증거 인용 대조가 그 면을 보여 주지 않았다(쟁점 낱말 도구도 같은 날 고침)."""
+        면 = lambda 괄호: [(r['key'], r['pages']) for r in ecr.parse_citations('- 다 음 -\n\n가. 문장입니다' + 괄호 + '.\n')]
+        self.assertEqual(면('(사 제6호증 3·5면)'), [('사6', ['3', '5'])])
+        self.assertEqual(면('(갑 제1호증 2, 4면)'), [('갑1', ['2', '4'])])
+        self.assertEqual(면('(을 제110호증의2 5~7면, 9면, 11면)'), [('을110-2', ['5~7', '9', '11'])])
+        self.assertEqual(면('(을 제110호증의2 3·5~7면)'), [('을110-2', ['3', '5~7'])])
+        self.assertEqual(면('(갑 제1호증 제3면)'), [('갑1', ['3'])])
+        self.assertEqual(면('(을 제5호증의3, 4면)'), [('을5-3', ['4'])])                  # 의3 의 3 은 면이 아니다
+        self.assertEqual(면('(을 제1호증 2023. 3. 5.자 공문 1,000,000원 2면)'), [('을1', ['2'])])   # 날짜·금액은 면이 아니다
+        self.assertEqual(ecr.expand_pages(['3', '5~7'], 10), [3, 5, 6, 7])
+
     def test_pages_are_only_those_right_after_the_exhibit(self):
         """호증 표시 바로 뒤의 면 표시만 그 호증의 면이다(`evidence_words.py` 와 같은 규칙). 2026. 11. 3. 괄호 안의 'N면'을 모두
         그 호증의 면으로 읽어 '사진 2면, 제1심 판결문 13면'의 13면까지 맞대던 것을 바꾸었다."""
@@ -192,6 +204,62 @@ class EndToEndTest(unittest.TestCase):
             self.assertIn('— 고침', text)
             self.assertIn('— 확인 전', text)
             self.assertIn('을104-2 2면 | 20180309 15:16:15', text)        # 지정한 줄이 원본 글자로 들어간다
+
+
+class CarryJudgementsTest(unittest.TestCase):
+    """판정은 순번이 아니라 인용에 붙는다. 2026. 11. 3. 초안 중간에 인용이 끼면 다시 대조할 때 뒤 판정이 한 칸씩 밀려 다른 인용에 붙었다."""
+
+    def test_judgements_follow_their_citation_and_changed_ones_are_cleared(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rnd = Path(tmp) / '사건B' / '라운드1'
+            for d in ('출력', '우리증거', '상대증거'):
+                (rnd / d).mkdir(parents=True)
+            make_pdf(rnd / '우리증거' / '갑 제1호증 계좌거래내역.pdf', [['20180208 8:21:20 Mobile 27,500,000 - SAMJI']])
+            make_pdf(rnd / '우리증거' / '갑 제2호증 매매계약서.pdf', [['contract 170,000,000']])
+            make_pdf(rnd / '상대증거' / '서증_(을104-2_계좌)_피고.pdf', [['page one'], ['20180309 15:16:15 IB - 130,000,000 KGW']])
+            md = rnd / '출력' / '서면초안.md'
+            앞 = '- 다 음 -\n\n'
+            가 = '가. 첫째 사실입니다(갑 제1호증 계좌거래내역 1면).\n\n'
+            나 = '나. 둘째 사실입니다(갑 제2호증 매매계약서).\n'
+            md.write_text(앞 + 가 + 나, encoding='utf-8')
+            ecr.main(['scan', str(md), '--no-ocr'])
+            out = rnd / '작업' / '증거인용검토'
+            (out / 'notes.json').write_text(json.dumps({'_요약': ['시험'], '1': ['일치', '가'], '2': ['고침', '나'], 'crops': {'2': [['갑2', 1, ['contract']]]}},
+                                                       ensure_ascii=False), encoding='utf-8')
+            새 = '가-1. 끼운 사실입니다(을 제104호증의2 계좌거래내역 2면).\n\n'
+            md.write_text(앞 + 새 + 가 + 나, encoding='utf-8')                     # 앞에 인용이 끼었다
+            ecr.main(['scan', str(md), '--no-ocr'])
+            notes = json.loads((out / 'notes.json').read_text(encoding='utf-8'))
+            self.assertNotIn('1', notes)                                             # 새 인용은 판정이 없다
+            self.assertEqual(notes['2'], ['일치', '가'])
+            self.assertEqual(notes['3'], ['고침', '나'])
+            self.assertEqual(notes['crops'], {'3': [['갑2', 1, ['contract']]]})
+            self.assertEqual(notes['_요약'], ['시험'])
+            md.write_text(앞 + 새 + 가.replace('첫째 사실입니다', '첫째 사실을 고쳤습니다') + 나, encoding='utf-8')
+            make_pdf(rnd / '우리증거' / '갑 제2호증 매매계약서.pdf', [['contract 180,000,000']])      # 호증 파일이 바뀌었다
+            ecr.main(['scan', str(md), '--no-ocr'])
+            notes = json.loads((out / 'notes.json').read_text(encoding='utf-8'))
+            self.assertEqual([k for k in notes if k.isdigit()], [])                 # 문장을 고친 인용, 파일이 바뀐 인용은 다시 판정한다
+            self.assertNotIn('crops', notes)
+
+    def test_judgements_are_set_aside_when_the_earlier_scan_is_gone(self):
+        """앞선 대조(review.json)가 없거나 깨지면 판정을 어느 인용에 옮길지 모르므로 순번대로 두지 않고 옮겨 둔 뒤 비운다."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rnd = Path(tmp) / '사건B' / '라운드1'
+            for d in ('출력', '우리증거'):
+                (rnd / d).mkdir(parents=True)
+            make_pdf(rnd / '우리증거' / '갑 제1호증 계좌거래내역.pdf', [['20180208 8:21:20 Mobile 27,500,000 - SAMJI']])
+            md = rnd / '출력' / '서면초안.md'
+            md.write_text('- 다 음 -\n\n가. 첫째 사실입니다(갑 제1호증 계좌거래내역 1면).\n', encoding='utf-8')
+            ecr.main(['scan', str(md), '--no-ocr'])
+            out = rnd / '작업' / '증거인용검토'
+            판정 = {'_요약': ['시험'], '1': ['일치', '가'], 'crops': {'1': [['갑1', 1, ['SAMJI']]]}}
+            for 깨기 in (lambda p: p.unlink(), lambda p: p.write_text('{깨짐', encoding='utf-8')):
+                (out / 'notes.json').write_text(json.dumps(판정, ensure_ascii=False), encoding='utf-8')
+                깨기(out / 'review.json')
+                ecr.main(['scan', str(md), '--no-ocr'])
+                self.assertEqual(json.loads((out / 'notes.json').read_text(encoding='utf-8')), {'_요약': ['시험']})
+                self.assertEqual(json.loads((out / 'notes_옮기지못함.json').read_text(encoding='utf-8')), 판정)
 
 
 class PrintedPageTest(unittest.TestCase):

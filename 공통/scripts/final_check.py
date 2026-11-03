@@ -539,10 +539,12 @@ def 서면(사건: Path, 라운드번호=None, 대상=None, 초안없음_허용=
             res.add('증거 인용', '막힘', f'증거 인용 대조를 하지 않았다(evidence_cite_review.py scan): {rj}')
         else:
             items = json.loads(rj.read_text(encoding='utf-8'))
-            # 초안이 더 새것이어도 인용이 그대로이면 대조는 낡지 않았다(2026. 11. 3. 하단 메모만 고친 초안을 막았다)
-            새것, 없어짐 = 증거검토().citation_changes(초안, items) if rj.stat().st_mtime + 1 < 초안.stat().st_mtime else (0, 0)
+            # 초안이 더 새것이어도 인용이 그대로이면 대조는 낡지 않았다(2026. 11. 3. 하단 메모만 고친 초안을 막았다). 거꾸로 대조가 더 새것이어도
+            # 지금 읽은 인용과 다르면 낡은 것이다(같은 날 '3·5면'의 3면을 버리던 인용 읽기를 고쳤다)
+            새것, 없어짐 = 증거검토().citation_changes(초안, items)
             if 새것 or 없어짐:
-                res.add('증거 인용', '막힘', f'초안을 고친 뒤 증거 인용 대조(scan)를 다시 하지 않았다(새로 생긴 인용 {새것}건, 없어진 인용 {없어짐}건)')
+                res.add('증거 인용', '막힘', f'지금 초안의 인용과 대조해 둔 인용이 다르다(새로 생긴 인용 {새것}건, 없어진 인용 {없어짐}건. '
+                        '초안을 고쳤거나 인용 읽기가 바뀌었다) — scan 을 다시 돌리면 같은 인용의 판정은 옮겨지고 바뀐 인용만 다시 판정한다')
             else:
                 notes = json.loads(nj.read_text(encoding='utf-8')) if nj.is_file() else {}
                 빈 = [str(r.get('n')) for r in items if not (notes.get(str(r.get('n'))) or [''])[0]]
