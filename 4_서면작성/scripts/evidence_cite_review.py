@@ -57,6 +57,10 @@ REF = re.compile(r'(' + PREFIX + r')\s*제\s*(\d+)\s*호증(?:\s*의\s*(\d+))?')
 REF_LIST = re.compile(r'(' + PREFIX + r')\s*제\s*(\d+(?:\s*[·ㆍ,]\s*\d+)+)\s*호증')
 GROUP = re.compile(r'[\(\[]([^()\[\]]*?(?:' + PREFIX + r')\s*제\s*\d+[^()\[\]]*)[\)\]]')
 PAGES = re.compile(r'(\d+(?:\s*~\s*\d+)?)\s*(?:면|쪽)')
+# 호증 표시 바로 뒤의 면 표시(`evidence_words.py`). '3면'·'제3면'·'3~5면'·'2, 4면'·'3·5~7면' 이 한 묶음이고, 묶음마다 '면'을
+# 붙여 이은 '5~7면, 9면, 16~17면' 도 한 표시이다. 쉼표·가운뎃점 뒤에 면 번호가 아닌 말(다른 호증, '제1심 판결문 13면')이 오면 끝난다.
+_PAGE_GROUP = r'(?:제\s*)?\d+(?:\s*[~,·ㆍ]\s*\d+)*\s*(?:면|쪽)'
+PAGE_LIST = _PAGE_GROUP + r'(?:\s*[,·ㆍ]\s*' + _PAGE_GROUP + r')*'
 EVIDENCE_DIRS = ('우리증거', '상대증거', '증거', '노동위원회_기록')
 FILE_COURT = re.compile(r'\((' + PREFIX + r')(\d+)(?:-(\d+))?_')
 FILE_LEAD = re.compile(r'^(' + PREFIX + r')\s*(?:제\s*)?(\d+)\s*(?:호증)?\s*(?:(?:의|-)\s*(\d+))?(?=[\s_.()\-]|호증|$)')
@@ -164,6 +168,11 @@ def parse_citations(text: str) -> list:
                                  'span': span, 'sentence': sentence, 'caption': caption})
             prev_end = ge
     return rows
+
+
+def page_numbers(s: str) -> set:
+    """면 표시(PAGE_LIST)를 면 번호 모음으로 바꾼다. 쉼표·가운뎃점은 낱낱의 면이고 물결만 범위이다('3, 5면'은 3면과 5면)."""
+    return {n for a, b in re.findall(r'(\d+)(?:\s*~\s*(\d+))?', s) for n in range(int(a), int(b or a) + 1)}
 
 
 def headings(text: str) -> list:

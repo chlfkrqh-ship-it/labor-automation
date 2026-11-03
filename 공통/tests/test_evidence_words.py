@@ -1,6 +1,7 @@
 """쟁점 낱말 대조(4_서면작성/scripts/evidence_words.py)를 확인한다.
 
-서면이 그 호증의 그 면을 인용하였는지 가르는 판정(다른 호증의 면을 이 호증의 면으로 보지 않는지, '3, 5면'을 범위로 보지 않는지),
+서면이 그 호증의 그 면을 인용하였는지 가르는 판정(다른 호증의 면을 이 호증의 면으로 보지 않는지, '3, 5면'을 범위로 보지 않는지,
+'5~7면, 9면, 11면'처럼 묶음마다 '면'을 붙여 이은 뒤 묶음도 읽는지),
 다시 돌려도 앞서 적은 '판단'을 잃지 않는지, `--확인` 이 판단이 빈 줄을 막는지 본다. 문자인식(Windows)은 돌리지 않는다(--no-ocr).
 2026. 11. 2. GGM 사 제6호증 3면을 놓친 일 뒤에 넣었다.
 """
@@ -51,6 +52,38 @@ class CitedPageTest(unittest.TestCase):
         self.assertEqual(ew.인용_상태(본문, '사8', 3), '이 면 인용')
         self.assertEqual(ew.인용_상태(본문, '사9', 3), '이 면 인용')
         self.assertEqual(ew.인용_상태(본문, '사10', 5), '이 면 인용')
+
+    def test_page_groups_each_with_its_own_mark_are_all_read(self):
+        """'5~7면, 9면, 11면'의 9면부터도 그 호증의 면이다(2026. 11. 3. 한전 을 제110호증의2·갑 제18호증의5 를 '호증만 인용'으로 적었다)."""
+        본문 = ('(을 제110호증의2 5~7면, 9면, 11면, 을 제47호증의1 5면) (갑 제18호증의5 우장하 소명서 1면, 4~9면) '
+               '(을 제43호증 8~9면, 12면) (사 제2호증 3면·5면)')
+        for 면 in (5, 6, 7, 9, 11):
+            self.assertEqual(ew.인용_상태(본문, '을110-2', 면), '이 면 인용')
+        for 면 in (8, 10, 12):
+            self.assertEqual(ew.인용_상태(본문, '을110-2', 면), '호증만 인용')
+        self.assertEqual(ew.인용_상태(본문, '을47-1', 5), '이 면 인용')
+        self.assertEqual(ew.인용_상태(본문, '을47-1', 9), '호증만 인용')
+        for 면 in (1, 4, 6, 9):
+            self.assertEqual(ew.인용_상태(본문, '갑18-5', 면), '이 면 인용')
+        for 면 in (2, 3, 10):
+            self.assertEqual(ew.인용_상태(본문, '갑18-5', 면), '호증만 인용')
+        self.assertEqual(ew.인용_상태(본문, '을43', 12), '이 면 인용')
+        self.assertEqual(ew.인용_상태(본문, '을43', 10), '호증만 인용')
+        self.assertEqual(ew.인용_상태(본문, '사2', 5), '이 면 인용')
+        self.assertEqual(ew.인용_상태(본문, '사2', 4), '호증만 인용')
+
+    def test_pages_after_a_break_belong_to_something_else(self):
+        """면 번호가 아닌 말·다른 호증·닫는 괄호 뒤의 면은 그 호증의 면으로 보지 않는다."""
+        본문 = ('(갑 제19호증 현수막 사진 2면, 제1심 판결문 13면) (사 제9호증 1면, 2면), 80면부터 '
+               '(사 제11호증 2면, 사 제12호증 파트장 관리일지 4면) 갑 제20호증 3면, 사실조사서 6면')
+        self.assertEqual(ew.인용_상태(본문, '갑19', 2), '이 면 인용')
+        self.assertEqual(ew.인용_상태(본문, '갑19', 13), '호증만 인용')
+        self.assertEqual(ew.인용_상태(본문, '사9', 2), '이 면 인용')
+        self.assertEqual(ew.인용_상태(본문, '사9', 80), '호증만 인용')
+        self.assertEqual(ew.인용_상태(본문, '사11', 4), '호증만 인용')
+        self.assertEqual(ew.인용_상태(본문, '사12', 4), '이 면 인용')
+        self.assertEqual(ew.인용_상태(본문, '갑20', 3), '이 면 인용')
+        self.assertEqual(ew.인용_상태(본문, '갑20', 6), '호증만 인용')
 
     def test_branch_numbers_and_longer_numbers_are_other_exhibits(self):
         본문 = '(사 제6호증의1 3면) (사 제16호증 3면)'

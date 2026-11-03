@@ -55,17 +55,6 @@ def 서면_본문(사건: Path) -> str:
     return '\n'.join(글)
 
 
-def 면_목록(식: str) -> set:
-    """'3', '3~5', '3, 5', '3·5~7' 꼴을 면 번호 모음으로 바꾼다. 쉼표·가운뎃점은 낱낱의 면이고 물결만 범위이다."""
-    면들 = set()
-    for 조각 in re.split(r'\s*[,·ㆍ]\s*', 식):
-        a, _, b = 조각.partition('~')
-        if a.strip().isdigit():
-            시작 = int(a)
-            면들.update(range(시작, (int(b) if b.strip().isdigit() else 시작) + 1))
-    return 면들
-
-
 def 인용_상태(본문: str, k: str, 면: int) -> str:
     m = re.match(r'(\D+)(\d+)(?:-(\d+))?$', k)
     if not m:
@@ -73,9 +62,10 @@ def 인용_상태(본문: str, k: str, 면: int) -> str:
     호 = rf'{m.group(1)}\s*제\s*{m.group(2)}\s*호증' + (rf'\s*의\s*{m.group(3)}' if m.group(3) else '') + r'(?!\s*의)'
     if not re.search(호, 본문):
         return '인용 없음'
-    # 면 표시는 그 호증 뒤에 다른 호증이 끼지 않은 것만 본다('사 제6호증, 사 제7호증 3면'의 3면은 사 제7호증의 것이다)
-    for x in re.finditer(호 + r'(?:(?!호증)[^()\n]){0,40}?(\d+(?:\s*[~,·ㆍ]\s*\d+)*)\s*(?:면|쪽)', 본문):
-        if 면 in 면_목록(x.group(1)):
+    # 면 표시는 그 호증 뒤에 다른 호증이 끼지 않은 것만 본다('사 제6호증, 사 제7호증 3면'의 3면은 사 제7호증의 것이다).
+    # 첫 묶음 뒤에 이어 적은 ', 9면, 11면' 도 그 호증의 면이다(2026. 11. 3. 한전 을 제110호증의2 '5~7면, 9면, …'의 9면부터를 버렸다)
+    for x in re.finditer(호 + r'(?:(?!호증)[^()\n]){0,40}?(' + _ecr.PAGE_LIST + ')', 본문):
+        if 면 in _ecr.page_numbers(x.group(1)):
             return '이 면 인용'
     return '호증만 인용'
 
