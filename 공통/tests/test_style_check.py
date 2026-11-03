@@ -134,6 +134,17 @@ class StyleRuleTests(unittest.TestCase):
     def found(self, result, rule, kind='violations'):
         return [row['detail'] for row in result[kind] if row['rule'] == rule]
 
+    def test_word_choices_from_2026_11_03(self):
+        """낱말 → 문언, 문안 → 문서, 각자의 문장(references/표기-어휘.md). 따옴표로 옮긴 원문과 '조문안'은 걸리지 않는다."""
+        걸림 = self.check('쟁점은 규정에 그런 낱말이 있는지 여부가 아닙니다.',
+                        '위 사실확인서는 모두 같은 문안입니다.',
+                        '작업자들은 각자의 문장으로 확인하였습니다.')
+        self.assertEqual(sorted(self.found(걸림, '금지 낱말')), sorted(['낱말', '문안', '각자의 문장']))
+        안걸림 = self.check('신청인들은 위 합의가 "같은 문안"이라고 주장합니다.',
+                         '위원회는 조문안을 검토하였습니다.',
+                         '규정에 그런 문언이 없고, 나머지는 같은 내용으로 인쇄된 문서입니다.')
+        self.assertEqual(self.found(안걸림, '금지 낱말'), [])
+
     def test_banned_word_inside_quoted_source_is_not_ours(self):
         """따옴표로 옮긴 판정·재결 문언은 바꾸지 않으므로 금지 낱말로 막지 않는다(2026. 11. 2. 첫 밤 점검)."""
         옮김 = self.check("판정위원회는 '괴롭힘 상황이 객관적으로 확인되어 악화 요인이 되었다'고 판단하였습니다.")
