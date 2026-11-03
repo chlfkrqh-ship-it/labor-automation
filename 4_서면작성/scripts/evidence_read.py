@@ -9,7 +9,8 @@
     python -B 4_서면작성/scripts/evidence_read.py make  "<사건 폴더>" --글다시 [사6 ...]    # 면별 글만 지금 판으로 다시 낸다(기록의 면별 내용은 그대로)
     python -B 4_서면작성/scripts/evidence_read.py make  "1_검토의견/사건/{의뢰인}_{검토내용}" --자료 "<첨부 폴더>"   # 호증 번호 없는 자료
 
-make  서면 사건은 호증마다(우리·상대, PDF 가 아닌 원자료 포함) `증거관리/호증읽기/{호증키}.md` 틀을 만든다. 틀에는 파일·해시·단위 수와
+make  서면 사건은 호증마다(우리·상대, PDF 가 아닌 원자료 포함) `증거관리/호증읽기/{호증키}.md` 틀을 만든다. 호증 번호가 없는 상대방 서면,
+      참고자료(인용판결_PDF 의 판결문 포함), 노동위원회_기록의 서면도 '라운드2 상대 {파일 이름}' 같은 키로 같이 만든다. 틀에는 파일·해시·단위 수와
       단위마다 빈 줄(PDF·그림은 '- 3면:', 압축파일은 '- [파일] 이름:', 엑셀은 '- [시트] 이름:', 그 밖은 '- 전체:')이 있다.
       PDF 는 면별 글(글자층, 없거나 깨지면 Windows 문자인식)을 `증거관리/호증글자/{호증키}.txt` 에 낸다.
       압축·엑셀·워드·한글·파워포인트·메일·텍스트도 단위마다 글을 뽑아 같은 자리에 낸다(`evidence_text.py`). 글은 3,000자 안팎의
@@ -126,15 +127,24 @@ def 호증_표시(k: str) -> str:
     return f'{m.group(1)} 제{m.group(2)}호증' + (f'의{m.group(3)}' if m.group(3) else '') if m else k
 
 
+def PDF_면수(p: Path) -> int:
+    """PDF 의 면 수. 비었거나 깨져 열리지 않으면 0."""
+    try:
+        d = _ecr.pymupdf.open(p)
+    except Exception:
+        return 0
+    try:
+        return len(d)
+    finally:
+        d.close()
+
+
 def 단위들(p: Path) -> list:
     """읽을 단위. PDF 는 면 번호(int), 그림은 [1], 압축파일은 '[파일] 이름', 엑셀은 '[시트] 이름', 그 밖은 ['전체']."""
     suf = p.suffix.lower()
     if suf == '.pdf':
-        d = _ecr.pymupdf.open(p)
-        try:
-            return list(range(1, len(d) + 1))
-        finally:
-            d.close()
+        n = PDF_면수(p)
+        return list(range(1, n + 1)) if n else ['전체']      # 열리지 않는 PDF 는 한 단위로 두고 check 가 막는다
     if suf in IMAGE:
         return [1]
     if suf == '.zip':
@@ -193,6 +203,44 @@ def 서면_호증(사건: Path) -> dict:
     return out
 
 
+def 서면류_파일(p: Path, 뿌리_: Path) -> bool:
+    """읽을 문서인가. 임시 파일과 작업·백업·원고별 정리 폴더의 것은 뺀다(노동위원회_기록의 우리 서면도 읽는다)."""
+    return (p.is_file() and not p.name.startswith('~$') and p.name.lower().endswith(DOCS)
+            and not any(x in ('작업', '백업', '원고별 정리') for x in p.relative_to(뿌리_).parts[:-1]))
+
+
+def 서면_자료(사건: Path, 호증: dict) -> dict:
+    """호증 번호가 없는 서면과 참고자료. 키 → 파일. `/서면` 1단계에서 모두 읽는다고 한 것 가운데 호증이 아닌 것이다.
+    라운드마다 상대증거/ 의 상대방 서면(판정서·결정문 포함), 참고자료/ 전체(인용판결_PDF 의 판결문, 타 사건 자료), 노동위원회_기록/ 의
+    우리·상대 서면. 호증과 같은 파일(해시)은 두 번 읽지 않게 뺀다. 키는 '라운드2 상대 {파일 이름}', '라운드2 참고 {파일 이름}',
+    '노동위 {파일 이름}' 꼴이다(같은 이름이 또 있으면 폴더 이름을 붙인다).
+    2026. 11. 3. 담당 노무사 "위와 같은 완결성 원칙은 시스템 전반에 적용되는거지?" — 그때까지 확인표·실측은 호증에만 걸려 있었다."""
+    호증해시 = {해시(p) for p in 호증.values()}
+    out = {}
+
+    def 넣기(앞: str, p: Path):
+        k = nfc(f'{앞} {p.name}')
+        if k in out:
+            k = nfc(f'{앞} {p.parent.name}_{p.name}')
+        out[k] = p
+
+    for 라운드 in sorted((x for x in 사건.glob('라운드*') if x.is_dir()), key=lambda x: int(re.sub(r'\D', '', x.name) or 0)):
+        n = re.sub(r'\D', '', 라운드.name) or '0'
+        for 폴더, 말 in (('상대증거', '상대'), ('참고자료', '참고')):
+            d = 라운드 / 폴더
+            if not d.is_dir():
+                continue
+            for p in sorted(d.rglob('*')):
+                if 서면류_파일(p, d) and not (폴더 == '상대증거' and _ecr.file_key(p.name)) and 해시(p) not in 호증해시:
+                    넣기(f'라운드{n} {말}', p)
+    d = 사건 / '노동위원회_기록'
+    if d.is_dir():
+        for p in sorted(d.rglob('*')):
+            if 서면류_파일(p, d) and not _ecr.file_key(p.name) and 해시(p) not in 호증해시:
+                넣기('노동위', p)
+    return out
+
+
 산출물_이름 = re.compile(r'(-회신초안|-간이안)\.md$|관련 검토[_.]|_수정\(|_최종|_Rev_\d|_초안\.(?:docx|pdf)$|_간이안\.(?:docx|pdf)$'
                     r'|_노동금액계산표|^검산_|^_추출\.txt$')
 우리_폴더 = re.compile(r'^(?:작업|백업|계산|전환작업|빌드)$|^별첨_|^법제처')
@@ -201,15 +249,16 @@ def 서면_호증(사건: Path) -> dict:
 def 자료_목록(사건: Path, 폴더들: list) -> dict:
     """자료 이름 → 파일. 이름은 파일 이름(확장자 포함)이고, 같은 이름이 여럿이면 폴더 이름을 앞에 붙인다.
     우리가 만든 산출물(검토의견서·회신초안·수정본, `1_검토의견/CLAUDE.md` 6절의 이름, 엔진이 만든 계산표)과
-    작업·계산·백업·전환작업(Word 변환 부품)·별첨(붙이려고 받은 판결·회시)·법제처 수확 폴더는 뺀다. 상대방의 별지 계산표는 자료이다."""
+    작업·계산·백업·전환작업(Word 변환 부품)·별첨(붙이려고 받은 판결·회시)·법제처 수확 폴더는 뺀다. 상대방의 별지 계산표는 자료이다.
+    다만 인용한 판결문(작업/인용판결_PDF)은 인정사실까지 전문을 읽어야 하므로 넣는다(루트 CLAUDE.md '판례 인용과 증거 인용')."""
     out = {}
     for d in 폴더들:
         d = Path(d)
         for p in sorted(d.rglob('*')):
             if not p.is_file() or p.name.startswith('~$') or not p.name.lower().endswith(DOCS) or 산출물_이름.search(p.name):
                 continue
-            if any(우리_폴더.search(x) for x in p.relative_to(d).parts[:-1]):
-                continue
+            if any(우리_폴더.search(x) for x in p.relative_to(d).parts[:-1]) and p.relative_to(d).parts[:-1] != ('작업', '인용판결_PDF'):
+                continue      # 우리 작업 폴더는 빼되, 검토의견에 인용한 판결문(작업/인용판결_PDF)은 전문을 읽는다
             if p.stem in (f'{d.name}_계산표', f'{d.name}_검산표') or p.stem.startswith(f'{d.name}_대안계산표'):
                 continue
             k = nfc(p.name)
@@ -463,6 +512,9 @@ def 문제들(자: 자리, k: str, p: Path) -> list:
     if not r['문구']:
         out.append("'쟁점에 닿는 문구'가 비었다(원문 그대로와 면. 없으면 '없음')")
     text = f.read_text(encoding='utf-8')
+    if p.suffix.lower() == '.pdf' and not PDF_면수(p):
+        out.append('PDF 가 비었거나 깨져 열리지 않는다 — 원본을 다시 받아 같은 이름으로 두고 `make --다시` 로 새로 짠다')
+        return out
     if p.suffix.lower() == '.pdf':
         그림, 새판 = 그림_면들(자, k)
         if 그림 is None:
@@ -858,6 +910,8 @@ def 글_쓰기(자: 자리, k: str, p: Path, use_ocr: bool) -> tuple:
         return 기타_글_쓰기(자, k, p, use_ocr), {}
     if p.suffix.lower() != '.pdf':
         return '', {}
+    if not PDF_면수(p):
+        return 'PDF 가 비었거나 깨져 열리지 않는다(원본을 다시 받는다)', {}
     해 = 해시(p)
     면들, 그림 = 면_분석(자, 자.이름(k), p, use_ocr)
     return PDF_글_쓰기(자, k, p, 해, 면들, 그림)
@@ -1249,7 +1303,11 @@ def cmd_계획(a) -> int:
 def 대상(a) -> tuple:
     사건 = Path(a.case)
     자 = 자리(사건, bool(a.자료))
-    전체 = 자료_목록(사건, a.자료) if a.자료 else 서면_호증(사건)
+    if a.자료:
+        전체 = 자료_목록(사건, a.자료)
+    else:
+        전체 = 서면_호증(사건)
+        전체.update(서면_자료(사건, 전체))      # 상대방 서면·참고자료(인용 판결문)·노동위원회 기록도 같은 관문으로 읽는다
     목록 = dict(전체)
     if a.호증:
         목록 = {k: v for k, v in 전체.items()

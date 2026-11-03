@@ -113,7 +113,7 @@ class EvidenceReadTest(unittest.TestCase):
             z.writestr('a.jpg', b'2')
         make_xlsx(self.ours / '사 제4호증 근무표.xlsx', {'1월': [['성명', '출근'], ['홍길동', 20]], '2월': [['성명', '출근'], ['홍길동', 18]]})
         (self.ours / '사 제5호증 메모.docx').write_bytes(b'PK')
-        (self.case / '라운드1' / '상대증거' / '신청이유서(2).pdf').write_bytes(b'')     # 호증 번호가 없는 상대 서면은 보지 않는다
+        (self.case / '라운드1' / '상대증거' / '신청이유서(2).pdf').write_bytes(b'')     # 호증 번호가 없는 상대 서면도 읽는다(이 파일은 비었다)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -133,7 +133,7 @@ class EvidenceReadTest(unittest.TestCase):
         code, out = run('make', self.case, '--no-ocr')
         self.assertEqual(code, 0)
         self.assertEqual(sorted(p.stem for p in (self.case / '증거관리' / '호증읽기').glob('*.md')),
-                         ['노1', '사2', '사3', '사4', '사5', '사6'])
+                         ['노1', '라운드1 상대 신청이유서(2).pdf', '사2', '사3', '사4', '사5', '사6'])
         사6 = self.rec('사6').read_text(encoding='utf-8')
         self.assertIn('파일: 라운드1/우리증거/사 제6호증 문자.pdf', 사6)
         self.assertRegex(사6, r'해시: [0-9a-f]{12} · 3면')
@@ -187,7 +187,8 @@ class EvidenceReadTest(unittest.TestCase):
         code, out = run('check', self.case)
         self.assertEqual(code, 1)
         self.assertIn('노 제1호증', out)                     # 상대 호증도 읽는다
-        self.assertNotIn('신청이유서', out)
+        self.assertIn('- 라운드1 상대 신청이유서(2).pdf', out)   # 호증 번호가 없는 상대 서면도 읽는다
+        self.assertIn('PDF 가 비었거나 깨져 열리지 않는다', out)
 
     def test_changed_file_is_blocked_and_redo_keeps_old_notes(self):
         run('make', self.case, '--no-ocr', '--호증', '사6')
@@ -1152,6 +1153,61 @@ class LongLineMeasureTest(unittest.TestCase):
                 self.assertEqual(code, 1)
                 self.assertIn('2,000자 넘는 줄이 있는 1', out)
                 self.assertIn('make --글다시 사6', out)
+
+
+class WholeCaseReadingTest(unittest.TestCase):
+    """호증만이 아니라 `/서면` 1단계에서 모두 읽는다고 한 상대방 서면·참고자료(인용 판결문)·노동위원회 기록과, 검토의견에 인용한 판결문도
+    같은 관문으로 읽는다(2026. 11. 3. 담당 노무사 "위와 같은 완결성 원칙은 시스템 전반에 적용되는거지?")."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        실측 = mock.patch.object(er, '실측_문제', return_value=[])
+        실측.start()
+        self.addCleanup(실측.stop)
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_briefs_references_and_labor_commission_records_are_read_in_brief_cases(self):
+        case = self.root / 'GGM_정직'
+        r1, r2 = case / '라운드1', case / '라운드2'
+        for d in (r1 / '상대증거', r1 / '참고자료' / '인용판결_PDF', r2 / '상대증거', case / '노동위원회_기록', r1 / '상대증거' / '원고별 정리'):
+            d.mkdir(parents=True, exist_ok=True)
+        make_pdf(r1 / '상대증거' / '을 제1호증 근로계약서.pdf', [글 + '계약'])
+        make_pdf(r1 / '상대증거' / '피신청인 답변서.pdf', [글 + '답변 1면', 글 + '답변 2면'])
+        make_pdf(r2 / '상대증거' / '피신청인 답변서.pdf', [글 + '둘째 라운드 답변'])
+        make_pdf(r1 / '참고자료' / '인용판결_PDF' / '대법원 2019다1234.pdf', [글 + '판단', 글 + '인정사실'])
+        (r1 / '참고자료' / '을1 사본.pdf').write_bytes((r1 / '상대증거' / '을 제1호증 근로계약서.pdf').read_bytes())   # 호증과 같은 파일
+        make_pdf(r1 / '상대증거' / '원고별 정리' / '원고1 답변서 사본.pdf', [글])
+        make_pdf(case / '노동위원회_기록' / '초심 이유서_최종.pdf', [글 + '노동위 우리 서면'])
+        make_pdf(case / '노동위원회_기록' / '갑 제1호증 노동위 단계.pdf', [글])
+        code, out = run('make', case, '--no-ocr')
+        self.assertEqual(code, 0, out)
+        기록 = sorted(p.stem for p in (case / '증거관리' / '호증읽기').glob('*.md'))
+        self.assertEqual(기록, ['갑1', '노동위 초심 이유서_최종.pdf', '라운드1 상대 피신청인 답변서.pdf', '라운드1 참고 대법원 2019다1234.pdf',
+                              '라운드2 상대 피신청인 답변서.pdf', '을1'])                    # 노동위 단계 호증(갑1)은 원래대로 호증으로 읽는다
+        self.assertIn('- 2면: ', (case / '증거관리' / '호증읽기' / '라운드1 상대 피신청인 답변서.pdf.md').read_text(encoding='utf-8'))
+        code, out = run('check', case)
+        self.assertEqual(code, 1)
+        for k in 기록:
+            self.assertIn(f'- {er.호증_표시(k)} (', out)
+        rec = case / '증거관리' / '호증읽기' / '라운드1 참고 대법원 2019다1234.pdf.md'
+        t = rec.read_text(encoding='utf-8').replace('읽은 방식: \n', '읽은 방식: 글자층 전 면\n').replace('면)\n\n- \n', '면)\n\n- 없음\n', 1)
+        for n in (1, 2):
+            t = t.replace(f'- {n}면: \n', f'- {n}면: 판결 {n}면 확인표 {tok(case, "라운드1 참고 대법원 2019다1234.pdf", n)}\n')
+        rec.write_text(t, encoding='utf-8')
+        code, out = run('check', case, '--호증', '라운드1 참고 대법원 2019다1234.pdf')
+        self.assertEqual(code, 0, out)
+
+    def test_cited_judgments_in_review_opinions_are_read(self):
+        case = self.root / '1_검토의견' / '사건' / 'HPS_근로시간면제'
+        (case / '첨부').mkdir(parents=True)
+        (case / '작업' / '인용판결_PDF').mkdir(parents=True)
+        make_pdf(case / '첨부' / '단체협약.pdf', [글 + '제1조'])
+        make_pdf(case / '작업' / '인용판결_PDF' / '대법원 2020다5678.pdf', [글 + '판단', 글 + '인정사실'])
+        make_pdf(case / '작업' / '검색메모.pdf', [글])                                     # 우리 작업 폴더의 다른 것은 자료가 아니다
+        self.assertEqual(sorted(er.자료_목록(case, [case])), ['단체협약.pdf', '대법원 2020다5678.pdf'])
 
 
 class PlanTest(unittest.TestCase):
