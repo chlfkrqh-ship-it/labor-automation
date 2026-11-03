@@ -62,10 +62,11 @@ def 인용_상태(본문: str, k: str, 면: int) -> str:
     호 = rf'{m.group(1)}\s*제\s*{m.group(2)}\s*호증' + (rf'\s*의\s*{m.group(3)}' if m.group(3) else '') + r'(?!\s*의)'
     if not re.search(호, 본문):
         return '인용 없음'
-    # 면 표시는 그 호증 뒤에 다른 호증이 끼지 않은 것만 본다('사 제6호증, 사 제7호증 3면'의 3면은 사 제7호증의 것이다).
-    # 첫 묶음 뒤에 이어 적은 ', 9면, 11면' 도 그 호증의 면이다(2026. 11. 3. 한전 을 제110호증의2 '5~7면, 9면, …'의 9면부터를 버렸다)
-    for x in re.finditer(호 + r'(?:(?!호증)[^()\n]){0,40}?(' + _ecr.PAGE_LIST + ')', 본문):
-        if 면 in _ecr.page_numbers(x.group(1)):
+    # 면은 호증 표시 바로 뒤의 면 표시만 그 호증의 것으로 본다(증거 인용 대조와 같은 `pages_after`). '사 제6호증, 사 제7호증 3면'의
+    # 3면은 사 제7호증의 것이고, '5~7면, 9면, 11면'처럼 이어 적은 면은 모두 그 호증의 것이다(2026. 11. 3. 한전 9면부터를 버렸다)
+    for x in re.finditer(호, 본문):
+        면들 = _ecr.pages_after(본문, x.end())
+        if 면들 and 면 in _ecr.expand_pages(면들, 0):
             return '이 면 인용'
     return '호증만 인용'
 

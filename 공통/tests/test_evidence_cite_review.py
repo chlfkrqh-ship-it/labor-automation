@@ -89,6 +89,21 @@ class ParseTest(unittest.TestCase):
         self.assertTrue(rows[3]['caption'])
         self.assertNotIn('갑9', keys)                                        # '---' 아래는 세지 않는다
 
+    def test_pages_are_only_those_right_after_the_exhibit(self):
+        """호증 표시 바로 뒤의 면 표시만 그 호증의 면이다(`evidence_words.py` 와 같은 규칙). 2026. 11. 3. 괄호 안의 'N면'을 모두
+        그 호증의 면으로 읽어 '사진 2면, 제1심 판결문 13면'의 13면까지 맞대던 것을 바꾸었다."""
+        def pages(s):
+            return [(r['key'], r['pages']) for r in ecr.parse_citations('가. 사실입니다(' + s + ').')]
+        self.assertEqual(pages('갑 제18호증 현수막 사진 2면, 제1심 판결문 13면'), [('갑18', ['2'])])
+        self.assertEqual(pages('을 제110호증의2 5~7면, 9면, 11면, 을 제47호증의1 5면'),
+                         [('을110-2', ['5~7', '9', '11']), ('을47-1', ['5'])])
+        self.assertEqual(pages('사 제6호증 2, 4면'), [('사6', ['2', '4'])])
+        self.assertEqual(pages('갑 제19호증의4 2025. 1. 8. 조합활동 방해영상3, 제1심 판결문 11면'), [('갑19-4', [])])
+        self.assertEqual(pages('갑 제5호증 2,750만 원 영수증 제2면'), [('갑5', ['2'])])
+        self.assertEqual(pages('갑 제8호증 제3조 제2호, 15면'), [('갑8', ['15'])])            # 면 바로 앞의 쉼표는 넘는다(박준선)
+        self.assertEqual(pages('을나 제13호증 협정서 제1항, 제1심 판결문 12~13면'), [('을나13', [])])
+        self.assertEqual(ecr.expand_pages(['5~7', '9'], 30), [5, 6, 7, 9])
+
     def test_headings(self):
         self.assertEqual([h for _, h in ecr.headings(MD)], ['1. 원고들의 주장', '가. 자금의 흐름'])
 
