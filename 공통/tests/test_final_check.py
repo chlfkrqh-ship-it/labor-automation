@@ -147,6 +147,15 @@ class BriefGateTest(unittest.TestCase):
         self.assertEqual(status(res, '상대 서면 맞대기'), '막힘')
         self.assertEqual(status(res, '증거 인용'), '막힘')
 
+    def test_opponent_brief_in_our_folder_blocks_instead_of_skipping_the_table(self):
+        # 2026. 11. 3. 한전 태양광: 전자소송 기록을 한꺼번에 받아 피고 서면이 우리증거/ 에 있자 '상대 서면 맞대기'가 해당 없음으로 넘어갔다
+        (self.r / '상대증거' / '신청이유서(2).pdf').unlink()
+        make_pdf(self.r / '우리증거' / '광주고등법원_2025나1_087001_2026.10.08_준비서면_(준비서면)_피고 대리인_법무법인(유한)바른.pdf', ['피고 주장'])
+        make_pdf(self.r / '우리증거' / '광주고등법원_2025나1_001001_2024.02.02_소장_(소장)_원고 대리인_법무법인 평안.pdf', ['우리 소장'])
+        with mock.patch.object(fc, 'RUN', REAL_RUN):
+            res = fc.서면(self.case)
+        self.assertEqual(status(res, '증거 나누기'), '막힘', res.줄)
+
     def test_unjudged_citation_and_client_table(self):
         self.complete()
         (self.r / '작업' / '증거인용검토' / 'notes.json').write_text(json.dumps({'1': ['일치', '…']}), encoding='utf-8')
