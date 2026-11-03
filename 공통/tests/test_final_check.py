@@ -269,6 +269,16 @@ class BriefGateTest(unittest.TestCase):
         self.assertEqual(status(res, '증거 인용'), '막힘')
         self.assertIn('인용 읽기가 바뀌었다', next(m for n, _, m in res.줄 if n == '증거 인용'))
 
+    def test_grouped_exhibit_citation_needs_evidence_review(self):
+        """'사 제6 내지 7호증'처럼 묶어 적은 인용만 있는 서면도 증거 인용 대조를 거친다(2026. 11. 3. '제N호증' 꼴만 인용으로 보았다)."""
+        self.complete()
+        self.draft.write_text('- 다 음 -\n\n1. 가\n\n안전 수칙을 알렸습니다(사 제6 내지 7호증).\n', encoding='utf-8')
+        for f in (self.r / '작업' / '증거인용검토').glob('*.json'):
+            f.unlink()
+        res = fc.서면(self.case)
+        self.assertEqual(status(res, '증거 인용'), '막힘')
+        self.assertIn('증거 인용 대조를 하지 않았다', next(m for n, _, m in res.줄 if n == '증거 인용'))
+
     def test_split_drafts_have_their_own_evidence_review(self):
         """서면을 나눈 라운드는 증거 인용 검토도 서면마다 있어야 한다. 2026. 11. 3. 어느 서면의 것도 아닌 review.json 하나를 그 서면의 것으로 보았다."""
         self.draft.unlink()

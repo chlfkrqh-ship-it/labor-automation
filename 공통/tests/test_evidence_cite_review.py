@@ -101,6 +101,36 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(면('(을 제1호증 2023. 3. 5.자 공문 1,000,000원 2면)'), [('을1', ['2'])])   # 날짜·금액은 면이 아니다
         self.assertEqual(ecr.expand_pages(['3', '5~7'], 10), [3, 5, 6, 7])
 
+    def test_grouped_exhibits_and_page_ranges_are_expanded(self):
+        """'내지'·'및'으로 묶은 호증과 가지번호, '면 내지 면'을 하나하나 펼친다. 2026. 11. 3. 문체 지침의 본보기 '313면 내지 321면'을
+        313면으로만, '을 제103호증의1 내지 17 각'을 의1로만 읽고, '갑 제1 내지 5호증'은 통째로, '갑 제1호증 및 갑 제2호증'의 갑 제2호증은
+        빠뜨려 증거 인용 대조가 그 호증·면을 보여 주지 않았다."""
+        def pages(s):
+            return [(r['key'], r['pages']) for r in ecr.parse_citations('가. 사실입니다(' + s + ').')]
+        self.assertEqual(pages('갑 제18호증 근로복지공단 의견서 313면 내지 321면'), [('갑18', ['313~321'])])
+        self.assertEqual(ecr.expand_pages(['313~321'], 400), list(range(313, 322)))
+        self.assertEqual(pages('갑 제3호증 3 내지 5면'), [('갑3', ['3~5'])])
+        self.assertEqual(pages('갑 제3호증 3∼5면'), [('갑3', ['3~5'])])
+        self.assertEqual(pages('갑 제3호증 5면 및 9면'), [('갑3', ['5', '9'])])
+        self.assertEqual(pages('을 제103호증의1 내지 17 각 출석 및 추가 서면자료 제출 현황'),
+                         [(f'을103-{i}', []) for i in range(1, 18)])
+        self.assertEqual(pages('을 제103호증의1 내지 의3'), [(f'을103-{i}', []) for i in (1, 2, 3)])
+        self.assertEqual(pages('을 제103호증의1, 2'), [('을103-1', []), ('을103-2', [])])
+        self.assertEqual(pages('사 제67호증의1·2'), [('사67-1', []), ('사67-2', [])])
+        for s in ('갑 제1 내지 5호증', '갑 제1호증 내지 제5호증', '갑 제1~5호증'):
+            self.assertEqual(pages(s), [(f'갑{i}', []) for i in range(1, 6)], s)
+        self.assertEqual(pages('갑 제31호증 ~ 갑 제33호증'), [('갑31', []), ('갑32', []), ('갑33', [])])
+        self.assertEqual(pages('갑 제1호증 및 갑 제2호증'), [('갑1', []), ('갑2', [])])
+        self.assertEqual(pages('갑 제1호증 및 제2호증'), [('갑1', []), ('갑2', [])])
+        self.assertEqual(pages('갑 제1호증과 을 제2호증 3면'), [('갑1', []), ('을2', ['3'])])
+        self.assertEqual(pages('갑 제1호증, 갑 제2호증 5면'), [('갑1', []), ('갑2', ['5'])])     # 접두어를 다시 적은 나열은 면이 따로
+        self.assertEqual(pages('을나 제1호증의 2'), [('을나1-2', [])])
+        self.assertEqual(pages('갑 제1-1호증 2면'), [('갑1-1', ['2'])])
+        self.assertEqual(pages('갑 제5호증의1, 2023. 3. 5.자 공문'), [('갑5-1', [])])          # 날짜는 가지번호가 아니다
+        self.assertEqual(pages('갑 제5호증의1, 2,750만 원 영수증'), [('갑5-1', [])])           # 금액도
+        self.assertEqual(pages('갑 제5호증의 기재'), [('갑5', [])])
+        self.assertEqual(pages('원고가 낸 것을 제2호증으로 보면 갑 제1호증'), [('갑1', [])])  # '것을'의 '을'은 조사이다
+
     def test_pages_are_only_those_right_after_the_exhibit(self):
         """호증 표시 바로 뒤의 면 표시만 그 호증의 면이다(`evidence_words.py` 와 같은 규칙). 2026. 11. 3. 괄호 안의 'N면'을 모두
         그 호증의 면으로 읽어 '사진 2면, 제1심 판결문 13면'의 13면까지 맞대던 것을 바꾸었다."""

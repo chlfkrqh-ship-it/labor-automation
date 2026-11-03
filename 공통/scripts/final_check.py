@@ -67,7 +67,7 @@ import cite_check                 # noqa: E402
 import system as _system          # noqa: E402  사건번호 정규식은 한 벌만 둔다
 
 CASE_NO = re.compile(_system.CASE_NUMBER)
-EVIDENCE_REF = re.compile(r'(' + _system.EVIDENCE_PREFIX + r')\s*제\s*\d+\s*호증')
+EVIDENCE_REF = re.compile(_system.EVIDENCE_NUMBER)     # '갑 제1 내지 5호증'만 적은 서면도 증거 인용이 있다(2026. 11. 3.)
 낙관 = ('다툴 실익이 충분', '인정될 가능성이 높', '유력하', '승소 가능성이 높', '이길 가능성이 높')
 적다 = re.compile(r'(?<![가-힣])적(?:(?:혀|어)\s*있|었|은\s*바|고\s*있)')       # '목적은 바람직' 같은 말은 아니다
 # 병합한 서면의 이름(4_서면작성/CLAUDE.md 3-1절). 같은 이름 꼴의 부속 문서(예상 질의답변 등)는 서면이 아니다

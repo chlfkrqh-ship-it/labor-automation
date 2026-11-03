@@ -54,16 +54,33 @@ _spec.loader.exec_module(_system)
 PREFIX = _system.EVIDENCE_PREFIX
 
 HEADER = re.compile(r'개인정보유출|제출자\s*:|제출일시|다운로드일시|등재일시|원본과 상위 없음')
-REF = re.compile(r'(' + PREFIX + r')\s*제\s*(\d+)\s*호증(?:\s*의\s*(\d+))?')
-REF_LIST = re.compile(r'(' + PREFIX + r')\s*제\s*(\d+(?:\s*[·ㆍ,]\s*\d+)+)\s*호증')
 GROUP = re.compile(r'[\(\[]([^()\[\]]*?(?:' + PREFIX + r')\s*제\s*\d+[^()\[\]]*)[\)\]]')
-# 호증 표시 바로 뒤의 면 표시(`pages_after`). '3면'·'제3면'·'3~5면'·'2, 4면'·'3·5~7면' 이 한 묶음이고, 묶음마다 '면'을 붙여 이은
-# '5~7면, 9면, 16~17면' 도 한 표시이다. 쉼표·가운뎃점 뒤에 면 번호가 아닌 말(다른 호증, '제1심 판결문 13면')이 오면 끝난다.
-# 첫 묶음 앞의 호증 설명('원고 소명서')은 40자까지이고 다른 호증 표시·괄호·줄바꿈을 넘지 않는다. 설명 안의 쉼표는 천 단위 쉼표와
-# 면 표시 바로 앞의 쉼표('제3조 제2호, 15면')만 넘는다('방해영상3, 제1심 판결문 11면'의 11면은 판결문의 면이다).
-_PAGE_GROUP = r'(?:제\s*)?\d+(?:\s*[~,·ㆍ]\s*\d+)*\s*(?:면|쪽)'
+# 호증 표시 한 묶음(`expand_keys` 가 가지번호까지 펼친다). `system.EVIDENCE_NUMBER` 와 같은 꼴이다: '갑 제2, 3호증'·'을 제93·94·97호증'·
+# '갑 제1 내지 3호증'·'갑 제41호증 내지 제43호증'·'갑 제31호증 ~ 갑 제33호증'·'갑 제1호증 및 제2호증'·'을나 제1호증의 2'·'사 제67호증의1·2'·
+# '을 제103호증의1 내지 17 각'. 접두어를 다시 적은 나열('갑 제1호증, 갑 제2호증 5면')은 호증마다 면이 따로이므로 묶지 않고 범위만 잇는다.
+# 가지번호 뒤에 이은 숫자가 면('의3, 4면')·날짜('의1, 2023. 3. 5.')·금액('의1, 2,750만 원')이면 가지번호가 아니다. 접두어 글자는 흔한
+# 조사이기도 하므로('것을 제2호증') 앞에 한글이 붙으면 호증으로 보지 않는다. 2026. 11. 3. '을 제103호증의1 내지 17 각'의 의2부터,
+# '갑 제1 내지 5호증' 전부, '갑 제1호증 및 갑 제2호증'의 갑 제2호증을 증거 인용 대조와 쟁점 낱말 대조에서 빠뜨렸다.
+_K_RANGE = r'(?:내지|[~∼～〜])'
+_K_LIST = r'(?:,|[·ㆍ・]|및|과|와)'
+_K_NO = r'\d+(?:\s*-\s*\d+)?(?!\d)'                       # '1-1' 은 약식 가지번호다
+_K_SUB = r'\d+(?!\d|\s*(?:면|쪽)|\.\s*\d|,\d{3}(?!\d))'
+_K_UNIT = (_K_NO + r'(?:\s*(?:' + _K_LIST + '|' + _K_RANGE + r')\s*(?:제\s*)?' + _K_NO + r')*\s*호증'
+           + r'(?:\s*의\s*(?:각\s*)?\d+(?!\d)(?:\s*(?:,|[·ㆍ・]|' + _K_RANGE + r')\s*(?:의\s*)?' + _K_SUB + r')*)?')
+KEY_GROUP = re.compile(r'(?<![가-힣])(?:' + PREFIX + r')\s*제\s*' + _K_UNIT
+                       + r'(?:\s*(?:' + _K_LIST + r'\s*|' + _K_RANGE + r'\s*(?:(?:' + PREFIX + r')\s*)?)(?:제\s*)?' + _K_UNIT + r')*')
+_K_TOKEN = re.compile(r'(호증)|(의)|(제)|(' + PREFIX + r')|(\d+)(?:\s*-\s*(\d+))?|(' + _K_RANGE + r')|(' + _K_LIST + r')')
+_K_RANGE_LIMIT = 1000                                    # 오기로 생긴 터무니없는 범위는 펼치지 않는다(`system.expand_evidence` 와 같다)
+# 호증 표시 바로 뒤의 면 표시(`pages_after`). '3면'·'제3면'·'3~5면'·'3 내지 5면'·'313면 내지 321면'·'2, 4면'·'3·5~7면' 이 한 묶음이고,
+# 묶음마다 '면'을 붙여 이은 '5~7면, 9면, 16~17면'·'5면 및 9면' 도 한 표시이다. 쉼표·가운뎃점·'및' 뒤에 면 번호가 아닌 말(다른 호증,
+# '제1심 판결문 13면')이 오면 끝난다. 첫 묶음 앞의 호증 설명('원고 소명서')은 40자까지이고 다른 호증 표시·괄호·줄바꿈을 넘지 않는다.
+# 설명 안의 쉼표는 천 단위 쉼표와 면 표시 바로 앞의 쉼표('제3조 제2호, 15면')만 넘는다('방해영상3, 제1심 판결문 11면'의 11면은
+# 판결문의 면이다). 2026. 11. 3. 문체 지침의 본보기 '313면 내지 321면'을 313면으로만 읽었다.
+_PAGE_RANGE = r'(?:[~∼～〜]|내지)'
+_PAGE_GROUP = r'(?:제\s*)?\d+(?:\s*(?:면|쪽)?\s*' + _PAGE_RANGE + r'\s*(?:제\s*)?\d+|\s*[,·ㆍ]\s*\d+)*\s*(?:면|쪽)'
 _PAGE_AFTER = re.compile(r'(?:(?!호증|,(?!\d{3}(?!\d)))[^()\[\]\n]){0,40}?(?:,\s*)?('
-                         + _PAGE_GROUP + r'(?:\s*[,·ㆍ]\s*' + _PAGE_GROUP + r')*)')
+                         + _PAGE_GROUP + r'(?:\s*(?:[,·ㆍ]|및|과|와)\s*' + _PAGE_GROUP + r')*)')
+_PAGE_ITEM = re.compile(r'(\d+)(?:\s*(?:면|쪽)?\s*' + _PAGE_RANGE + r'\s*(?:제\s*)?(\d+))?')
 EVIDENCE_DIRS = ('우리증거', '상대증거', '증거', '노동위원회_기록')
 FILE_COURT = re.compile(r'\((' + PREFIX + r')(\d+)(?:-(\d+))?_')
 FILE_LEAD = re.compile(r'^(' + PREFIX + r')\s*(?:제\s*)?(\d+)\s*(?:호증)?\s*(?:(?:의|-)\s*(\d+))?(?=[\s_.()\-]|호증|$)')
@@ -140,7 +157,7 @@ def quality(text: str) -> float:
 
 # ---------------------------------------------------------------- 서면 인용
 def parse_citations(text: str) -> list:
-    """본문('---' 위)의 증거 인용. 괄호 하나에 호증이 여럿이면 하나씩."""
+    """본문('---' 위)의 증거 인용. 괄호 하나에 호증이 여럿이면 하나씩. '내지'·'및'으로 묶은 호증과 가지번호도 하나씩 펼친다(`expand_keys`)."""
     lines = text.split('\n')
     end = next((i for i, s in enumerate(lines) if i and re.match(r'^\s*-{3,}\s*$', s)), len(lines))
     rows = []
@@ -155,30 +172,89 @@ def parse_citations(text: str) -> list:
             span = t[max(sent_start, prev_end):gs].strip(' ,')
             m_end = re.search(r'(?:다|\))\.(?:\s|$)', t[ge - 1:])
             sentence = t[sent_start:(ge - 1 + m_end.end()) if m_end else len(t)].strip()
-            for part in re.split(r',\s*(?=(?:' + PREFIX + r')\s*제)', g.group(1)):
-                refs, pages = [], []                  # '을 제93·94·97호증' 처럼 호증이 여럿인 표시는 면을 나누지 않는다
-                ml = REF_LIST.search(part)
-                if ml:
-                    refs = [(ml.group(1), int(n), None) for n in re.split(r'\s*[·ㆍ,]\s*', ml.group(2))]
-                else:
-                    m = REF.search(part)
-                    if m:
-                        refs = [(m.group(1), int(m.group(2)), int(m.group(3)) if m.group(3) else None)]
-                        pages = pages_after(part, m.end())
-                for pre, no, sub in refs:
-                    key = f'{pre}{no}' + (f'-{sub}' if sub else '')
+            for part in re.split(r'(?:,|\s*(?:및|과|와))\s*(?=(?:' + PREFIX + r')\s*제)', g.group(1)):
+                for key, pages in mentions(part):
                     rows.append({'line': ln, 'key': key, 'raw': part.strip(), 'pages': pages,
                                  'span': span, 'sentence': sentence, 'caption': caption})
             prev_end = ge
     return rows
 
 
+def expand_keys(group: str) -> list:
+    """호증 표시 한 묶음(KEY_GROUP)을 호증키('갑1'·'을103-2') 목록으로 펼친다. 쉼표·가운뎃점·'및'·'과'는 나열, '내지'·'~'는 앞 번호부터의
+    범위이다. '의' 뒤는 그 앞 모번호의 가지번호이고 범위도 가지번호끼리 잇는다('의1 내지 17'). 접두어가 다시 나오면 같은 접두어일 때만
+    범위를 잇는다(`system.expand_evidence` 와 같되, 그쪽은 가지번호를 모번호로 묶는다)."""
+    keys, prefix, last, last_sub, pending, branch, bare = [], None, None, None, False, False, None
+
+    def add(k: str) -> bool:
+        if k in keys:
+            return False
+        keys.append(k)
+        return True
+
+    for t in _K_TOKEN.finditer(group):
+        if t[1]:                                         # 호증
+            continue
+        if t[2]:                                         # 의 → 가지번호. 앞 모번호만 적은 키는 가지번호로 바뀐다
+            if not branch:
+                branch, last_sub = True, None
+                if bare in keys:
+                    keys.remove(bare)
+            continue
+        if t[3]:                                         # 제 → 모번호로 돌아온다
+            branch = False
+            continue
+        if t[4]:                                         # 접두어
+            if t[4] != prefix:
+                last, pending = None, False
+            prefix, branch = t[4], False
+            continue
+        if t[7]:                                         # 범위
+            pending = True
+            continue
+        if t[8]:                                         # 나열
+            pending = False
+            continue
+        n = int(t[5])
+        if branch and last is not None:
+            if pending and last_sub is not None and last_sub < n <= last_sub + _K_RANGE_LIMIT:
+                subs = range(last_sub + 1, n + 1)
+            else:
+                subs = (n,)
+            for s in subs:
+                add(f'{prefix}{last}-{s}')
+            last_sub = n
+        elif t[6]:                                       # '1-1' 약식 가지번호
+            add(f'{prefix}{n}-{int(t[6])}')
+            last, bare = n, None
+        else:
+            nums = range(last + 1, n + 1) if pending and last is not None and last < n <= last + _K_RANGE_LIMIT else (n,)
+            bare = None
+            for x in nums:
+                bare = f'{prefix}{x}' if add(f'{prefix}{x}') else None
+            last = n
+        pending = False
+    return keys
+
+
+def mentions(text: str) -> list:
+    """글 속 호증 표시마다 (호증키, 면). 면은 호증이 하나인 표시 바로 뒤의 면 표시이고(`pages_after`), '을 제93·94·97호증'·
+    '을 제103호증의1 내지 17'처럼 호증이 여럿인 표시는 면을 나누지 않는다. `evidence_words.py` 도 이것으로 인용을 가린다."""
+    out = []
+    for km in KEY_GROUP.finditer(text):
+        keys = expand_keys(km.group(0))
+        pages = pages_after(text, km.end()) if len(keys) == 1 else []
+        out += [(k, pages) for k in keys]
+    return out
+
+
 def pages_after(text: str, pos: int) -> list:
     """text 의 pos 가 호증 표시 바로 뒤일 때 그 호증의 면을 '3'·'5~7' 꼴로 낸다(`expand_pages` 가 펼친다). 면 표시가 없으면 [].
-    쉼표·가운뎃점은 낱낱의 면이고 물결만 범위이다('3, 5면'은 3면과 5면). `evidence_words.py` 도 이것으로 인용한 면을 가린다.
+    쉼표·가운뎃점·'및'은 낱낱의 면이고 물결·'내지'만 범위이다('3, 5면'은 3면과 5면, '313면 내지 321면'은 313면부터 321면까지).
+    `evidence_words.py` 도 이것으로 인용한 면을 가린다.
     2026. 11. 3. 괄호 안의 'N면'을 모두 그 호증의 면으로 읽어 '사진 2면, 제1심 판결문 13면'의 13면까지 맞대던 것을 바꾸었다."""
     m = _PAGE_AFTER.match(text, pos)
-    return [a + (f'~{b}' if b else '') for a, b in re.findall(r'(\d+)(?:\s*~\s*(\d+))?', m.group(1))] if m else []
+    return [a + (f'~{b}' if b else '') for a, b in _PAGE_ITEM.findall(m.group(1))] if m else []
 
 
 def headings(text: str) -> list:
