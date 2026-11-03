@@ -698,17 +698,30 @@ def cmd_scan(args) -> int:
         ex.close()
     notes_path, old_path = out / 'notes.json', out / 'review.json'
     옮김_말 = ''
-    if notes_path.is_file() and old_path.is_file():
+    if notes_path.is_file():
         try:
-            old, notes = json.loads(old_path.read_text(encoding='utf-8')), json.loads(notes_path.read_text(encoding='utf-8'))
+            notes = json.loads(notes_path.read_text(encoding='utf-8'))
         except ValueError:
-            old, notes = None, None
-        if old is not None:
+            notes = None
+        try:
+            old = json.loads(old_path.read_text(encoding='utf-8')) if old_path.is_file() else None
+        except ValueError:
+            old = None
+        if isinstance(notes, dict) and isinstance(old, list):
             새, 옮김 = 판정_옮기기(old, report, notes)
             if 새 != notes:
                 notes_path.write_text(json.dumps(새, ensure_ascii=False, indent=1), encoding='utf-8')
             빈 = sum(1 for r in report if str(r['n']) not in 새)
             옮김_말 = f'앞선 판정 {옮김}건을 같은 인용에 옮겼고, 새로 판정할 인용 {빈}건(바뀌거나 새로 생긴 인용)'
+        elif not isinstance(notes, dict) or any(k.isdigit() or k == 'crops' for k in notes):
+            # 앞선 대조(review.json)가 없거나 깨져 판정을 어느 인용에 옮길지 모른다. 순번대로 두면 다른 인용에 붙으므로 옮겨 두고 비운다.
+            옛 = notes_path.with_name('notes_옮기지못함.json')
+            notes_path.replace(옛)
+            if isinstance(notes, dict):
+                notes_path.write_text(json.dumps({k: v for k, v in notes.items() if not k.isdigit() and k != 'crops'},
+                                                 ensure_ascii=False, indent=1), encoding='utf-8')
+            옮김_말 = (f'앞선 대조(review.json)가 없거나 깨져 판정을 인용에 옮기지 못하였다. 앞선 판정은 {옛.name} 에 두었고 '
+                     f'인용 {len(report)}건을 모두 다시 판정한다')
     (out / 'review.json').write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding='utf-8')
     with open(out / 'review.txt', 'w', encoding='utf-8') as f:
         for r in report:

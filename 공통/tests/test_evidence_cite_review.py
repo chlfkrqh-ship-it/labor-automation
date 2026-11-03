@@ -227,6 +227,25 @@ class CarryJudgementsTest(unittest.TestCase):
             self.assertEqual([k for k in notes if k.isdigit()], [])                 # 문장을 고친 인용, 파일이 바뀐 인용은 다시 판정한다
             self.assertNotIn('crops', notes)
 
+    def test_judgements_are_set_aside_when_the_earlier_scan_is_gone(self):
+        """앞선 대조(review.json)가 없거나 깨지면 판정을 어느 인용에 옮길지 모르므로 순번대로 두지 않고 옮겨 둔 뒤 비운다."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rnd = Path(tmp) / '사건B' / '라운드1'
+            for d in ('출력', '우리증거'):
+                (rnd / d).mkdir(parents=True)
+            make_pdf(rnd / '우리증거' / '갑 제1호증 계좌거래내역.pdf', [['20180208 8:21:20 Mobile 27,500,000 - SAMJI']])
+            md = rnd / '출력' / '서면초안.md'
+            md.write_text('- 다 음 -\n\n가. 첫째 사실입니다(갑 제1호증 계좌거래내역 1면).\n', encoding='utf-8')
+            ecr.main(['scan', str(md), '--no-ocr'])
+            out = rnd / '작업' / '증거인용검토'
+            판정 = {'_요약': ['시험'], '1': ['일치', '가'], 'crops': {'1': [['갑1', 1, ['SAMJI']]]}}
+            for 깨기 in (lambda p: p.unlink(), lambda p: p.write_text('{깨짐', encoding='utf-8')):
+                (out / 'notes.json').write_text(json.dumps(판정, ensure_ascii=False), encoding='utf-8')
+                깨기(out / 'review.json')
+                ecr.main(['scan', str(md), '--no-ocr'])
+                self.assertEqual(json.loads((out / 'notes.json').read_text(encoding='utf-8')), {'_요약': ['시험']})
+                self.assertEqual(json.loads((out / 'notes_옮기지못함.json').read_text(encoding='utf-8')), 판정)
+
 
 class PrintedPageTest(unittest.TestCase):
     def test_report_page_number_printed_on_page(self):
