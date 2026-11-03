@@ -10,9 +10,10 @@
 - 서면 목차: 문서마다 제목 줄. 누르면 그 자리로 가고, 오른쪽은 그 문서의 인쇄 쪽 번호이다.
 - 호증 면 목록: 호증마다 면 단추(2면 이상)와 그 호증을 인용한 서면 쪽 단추(우리 서면은 남색, 상대 서면은 회색).
 - 나머지 면: 원본 면 위에 띠를 덧대어 '◀ 처음'·'목차'(또는 '호증 목록')·'◀ 앞 호증'·'다음 호증 ▶' 단추와
-  '사 제17호증 … 2/4면'·'답변서(1) … 23쪽' 같은 위치를 적는다. 원본 면의 내용 위에는 그리지 않는다
-  (회전된 면은 remove_rotation 으로 보이는 모양 그대로 회전을 푼 뒤, 상자가 단순한 면은 면 상자를 위로 늘리고, 아니면 새 면에
-  그 면을 그대로 놓는다). 끝에 면마다 원본과 그림을 맞댄다(전체 평균과 12pt 칸별 평균).
+  '사 제17호증 … 2/4면'·'답변서(1) … 23쪽' 같은 위치를 적는다. 서면·PT·질의 면에는 그 면이 인용한 호증마다 '◀ 사17' 단추를 달아
+  호증 면 목록의 그 호증 줄로 돌아가게 한다(인용 단추로 들어간 뒤 돌아오기). 원본 면의 내용 위에는 그리지 않는다
+  (상자가 단순한 면은 회전을 보이는 모양대로 풀고 면 상자를 위로 늘린다. CropBox 가 다르거나 원점이 0 이 아닌 면은 주석을 굽고
+  회전을 푼 뒤 원래 보이던 자리만 새 면에 놓는다). 끝에 면마다 원본과 그림을 맞댄다(전체 평균과 12pt 칸별 평균).
 - 면 이름(page label): '처음', '목차-1', '호증목록-1', 문서마다 '답1-23'(인쇄 쪽)·'사17-2' 꼴. 책갈피도 단다.
 - PDF 가 아닌 호증: 그림(jpg·png)은 면으로 넣고, 녹음·영상 등은 자리 면을 두고 파일을 출력 폴더의 '호증 파일/' 에 복사한다.
 
@@ -410,16 +411,16 @@ def 면이름_쓰기(doc, 이름들: list):
     doc.xref_set_key(doc.pdf_catalog(), "PageLabels", f"<</Nums[{' '.join(nums)}]>>")
 
 
-def 링크(page, rect, 대상: int):
-    page.insert_link({"kind": fitz.LINK_GOTO, "from": fitz.Rect(rect), "page": 대상, "to": fitz.Point(0, 0), "zoom": 0})
+def 링크(page, rect, 대상: int, 위: float = 0):
+    page.insert_link({"kind": fitz.LINK_GOTO, "from": fitz.Rect(rect), "page": 대상, "to": fitz.Point(0, 위), "zoom": 0})
 
 
-def 단추(page, rect, 내용, 대상, 테, 바탕, 글자색=(1, 1, 1), 크기=8.5, kind="B"):
+def 단추(page, rect, 내용, 대상, 테, 바탕, 글자색=(1, 1, 1), 크기=8.5, kind="B", 위=0):
     rect = fitz.Rect(rect)
     page.draw_rect(rect, color=테, fill=바탕, width=0.6, radius=0.18)
     w = 폭(내용, 크기, kind)
     글(page, (rect.x0 + (rect.width - w) / 2, rect.y0 + rect.height / 2 + 크기 * 0.36), 내용, 크기, kind, 글자색)
-    링크(page, rect, 대상)
+    링크(page, rect, 대상, 위)
 
 
 def 그림_줄이기(doc, 목표dpi: int, 품질: int) -> tuple:
@@ -500,6 +501,7 @@ def 묶기(설정경로: Path):
             if 키 not in 호증별 or 호증별[키]["종류"] != "pdf":      # 같은 번호면 PDF 쪽으로 인용을 모은다
                 호증별[키] = z
             z["인용"] = []
+    면인용 = {}                                     # (문서 조각, 원본 면) → 그 면이 인용한 호증 조각들(띠의 '호증 목록으로 돌아가기' 단추)
     for z in 순서:
         if not z.get("인용찾기"):
             continue
@@ -509,7 +511,7 @@ def 묶기(설정경로: Path):
                 break
             줄들 = pg.get_text().splitlines()
             for k, 줄 in enumerate(줄들):              # 입증방법·증명자료 목록부터는 인용으로 세지 않는다(모든 호증이 나열됨)
-                if 빈칸없이(줄) in ("입증방법", "증명자료", "증거방법", "첨부서류"):
+                if re.sub(r"[^가-힣]", "", 줄) in ("입증방법", "증명자료", "증거방법", "첨부서류", "입증자료"):   # '- 입 증 방 법 -' 꼴도
                     줄들, 멈춤 = 줄들[:k], True
                     break
             for (p, n, s) in 인용_목록("\n".join(줄들)):
@@ -521,6 +523,7 @@ def 묶기(설정경로: Path):
                 for v in 대상들:
                     if (id(z), i) not in {(id(a), b) for a, b in v["인용"]}:
                         v["인용"].append((z, i))
+                    면인용.setdefault((id(z), i), {})[id(v)] = v
 
     # 앞 면 짜기: 1면(처음), 서면 목차 면들, 호증 면 목록 면들
     목차줄 = []                                   # (조각, 단계, 글, 원본면) — 문서 머리 줄은 단계 0
@@ -569,11 +572,22 @@ def 묶기(설정경로: Path):
     for _ in range(앞면수):
         out.new_page(width=A4[0], height=A4[1])
 
-    # 본 면 넣기. 통째로 넣어 링크·주석을 살리고, 회전된 면은 remove_rotation 으로 보이는 모양 그대로 회전을 풀며,
-    # 상자가 단순하면 위로 늘려 띠를 덧대고, 아니면(원점이 0 이 아니거나 CropBox 가 다름) 새 면에 그 면을 그대로 놓는다.
-    # show_pdf_page 는 원본의 /Rotate 를 따르지 않아(2026. 11. 3. 시험) 회전된 면에 바로 쓰지 않는다.
-    def 단순면(pg):
-        return pg.rotation == 0 and pg.mediabox == pg.cropbox and pg.mediabox.x0 == 0 and pg.mediabox.y0 == 0
+    # 본 면 넣기. 통째로 넣어 링크·주석을 살린다.
+    # - 상자가 단순한 면(MediaBox = CropBox, 원점 0): 회전돼 있으면 remove_rotation 으로 보이는 모양 그대로 풀고, 위로 늘려 띠를 덧댄다.
+    # - 상자가 단순하지 않은 면: 주석을 내용에 굽고(bake, 상대 호증 표시가 FreeText 주석인 일이 있음), CropBox 를 MediaBox 로 넓혀
+    #   회전을 푼 뒤, 원래 CropBox 자리를 회전 공식으로 옮겨 그 자리만 새 면에 놓는다. remove_rotation 은 90·270 회전에서 CropBox 를
+    #   버리고, show_pdf_page 는 원본의 /Rotate 를 따르지 않으며 주석을 버린다(2026. 11. 3. GGM 노 제1호증·참고자료 2, 시험 면 4각도 화소 차이 0).
+    def 단순상자(pg):
+        return pg.mediabox == pg.cropbox and pg.mediabox.x0 == 0 and pg.mediabox.y0 == 0
+
+    def 옮김(r, x, y, W0, H0):                # 시계 방향 회전 r 의 화면 좌표(위가 0)
+        if r == 90:
+            return (H0 - y, x)
+        if r == 180:
+            return (W0 - x, H0 - y)
+        if r == 270:
+            return (y, W0 - x)
+        return (x, y)
 
     for z in 순서:
         z["시작"] = 시작 = out.page_count
@@ -581,19 +595,27 @@ def 묶기(설정경로: Path):
         out.insert_pdf(src, links=True, annots=True)
         z["놓은방식"] = []
         for i in range(src.page_count):
-            op = out[시작 + i]
-            회전 = op.rotation
-            if 회전:
-                op.remove_rotation()
-            if 단순면(op):
+            sp, op = src[i], out[시작 + i]
+            if 단순상자(sp):
+                회전 = op.rotation
+                if 회전:
+                    op.remove_rotation()
                 z["놓은방식"].append("회전풀고늘림" if 회전 else "늘림")
                 continue
+            W, H = sp.rect.width, sp.rect.height
+            C, MB, r = fitz.Rect(sp.cropbox), fitz.Rect(sp.mediabox), sp.rotation
             tmp = fitz.open()
-            tmp.insert_pdf(out, from_page=시작 + i, to_page=시작 + i)
-            r = tmp[0].rect
+            tmp.insert_pdf(src, from_page=i, to_page=i)
+            tmp.bake(annots=True, widgets=True)
+            tp = tmp[0]
+            tp.set_cropbox(tp.mediabox)
+            if tp.rotation:
+                tp.remove_rotation()
+            q = [옮김(r, x - MB.x0, y - MB.y0, MB.width, MB.height) for x in (C.x0, C.x1) for y in (C.y0, C.y1)]
+            clip = fitz.Rect(min(p[0] for p in q), min(p[1] for p in q), max(p[0] for p in q), max(p[1] for p in q))
             out.delete_page(시작 + i)
-            np_ = out.new_page(pno=시작 + i, width=r.width, height=r.height + S)
-            np_.show_pdf_page(fitz.Rect(0, S, r.width, r.height + S), tmp, 0)
+            np_ = out.new_page(pno=시작 + i, width=W, height=H + S)
+            np_.show_pdf_page(fitz.Rect(0, S, W, H + S), tmp, 0, clip=clip)
             z["놓은방식"].append("놓음")
     목차면_시작 = 1
     목록면_시작 = 1 + len(목차면들)
@@ -602,10 +624,11 @@ def 묶기(설정경로: Path):
         for (줄, y, h) in 면:
             if 줄[1] == 0:
                 목차면_자리.setdefault(id(줄[0]), 목차면_시작 + k)
-    목록면_자리 = {}
+    목록면_자리, 목록줄_위 = {}, {}
     for k, 면 in enumerate(목록면들):
         for (z, y, h) in 면:
             목록면_자리[id(z)] = 목록면_시작 + k
+            목록줄_위[id(z)] = max(0.0, y - 8)          # 돌아갈 때 그 호증 줄이 화면 위에 오도록
 
     def 쪽(z, i):                                  # 원본 면 i(0부터)의 인쇄 쪽 번호. 없으면 None
         n = i + 1 - (z["쪽시작면"] - 1)
@@ -637,7 +660,7 @@ def 묶기(설정경로: Path):
             단추(pg, (x, 3.5, x + 50, S - 3.5), "◀ 처음", 0, 남색, 남색)
             x += 54
             if z.get("호증") is not None:
-                단추(pg, (x, 3.5, x + 54, S - 3.5), "호증 목록", 목록면_자리.get(id(z), 0), 남색, (1, 1, 1), 남색)
+                단추(pg, (x, 3.5, x + 54, S - 3.5), "호증 목록", 목록면_자리.get(id(z), 0), 남색, (1, 1, 1), 남색, 위=목록줄_위.get(id(z), 0))
                 x += 58
                 k = 전체호증.index(z)
                 if k > 0:
@@ -652,11 +675,32 @@ def 묶기(설정경로: Path):
             위치 = 위치글(z, i)
             위치폭 = 폭(위치, 9, "B")
             글(pg, (W - 6 - 위치폭, S / 2 + 3.3), 위치, 9, "B", 남색)
-            남은 = W - 6 - 위치폭 - 8 - (x + 4)
+            오른끝 = W - 6 - 위치폭 - 8
+            # 서면·PT·질의 면: 그 면이 인용한 호증마다 '◀ 사17' 단추를 달아 호증 면 목록의 그 호증 줄로 돌아가게 한다
+            # (2026. 11. 3. 담당 노무사 "호증목록에서 특정 호증의 서면 등에 들어가면 다시 호증목록으로 돌아오기가 좀 힘들긴 하네")
+            돌아갈 = []
+            if z.get("호증") is None and 목록면들:
+                돌아갈 = sorted(면인용.get((id(z), i), {}).values(), key=전체호증.index)
             이름 = z["이름"]
-            if 폭(이름, 9, "B") > 남은:
-                이름 = 줄나누기(이름, 남은, 9, "B", 최대=1)[0]
+            이름폭 = min(폭(이름, 9, "B"), 110) if 돌아갈 else 오른끝 - (x + 4)
+            if 폭(이름, 9, "B") > 이름폭:
+                이름 = 줄나누기(이름, 이름폭, 9, "B", 최대=1)[0]
             글(pg, (x + 4, S / 2 + 3.3), 이름, 9, "B", 글색)
+            if 돌아갈:
+                x += 4 + 폭(이름, 9, "B") + 10
+                머리 = "호증 목록으로:"
+                글(pg, (x, S / 2 + 2.8), 머리, 7.5, "R", 흐린글)
+                x += 폭(머리, 7.5) + 4
+                for k2, v in enumerate(돌아갈):
+                    t = "◀ " + v["약칭"]
+                    w = 폭(t, 8, "B") + 8
+                    더 = k2 + 1 < len(돌아갈)
+                    if x + w + (22 if 더 else 0) > 오른끝:
+                        단추(pg, (x, 4.5, x + 18, S - 4.5), "…", 목록면_시작, 남색, (1, 1, 1), 남색, 8, "B")
+                        break
+                    테 = 상대호증색[0] if v["갈래"] == "상대" else 남색
+                    단추(pg, (x, 4.5, x + w, S - 4.5), t, 목록면_자리[id(v)], 테, (1, 1, 1), 테, 8, "B", 위=목록줄_위[id(v)])
+                    x += w + 3
 
     # 1면(처음)
     pg = out[0]
