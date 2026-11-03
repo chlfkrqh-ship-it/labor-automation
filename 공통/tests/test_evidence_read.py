@@ -1154,6 +1154,39 @@ class LongLineMeasureTest(unittest.TestCase):
                 self.assertIn('make --글다시 사6', out)
 
 
+class PlanTest(unittest.TestCase):
+    """호증이 많으면 한 창에서 다 읽지 않고 나누어 읽는다(2026. 11. 3. 노정일 호증을 한 창에서 다시 읽다가 문맥이 약 82만 토큰까지 찼다)."""
+
+    def test_unread_exhibits_are_split_into_windows_and_measured_ones_are_left_out(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            case = Path(tmp) / 'GGM_정직'
+            ours = case / '라운드1' / '우리증거'
+            ours.mkdir(parents=True)
+            make_pdf(ours / '사 제1호증 공지.pdf', [글 + f'{i}면 공지' for i in range(1, 3)])
+            make_pdf(ours / '사 제2호증 문자.pdf', [글 + f'{i}면 문자 고유 문구 {i * 7}' for i in range(1, 9)])
+            make_pdf(ours / '사 제3호증 일지.pdf', [글 + f'{i}면 일지' for i in range(1, 3)])
+            run('make', case, '--no-ocr')
+            자 = er.자리(case, False)
+            양 = {k: er.읽을_양(자, k, next(ours.glob(f'사 제{k[1:]}호증*.pdf'))) for k in ('사1', '사2', '사3')}
+            self.assertTrue(all(x['토큰'] > 0 and x['그림'] == 0 for x in 양.values()))
+            self.assertGreater(양['사2']['토큰'], 양['사1']['토큰'])
+            상한 = 양['사1']['토큰'] + 1
+            code, out = run('계획', case, '--창', 상한)
+            self.assertEqual(code, 0, out)
+            self.assertIn('실측을 마치지 않은 호증 3건', out)
+            self.assertIn('→ 창 3개', out)
+            self.assertIn('1창: 사 제1호증 (', out)
+            self.assertRegex(out, r'2창: 사 제2호증 \(.*\) — 한 창을 넘는다')
+            self.assertIn('3창: 사 제3호증 (', out)
+            code, out = run('계획', case)                                                  # 기본 상한이면 한 창
+            self.assertIn('→ 창 1개', out)
+            self.assertIn('1창: 사 제1호증, 사 제2호증, 사 제3호증', out)
+            er.실측_적기(자.기록_파일('사1'), f"실측: 2026-11-03 · 줄 1/1 · 그림 없음 · 글 {er.해시(자.글_파일('사1'))} · 세션 x")
+            code, out = run('계획', case)
+            self.assertIn('실측을 마치지 않은 호증 2건(마친 것 1건)', out)
+            self.assertNotIn('사 제1호증', out)
+
+
 class TextPiecesTest(unittest.TestCase):
     def test_chunks_keep_every_line_and_stay_small(self):
         줄들 = [f'{i}번째 줄 ' + '가' * (i % 50) for i in range(2000)] + ['나' * 7000]
