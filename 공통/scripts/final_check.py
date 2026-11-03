@@ -29,6 +29,7 @@
   DOCX           9-2단계(`--대상 docx`)와 밤 점검에서, 병합한 서면 docx 가 서면초안.md 보다 낡지 않았다(8-1단계는 병합 전이라 보지 않는다).
                  초안이 더 새것이어도 본문(문단·제목·표·각주, 지운 문단까지)이 병합본과 같으면 하단 메모만 고친 것이다
   서증 압축      출력/제출/ 에 서증 압축파일이 있으면 evidence_zip.py --확인
+  제출본         출력/제출/ 의 `_제출본` docx·pdf 가 넘길 판(DOCX 검사의 병합본)과 바이트까지 같다. 옛 이름 사본만 있으면 참고(4_서면작성/CLAUDE.md 2-1절)
   예상 질의답변  출력/ 에 심문회의 예상 질의답변 docx 가 있으면 qna_check.py·style_check.py·작업/예상질의_인용대조표.md 의 cite_check.py(`/예상질의` 5절)
 검토의견(사건 폴더의 검토의견서 docx(판 이름이 가장 높은 것) 또는 회신초안.md)
   판례 대조·판결문 PDF   위와 같다(작업/인용대조표.md, 작업/인용판결_PDF)
@@ -601,8 +602,36 @@ def 서면(사건: Path, 라운드번호=None, 대상=None, 초안없음_허용=
         res.run('서증 압축', [S4 / 'evidence_zip.py', 제출, '--확인'], '증거/ 와 같다')
     else:
         res.add('서증 압축', '해당 없음', '제출 묶음 압축파일 없음')
+    제출본_검사(res, 제출, 병합본)
     예상질의(res, 라운드)
     return res
+
+
+def 제출본_검사(res, 제출: Path, 병합본):
+    """제출/ 의 `({의뢰인명}) {서면명}_제출본.docx`·`.pdf` 가 넘길 판과 같은지 본다(4_서면작성/CLAUDE.md 2-1절).
+    2026. 11. 3. 한전 태양광 준비서면(3) "서면도 그때그때 바꿔주면 좋겠고 (_제출본)으로 해놓으면 좋을 듯" — 그때까지 제출 폴더에
+    9차판 사본이 남아 있었다. 옛 이름(_초안 등) 사본만 있는 사건은 막지 않고 참고로 알린다."""
+    if 병합본 is None or not 제출.is_dir():
+        res.add('제출본', '해당 없음', '넘길 판이나 제출 폴더가 없다')
+        return
+    사본 = sorted(p for p in 제출.glob('*_제출본.docx') if not p.name.startswith('~$'))
+    if not 사본:
+        옛 = sorted(p.name for p in 제출.glob('*.docx') if not p.name.startswith('~$'))
+        if 옛:
+            res.add('제출본', '참고', f'제출/ 의 서면 사본 이름이 `_제출본` 이 아니다: {", ".join(옛)}(2-1절)')
+        else:
+            res.add('제출본', '해당 없음', '제출/ 에 서면 사본이 없다')
+        return
+    원본 = 병합본.read_bytes()
+    같은 = [p for p in 사본 if p.read_bytes() == 원본]
+    if not 같은:
+        res.add('제출본', '막힘', f'제출/ 의 {사본[0].name} 이 넘길 판({병합본.name})과 다르다 — 서면을 고칠 때마다 제출본도 바꾼다(2-1절)')
+        return
+    pdf, 사본pdf = 병합본.with_suffix('.pdf'), 같은[0].with_suffix('.pdf')
+    if pdf.is_file() and (not 사본pdf.is_file() or 사본pdf.read_bytes() != pdf.read_bytes()):
+        res.add('제출본', '막힘', f'제출/ 의 {사본pdf.name} 이 {pdf.name} 과 다르거나 없다')
+        return
+    res.add('제출본', '통과', 같은[0].name)
 
 
 def 돌리기(사건: Path, 라운드번호=None, 대상=None, 밤=False) -> list:

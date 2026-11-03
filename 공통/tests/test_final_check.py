@@ -190,6 +190,28 @@ class BriefGateTest(unittest.TestCase):
         os.utime(docx, (time.time() + 100, time.time() + 100))
         self.assertEqual(status(fc.서면(self.case, 대상=docx), 'DOCX'), '통과')
 
+    def test_submission_copy_must_match_the_handed_over_docx(self):
+        """제출/ 의 _제출본 은 넘길 판과 같아야 한다(2026. 11. 3. 한전 "서면도 그때그때 바꿔주면 좋겠고 (_제출본)으로"). 옛 이름 사본만 있으면 참고."""
+        self.complete()
+        docx = self.r / '출력' / '(GGM) 답변서_Rev_1.docx'
+        docx.write_bytes(b'PK-new')
+        os.utime(docx, (time.time() + 100, time.time() + 100))
+        제출 = self.r / '출력' / '제출'
+        제출.mkdir(parents=True, exist_ok=True)
+        self.assertEqual(status(fc.서면(self.case, 대상=docx), '제출본'), '해당 없음')
+        (제출 / '(GGM) 답변서_초안.docx').write_bytes(b'PK-old')
+        self.assertEqual(status(fc.서면(self.case, 대상=docx), '제출본'), '참고')
+        사본 = 제출 / '(GGM) 답변서_제출본.docx'
+        사본.write_bytes(b'PK-old')
+        self.assertEqual(status(fc.서면(self.case, 대상=docx), '제출본'), '막힘')
+        사본.write_bytes(b'PK-new')
+        self.assertEqual(status(fc.서면(self.case, 대상=docx), '제출본'), '통과')
+        (self.r / '출력' / '(GGM) 답변서_Rev_1.pdf').write_bytes(b'%PDF-new')
+        (제출 / '(GGM) 답변서_제출본.pdf').write_bytes(b'%PDF-old')
+        self.assertEqual(status(fc.서면(self.case, 대상=docx), '제출본'), '막힘')
+        (제출 / '(GGM) 답변서_제출본.pdf').write_bytes(b'%PDF-new')
+        self.assertEqual(status(fc.서면(self.case, 대상=docx), '제출본'), '통과')
+
     def test_memo_only_edit_does_not_make_the_docx_stale(self):
         """초안의 하단 메모만 고치면 병합본은 그대로이다(2026. 11. 2. 첫 밤 점검). 본문을 고치면 막는다."""
         본문 = '- 다 음 -\n\n가. 정직 사유에 관하여 살펴봅니다\n\n안전 수칙을 모든 근로자에게 알렸습니다(사 제6호증 1면).[[각주: 판결 원문]]\n\n---\n\n① 메모\n'
