@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import hashlib
 import json
 import os
 import re
@@ -153,7 +154,7 @@ def parse_citations(text: str) -> list:
             m_end = re.search(r'(?:다|\))\.(?:\s|$)', t[ge - 1:])
             sentence = t[sent_start:(ge - 1 + m_end.end()) if m_end else len(t)].strip()
             for part in re.split(r',\s*(?=(?:' + PREFIX + r')\s*제)', g.group(1)):
-                pages = [re.sub(r'\s', '', p) for p in PAGES.findall(part)]
+                pages = []
                 refs = []
                 ml = REF_LIST.search(part)
                 if ml:
@@ -162,12 +163,24 @@ def parse_citations(text: str) -> list:
                     m = REF.search(part)
                     if m:
                         refs = [(m.group(1), int(m.group(2)), int(m.group(3)) if m.group(3) else None)]
+                        pages = page_items(part[m.end():])      # 호증 표시 뒤의 면만(의3 의 3 을 면으로 읽지 않는다)
                 for pre, no, sub in refs:
                     key = f'{pre}{no}' + (f'-{sub}' if sub else '')
                     rows.append({'line': ln, 'key': key, 'raw': part.strip(), 'pages': pages if len(refs) == 1 else [],
                                  'span': span, 'sentence': sentence, 'caption': caption})
             prev_end = ge
     return rows
+
+
+def page_items(s: str) -> list:
+    """호증 표시 뒤의 면 표시를 ['3', '5~7', '9'] 꼴로. '3·5~7면'·'2, 4면'·'5~7면, 9면' 모두 낱낱의 면과 범위로 나눈다.
+    2026. 11. 3. 쉼표·가운뎃점으로 이은 면('3·5면', '2, 4면')의 앞 면을 버려, 증거 인용 대조가 그 면을 보여 주지 않았다
+    (같은 날 `evidence_words.py` 에서 고친 것과 같은 하자)."""
+    out = []
+    for m in re.finditer(PAGE_LIST, s):
+        for grp in re.findall(r'(\d+(?:\s*[~,·ㆍ]\s*\d+)*)\s*(?:면|쪽)', m.group(0)):
+            out += [re.sub(r'\s', '', x) for x in re.split(r'\s*[,·ㆍ]\s*', grp) if x.strip()]
+    return out
 
 
 def page_numbers(s: str) -> set:
@@ -523,6 +536,38 @@ def review_dir(md: Path) -> Path:
     return round_of(md) / '작업' / ('증거인용검토_' + name if name else '증거인용검토')
 
 
+def 인용_표(r: dict, 해시까지: bool = True) -> tuple:
+    """인용 하나를 가리키는 표. 호증·면·문장, 그리고 대조한 호증 파일의 해시."""
+    return (r.get('key'), str(r.get('pages')), canon(r.get('sentence') or ''), r.get('file_hash') if 해시까지 else None)
+
+
+def 판정_옮기기(old: list, new: list, notes: dict) -> tuple:
+    """앞서 한 판정(notes.json)을 순번이 아니라 인용에 붙여 새 대조로 옮긴다. 호증·면·문장이나 호증 파일이 바뀐 인용은 판정을 비워
+    다시 하게 한다. 돌려주는 것: (새 notes, 옮긴 판정 수).
+    2026. 11. 3. 판정이 순번에 붙어 있어, 초안 중간에 인용이 끼면 다시 대조할 때 뒤 판정이 한 칸씩 밀려 다른 인용에 붙었다."""
+    남은 = {}
+    crops_old = notes.get('crops', {}) or {}
+    for r in old:
+        n = str(r.get('n'))
+        if n in notes or n in crops_old:
+            남은.setdefault(인용_표(r, 'file_hash' in r), []).append(n)
+    out = {k: v for k, v in notes.items() if not k.isdigit() and k != 'crops'}
+    crops_new, 옮김 = {}, 0
+    for r in new:
+        for 표 in (인용_표(r), 인용_표(r, False)):      # 파일 해시를 적지 않은 옛 대조와도 맞춘다
+            if 남은.get(표):
+                n_old = 남은[표].pop(0)
+                if n_old in notes:
+                    out[str(r['n'])] = notes[n_old]
+                    옮김 += 1
+                if n_old in crops_old:
+                    crops_new[str(r['n'])] = crops_old[n_old]
+                break
+    if crops_new:
+        out['crops'] = crops_new
+    return out, 옮김
+
+
 def citation_changes(md: Path, items: list) -> tuple:
     """대조해 둔 인용(review.json)과 지금 초안의 인용을 맞댄다. (새로 생긴 인용 수, 없어진 인용 수). 호증·면·문장을 본다."""
     key = lambda x: (x.get('key'), str(x.get('pages')), canon(x.get('sentence') or ''))
@@ -598,6 +643,7 @@ def cmd_scan(args) -> int:
         if not path:
             report.append(r)
             continue
+        r['file_hash'] = hashlib.sha1(Path(path).read_bytes()).hexdigest()[:12]
         if c['key'] not in opened:
             opened[c['key']] = Exhibit(c['key'], path, out, args.ocr_dir or [], ocr_map, not args.no_ocr)
         ex = opened[c['key']]
@@ -650,6 +696,19 @@ def cmd_scan(args) -> int:
         report.append(r)
     for ex in opened.values():
         ex.close()
+    notes_path, old_path = out / 'notes.json', out / 'review.json'
+    옮김_말 = ''
+    if notes_path.is_file() and old_path.is_file():
+        try:
+            old, notes = json.loads(old_path.read_text(encoding='utf-8')), json.loads(notes_path.read_text(encoding='utf-8'))
+        except ValueError:
+            old, notes = None, None
+        if old is not None:
+            새, 옮김 = 판정_옮기기(old, report, notes)
+            if 새 != notes:
+                notes_path.write_text(json.dumps(새, ensure_ascii=False, indent=1), encoding='utf-8')
+            빈 = sum(1 for r in report if str(r['n']) not in 새)
+            옮김_말 = f'앞선 판정 {옮김}건을 같은 인용에 옮겼고, 새로 판정할 인용 {빈}건(바뀌거나 새로 생긴 인용)'
     (out / 'review.json').write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding='utf-8')
     with open(out / 'review.txt', 'w', encoding='utf-8') as f:
         for r in report:
@@ -668,6 +727,8 @@ def cmd_scan(args) -> int:
     nofile = [r['key'] for r in report if not r['file']]
     print(f"인용 {len(report)}건(호증 {count_exhibits(report)}) | 파일 못 찾음 {len(nofile)} {sorted(set(nofile))[:10]} | "
           f"쪽 없음 {sum(1 for r in report if r['bad_pages'])} | 날짜·금액·따옴표 못찾음 {sum(1 for r in report if r['miss'])}")
+    if 옮김_말:
+        print(옮김_말)
     print('결과:', out / 'review.txt')
     print('다음: review.txt 를 한 건씩 원문과 맞대어 판정을 notes.json 에 적고 doc 을 돌린다. 문자인식이 깨진 면은 그림(crops/)을 직접 본다.')
     return 1 if nofile else 0
