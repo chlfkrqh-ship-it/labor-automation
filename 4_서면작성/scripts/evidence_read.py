@@ -37,8 +37,8 @@ check 모든 호증(자료)에 기록이 있는지, 기록한 뒤 파일이 바�
 본 세션만 알 수 있으므로 기록의 그 면 줄('- 3면: … 확인표 K7QF')에 옮겨 적는다. 묶은 줄('- 5~9면:')에는 그 면들의 확인표를 모두 적는다.
 PDF 가 아닌 호증은 단위 줄('- [파일] 이름:', '- [시트] 이름:', '- 전체:')에 그 단위의 덩이·면·그림 확인표를 모두 적는다. 면별 글 머리의
 '확인표 단위:' 목록이 단위마다 몇 개가 있어야 하는지 보여 준다. 뽑지 못한 문서(한글이 없는 PC의 .hwp, 머리 서명이 한글 문서가 아닌 .hwp,
-그리지 못한 문서 안 그림)는 막히고, 같은 폴더에 같은 이름의 PDF 를 두면 그 PDF 를 면마다 읽는 것으로 갈음한다. 소리·영상과 열리지 않는
-그림 파일만 '읽은 방식'의 신고로 본다.
+머리 서명이 워드·엑셀 문서가 아닌 .doc·.xls, 글자로 풀리지 않는 .txt·.csv, 그리지 못한 문서 안 그림)는 막히고, 같은 폴더에 같은 이름의
+PDF 를 두면 그 PDF 를 면마다 읽는 것으로 갈음한다. 소리·영상과 열리지 않는 그림 파일만 '읽은 방식'의 신고로 본다.
 확인표는 사건 폴더 이름·파일 해시·면 번호로 정해지므로 다른 사건의 기록을 옮겨 와도 맞지 않는다. 스크립트로 확인표만 뽑거나 줄을 걸러 읽지 않는다.
 모음 그림(여러 면을 줄여 한 장에 모은 그림)은 글자를 읽을 수 없으므로 읽은 것으로 치지 않는다.
 
@@ -801,6 +801,14 @@ def 파일_항목(자: 자리, k: str, 이름: str, data: bytes, 경로: list, u
 
     try:
         if ext in ('.doc', '.xls'):      # 새 형식으로 바꾸어 같은 방식으로 읽는다(숨긴 시트·메모·지운 글까지)
+            판 = _et.오피스_판(data, ext)
+            if 판 == '글':      # 쉼표·탭으로 나눈 글을 .xls 로 저장한 것 등. 변환기를 거치면 cp949·UTF-8 이 깨지므로 바로 읽는다
+                글(_et.글자_풀기(data), '(빈 파일)')
+                return out
+            if not 판:      # 변환기가 맞지 않는 바이트를 글 문서로 열어 만든 엉터리 글을 읽은 것으로 치던 것(2026. 11. 3.)
+                모름(f'{ext} 이름이지만 머리 서명이 {"워드" if ext == ".doc" else "엑셀"} 문서가 아니다(깨졌거나 암호가 걸렸거나 다른 형식의 '
+                    '파일이다. 원본을 열어 보고 PDF 로 저장해 둔다)')
+                return out
             b = _et.새형식(이름, data)
             if not b:
                 모름(f'{ext} 를 바꾸지 못했다(워드·엑셀이나 LibreOffice 가 있는 PC에서 make 를 다시 돌리거나 PDF 로 저장해 둔다)')
@@ -834,7 +842,11 @@ def 파일_항목(자: 자리, k: str, 이름: str, data: bytes, 경로: list, u
             r = _et.hwpx_글(data)
             글(r['글'], '(글 없음)', r['그림'])
         elif ext in ('.txt', '.csv'):
-            글(_et.텍스트_글(data), '(빈 파일)')
+            t = _et.글자_풀기(data)
+            if t is None:      # 끝내 latin-1 로 풀어 깨진 파일도 읽은 것으로 치던 것(2026. 11. 3.)
+                모름(f'{ext} 이름이지만 글자로 된 파일이 아니다(깨졌거나 다른 형식의 파일이다. 원본을 열어 보고 PDF 로 저장해 둔다)')
+            else:
+                글(t, '(빈 파일)')
         elif ext == '.eml':
             r = _et.eml_글(data)
             글(r['글'], '(빈 메일)')
@@ -1019,6 +1031,38 @@ def 기타_새판(자: 자리, k: str, p: Path) -> bool:
                     return False
             except Exception:      # 목록의 경로가 파일에 없다
                 return False
+    return 옛형식_글_맞음(p, t)
+
+
+def 옛형식_글_맞음(p: Path, t: str) -> bool:
+    """.doc·.xls·.txt·.csv 를 지금의 읽기로 읽은 면별 글인가. 고치기 전(2026. 11. 3.)에는 변환기가 머리 서명이 맞지 않는 .doc·.xls 를
+    글 문서로 열어 엉터리 글을 만들었고, .txt·.csv 는 latin-1 로 끝내 풀었으며, 글자로만 된 .doc·.xls 는 변환기를 거쳐 cp949·UTF-8 이
+    깨졌다. 그렇게 읽은 글(읽지 못한 곳이 아닌 단위)은 옛 판으로 보아 make 가 다시 쓰게 한다."""
+    본, 정리 = set(), (lambda s: re.sub(r'\s+', '', nfc(s)))
+    for it in 목록_읽기(t):
+        if it['갈래'] == '모름':
+            continue
+        for i in range(len(it['경로']) + 1):
+            앞 = tuple(it['경로'][:i])
+            e = Path(it['경로'][i - 1] if i else p.name).suffix.lower()
+            if e not in ('.doc', '.xls', '.txt', '.csv') or 앞 in 본:
+                continue
+            본.add(앞)
+            try:
+                data = 바이트_찾기(p, list(앞))
+            except Exception:      # 목록의 경로가 파일에 없다
+                return False
+            if e in ('.txt', '.csv'):
+                if _et.글자_풀기(data) is None:
+                    return False
+                continue
+            판 = _et.오피스_판(data, e)
+            if 판 is None:
+                return False
+            if 판 == '글':
+                첫 = next((x.strip() for x in _et.글자_풀기(data).splitlines() if x.strip()), '')
+                if 첫 and 정리(첫[:60]) not in 정리(t):
+                    return False
     return True
 
 

@@ -18,6 +18,8 @@ PDF 가 아닌 호증도 단위(압축 안 파일, 엑셀 시트, 문서 전체)
   되어 빠지지 않는다. .msg 는 extract_msg 로 읽는다. 바꿀 길이 없으면 그 까닭을 돌려준다.
   한글 파일(.hwp)은 한글 자동화가 있는 PC에서만 읽힌다(LibreOffice 는 한글 97 이하 형식만 읽는다). 그런 호증은 제출용 PDF 를 만들어
   두면 그 PDF 로 읽는다. 머리 서명이 한글 문서가 아닌 .hwp 는 바꾸지 않는다(`한글_판`).
+  .doc·.xls 도 머리 서명이 워드·엑셀 문서(또는 RTF·HTML·XML 로 저장한 문서)가 아니면 바꾸지 않고, 글자로만 된 파일(쉼표·탭으로 나눈
+  글을 .xls 로 저장한 것 등)은 바꾸지 않고 바로 읽는다(`오피스_판`). .txt·.csv 도 글자로 풀리지 않으면 읽은 것으로 치지 않는다(`글자_풀기`).
 
 2026. 11. 3. 담당 노무사 "압축·엑셀·문서 호증도 확인표 넣어줘".
 """
@@ -528,6 +530,31 @@ def 고유(이름: str, 쓴: list) -> str:
     return f'{s} ({i}){e}'
 
 
+def 글자_풀기(data: bytes) -> str | None:
+    """글자로만 된 파일이면 그 글(UTF-16 머리표, UTF-8, cp949 순으로 푼다), 아니면 None. 머리표 없이 NUL 이 있거나, 어느 글자 판으로도
+    풀리지 않거나, 제어 문자(탭·줄바꿈·쪽 나눔 말고)가 글자의 1% 를 넘으면 글자로 된 파일이 아니다. 2026. 11. 3. `텍스트_글` 은 끝내 latin-1
+    로 풀어, 이름만 .txt·.csv 인 깨진 파일도 엉터리 글로 읽혀 check 를 지났다."""
+    if data[:2] in (b'\xff\xfe', b'\xfe\xff'):
+        try:
+            t = data.decode('utf-16')
+        except UnicodeDecodeError:
+            return None
+    elif b'\x00' in data:
+        return None
+    else:
+        for enc in ('utf-8-sig', 'cp949'):
+            try:
+                t = data.decode(enc)
+                break
+            except UnicodeDecodeError:
+                continue
+        else:
+            return None
+    t = t.rstrip('\x1a')      # 옛 DOS 글 파일 끝의 Ctrl-Z
+    제어 = sum(1 for c in t if (ord(c) < 32 and c not in '\t\n\r\f\v') or 0x7f <= ord(c) < 0xa0)
+    return t if 제어 * 100 <= len(t) else None
+
+
 def 텍스트_글(data: bytes) -> str:
     if data[:2] in (b'\xff\xfe', b'\xfe\xff'):      # UTF-16 은 머리표로 먼저 가린다(cp949 로도 풀려 글이 깨진다)
         try:
@@ -665,6 +692,36 @@ def PDF로(이름: str, data: bytes) -> bytes | None:
     return _한글_PDF(data, '.hwp') or (_libre(data, '.hwp', 'pdf') if 판 == 3 else None)
 
 
+_표시_머리 = re.compile(rb'\s*(?:<(?:!--|(?:!doctype|\?xml|html|head|body|table|meta|style|xml)\b)|mime-version\s*:)', re.I)
+
+
+def 오피스_판(data: bytes, ext: str) -> str | None:
+    """.doc·.xls 바이트의 머리 서명으로 본 꼴. 워드·엑셀·LibreOffice 는 맞지 않는 바이트도 글 문서로 열어 엉터리 글의 docx·xlsx 를 만들므로
+    (2026. 11. 3. 깨진 .doc·.xls 가 그렇게 바뀌어 읽힌 것이 되었다. 같은 날 .hwp 의 `한글_판`) 바꾸기 전에 가린다.
+    'ole'(워드·엑셀 97~2003 의 복합 문서. 그 안에 WordDocument·Workbook(엑셀 5·95 는 Book) 스트림이 있다), 'zip'(이름만 .doc·.xls 인
+    docx·xlsx), 'rtf'(.doc), '표시'(HTML·MHT·XML 로 저장한 문서. 은행·급여 사이트의 '엑셀 내려받기'가 흔히 이렇다), 'biff'(엑셀 2~4),
+    'word2'(워드 2 이하), '글'(쉼표·탭으로 나눈 글처럼 글자로만 된 파일. 바꾸지 않고 `글자_풀기` 로 읽는다. 변환기를 거치면 cp949·UTF-8 이
+    깨진다). 어느 것도 아니면 None(깨졌거나, 암호가 걸린 새 형식이거나, 다른 형식의 파일이다)."""
+    if data[:8] == OLE_서명:
+        이름들 = ('WordDocument',) if ext == '.doc' else ('Workbook', 'Book')
+        return 'ole' if any(n.encode('utf-16-le') in data for n in 이름들) else None
+    if data[:4] == b'PK\x03\x04':
+        return 'zip'
+    머리 = data[:4096]
+    if 머리[:2] in (b'\xff\xfe', b'\xfe\xff'):
+        머리 = 머리.decode('utf-16', 'ignore').encode('utf-8')
+    머리 = 머리[3:] if 머리[:3] == b'\xef\xbb\xbf' else 머리
+    if ext == '.doc' and 머리.lstrip()[:5] == b'{\\rtf':
+        return 'rtf'
+    if _표시_머리.match(머리) or re.search(rb'(?im)^mime-version\s*:', 머리[:1024]):
+        return '표시'
+    if ext == '.xls' and data[:4] in (b'\x09\x00\x04\x00', b'\x09\x02\x06\x00', b'\x09\x04\x06\x00'):
+        return 'biff'
+    if ext == '.doc' and data[:2] in (b'\xdb\xa5', b'\x31\xbe'):
+        return 'word2'
+    return '글' if 글자_풀기(data) is not None else None
+
+
 def _오피스_바꾸기(data: bytes, ext: str) -> bytes | None:
     """윈도의 워드·엑셀로 .doc → .docx, .xls → .xlsx(`evidence_cite_review.py` 의 워드 자동화와 같은 꼴). 없으면 None.
     암호가 걸린 파일은 암호 창을 띄우지 않게 빈 암호를 주어 못 연 것으로 친다."""
@@ -705,8 +762,11 @@ def _오피스_바꾸기(data: bytes, ext: str) -> bytes | None:
 
 def 새형식(이름: str, data: bytes) -> bytes | None:
     """옛 형식 .doc → .docx, .xls → .xlsx. 윈도의 워드·엑셀, 없으면 LibreOffice. 못 하면 None.
-    PDF 로 바꾸면 숨긴 시트·행·열과 메모가 빠지므로 새 형식으로 바꾸어 같은 방식(docx_글·xlsx_시트들)으로 읽는다."""
+    PDF 로 바꾸면 숨긴 시트·행·열과 메모가 빠지므로 새 형식으로 바꾸어 같은 방식(docx_글·xlsx_시트들)으로 읽는다.
+    머리 서명이 워드·엑셀 문서가 아니거나 글자로만 된 파일이면 바꾸지 않는다(`오피스_판`)."""
     ext = Path(이름).suffix.lower()
+    if 오피스_판(data, ext) in (None, '글'):
+        return None
     b = _오피스_바꾸기(data, ext) or _libre(data, ext, 'docx' if ext == '.doc' else 'xlsx')
     return b if b and b[:2] == b'PK' else None
 

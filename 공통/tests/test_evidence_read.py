@@ -1042,6 +1042,55 @@ class OtherFormatsTest(unittest.TestCase):
         self.assertIn('한글 자동화로 .hwp 를 PDF 로 바꾸지 못했다', out)
         self.assertEqual(list(그림폴더.rglob('*.png')), [])
 
+    def test_broken_doc_xls_txt_are_not_read_as_text(self):
+        """깨진 .doc·.xls·.txt 는 변환기·latin-1 이 만든 엉터리 글을 읽은 것으로 치지 않는다. 워드·엑셀·LibreOffice 가 있어도 바꾸지 않는다."""
+        잡것 = OfficeSignatureTest.잡것
+        (self.ours / '사 제9호증 옛 계약서.doc').write_bytes(잡것)
+        (self.ours / '사 제11호증 옛 근무표.xls').write_bytes(잡것)
+        (self.ours / '사 제12호증 메모.txt').write_bytes(잡것)
+        with mock.patch.object(er._et, '_오피스_바꾸기', return_value=docx_bytes([])), \
+                mock.patch.object(er._et, '_libre', return_value=xlsx_bytes()):        # 변환기는 무엇이든 열어 바꾼다
+            run('make', self.case, '--no-ocr', '--호증', '사9', '사11', '사12')
+        code, out = run('check', self.case, '--호증', '사9', '사11', '사12')
+        self.assertEqual(code, 1)
+        self.assertIn('글을 뽑지 못한 곳: 전체(.doc 이름이지만 머리 서명이 워드 문서가 아니다', out)
+        self.assertIn('글을 뽑지 못한 곳: 전체(.xls 이름이지만 머리 서명이 엑셀 문서가 아니다', out)
+        self.assertIn('글을 뽑지 못한 곳: 전체(.txt 이름이지만 글자로 된 파일이 아니다', out)
+
+    def test_text_saved_as_xls_is_read_directly(self):
+        """쉼표·탭으로 나눈 글을 .xls 로 저장한 파일은 변환기를 거치지 않고 바로 읽는다(LibreOffice 는 cp949 를 깨뜨렸다)."""
+        (self.ours / '사 제11호증 급여 내려받기.xls').write_bytes('성명,급여\n홍길동,3000000\n'.encode('cp949'))
+        with mock.patch.object(er._et, '_오피스_바꾸기') as 오피스, mock.patch.object(er._et, '_libre') as libre:
+            run('make', self.case, '--no-ocr', '--호증', '사11')
+        오피스.assert_not_called()
+        libre.assert_not_called()
+        t = self.text('사11')
+        self.assertIn('홍길동,3000000', t)
+        self.assertIn('확인표 단위: 전체 ⟶ 글 1 ⟶ ', t)
+        채우기(self.case, '사11', 기대표(self.case, '사11'))
+        self.assertEqual(run('check', self.case, '--호증', '사11')[0], 0)
+
+    def test_text_made_before_the_office_signature_check_is_written_again(self):
+        """고치기 전의 make 는 깨진 .doc 를 변환기가 만든 엉터리 글로, 글자로만 된 .xls 를 변환기를 거친 글로 냈다. 확인표가 맞아도
+        옛 판으로 막고, make 가 다시 쓴다(깨진 것은 뽑지 못한 곳, 글자로 된 것은 바로 읽은 글)."""
+        (self.ours / '사 제9호증 옛 계약서.doc').write_bytes(OfficeSignatureTest.잡것)
+        (self.ours / '사 제11호증 급여 내려받기.xls').write_bytes('성명,급여\n홍길동,3000000\n'.encode('cp949'))
+        옛 = {'.doc': docx_bytes([]), '.xls': xlsx_bytes()}
+        with mock.patch.object(er._et, '오피스_판', return_value='ole'), \
+                mock.patch.object(er._et, '새형식', side_effect=lambda 이름, d: 옛[Path(이름).suffix.lower()]):
+            run('make', self.case, '--no-ocr', '--호증', '사9', '사11')
+            for k in ('사9', '사11'):
+                self.assertNotIn('⟶ 모름', self.text(k))
+                채우기(self.case, k, 기대표(self.case, k))
+            self.assertEqual(run('check', self.case, '--호증', '사9', '사11')[0], 0)     # 머리 서명을 보지 않던 때에는 지나갔다
+        code, out = run('check', self.case, '--호증', '사9', '사11')
+        self.assertEqual(code, 1)
+        self.assertEqual(out.count('옛 판'), 2, out)
+        run('make', self.case, '--no-ocr', '--호증', '사9', '사11')
+        self.assertIn('머리 서명이 워드 문서가 아니다', self.text('사9'))
+        self.assertIn('홍길동,3000000', self.text('사11'))
+        self.assertTrue(er.기타_새판(er.자리(self.case, False), '사11', self.ours / '사 제11호증 급여 내려받기.xls'))   # 다시 쓴 글은 새 판이다
+
     def test_ocr_cache_of_a_replaced_file_is_not_reused(self):
         d = pymupdf.open()
         d.new_page()                                                               # 글자층이 없는 스캔 면
@@ -1380,6 +1429,54 @@ class HwpSignatureTest(unittest.TestCase):
         with mock.patch.object(er._et, '_한글_PDF', return_value=b'%PDF-1.7'), mock.patch.object(er._et, '_libre') as libre:
             self.assertEqual(er._et.PDF로('서식.hwp', self.HWP5), b'%PDF-1.7')
             libre.assert_not_called()
+
+
+class OfficeSignatureTest(unittest.TestCase):
+    """.doc·.xls 는 머리 서명이 워드·엑셀 문서(RTF·HTML·XML 로 저장한 것 포함)일 때만 바꾸고, 글자로만 된 파일은 바로 읽는다.
+    2026. 11. 3. 깨진 .doc·.xls 를 LibreOffice 가 글 문서로 열어 엉터리 글의 docx·xlsx 로 바꾸어 check 가 막지 않았고, cp949 로 쓴 CSV 를
+    .xls 로 저장한 파일은 한글이 깨진 채 읽혔다(같은 날 .hwp 의 `한글_판` 과 같은 하자)."""
+    잡것 = bytes((i * 151 + 7) % 256 for i in range(4000))                      # 깨진 파일(NUL 이 든 아무 바이트)
+    DOC = er._et.OLE_서명 + bytes(504) + 'WordDocument'.encode('utf-16-le') + bytes(40)
+    XLS = er._et.OLE_서명 + bytes(504) + 'Workbook'.encode('utf-16-le') + bytes(40)
+    XLS95 = er._et.OLE_서명 + bytes(504) + 'Book'.encode('utf-16-le') + bytes(40)
+
+    def test_kind_comes_from_the_signature(self):
+        판 = er._et.오피스_판
+        self.assertEqual(판(self.DOC, '.doc'), 'ole')
+        self.assertEqual(판(self.XLS, '.xls'), 'ole')
+        self.assertEqual(판(self.XLS95, '.xls'), 'ole')
+        self.assertIsNone(판(self.XLS, '.doc'))                                    # 워드가 아닌 복합 문서
+        self.assertIsNone(판(self.DOC, '.xls'))
+        self.assertEqual(판(b'PK\x03\x04' + bytes(30), '.doc'), 'zip')              # 이름만 .doc 인 docx
+        self.assertEqual(판(rb'{\rtf1\ansi hello}', '.doc'), 'rtf')
+        for 표시 in (b'<html><body><table></table></body></html>', b'\xef\xbb\xbf  <!DOCTYPE html><html></html>', b'<!-- \xb1\xde\xbf\xa9 -->\n<table>',
+                   b'<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"/>',
+                   b'MIME-Version: 1.0\r\nContent-Type: multipart/related\r\n', '<html>'.encode('utf-16')):
+            self.assertEqual(판(표시, '.xls'), '표시', 표시[:20])
+        self.assertEqual(판(b'\x09\x04\x06\x00' + bytes(20), '.xls'), 'biff')        # 엑셀 4
+        self.assertEqual(판(b'\xdb\xa5' + bytes(30), '.doc'), 'word2')               # 워드 2
+        self.assertEqual(판('성명,급여\n홍길동,3000000\n'.encode('cp949'), '.xls'), '글')
+        self.assertEqual(판('성명\t급여\n홍길동\t3000000\n'.encode('utf-8'), '.xls'), '글')
+        self.assertIsNone(판(self.잡것, '.doc'))
+        self.assertIsNone(판(self.잡것, '.xls'))
+
+    def test_text_must_decode(self):
+        self.assertEqual(er._et.글자_풀기('가나다'.encode('cp949')), '가나다')
+        self.assertEqual(er._et.글자_풀기('가나다'.encode('utf-16')), '가나다')
+        self.assertEqual(er._et.글자_풀기(b''), '')
+        self.assertIsNone(er._et.글자_풀기(self.잡것))
+        self.assertIsNone(er._et.글자_풀기(b'abc\x00def'))
+        self.assertIsNone(er._et.글자_풀기(b'\x1b\x1b\x1b\x1b' + b'a' * 50))               # 제어 문자가 많다
+
+    def test_only_office_documents_reach_the_converters(self):
+        불림 = []
+        with mock.patch.object(er._et, '_오피스_바꾸기', side_effect=lambda *a: 불림.append('오피스')), \
+                mock.patch.object(er._et, '_libre', side_effect=lambda *a: 불림.append('LibreOffice')):
+            for 이름, b in (('깨진.doc', self.잡것), ('깨진.xls', self.잡것), ('글.xls', '성명,급여\n'.encode('cp949'))):
+                self.assertIsNone(er._et.새형식(이름, b))
+            self.assertEqual(불림, [])
+            self.assertIsNone(er._et.새형식('옛 계약서.doc', self.DOC))
+            self.assertEqual(불림, ['오피스', 'LibreOffice'])
 
 
 def 그림_pdf(path: Path, 면들, 가로=False):
