@@ -5,6 +5,7 @@
     python -B 4_서면작성/scripts/evidence_read.py check "<사건 폴더>" [--호증 ...]
     python -B 4_서면작성/scripts/evidence_read.py 그림  "<사건 폴더>" --호증 을105-8 [--면 3 7] [--전부]   # 그림으로 볼 면을 확인표와 함께 연다
     python -B 4_서면작성/scripts/evidence_read.py 실측  "<사건 폴더>" [--호증 ...] [--보기]   # 세션 기록으로 실제 읽은 줄을 재어 기록에 적는다
+    python -B 4_서면작성/scripts/evidence_read.py 계획  "<사건 폴더>" [--창 200000]        # 아직 읽지 않은 호증의 양을 어림해 창을 나눈다
     python -B 4_서면작성/scripts/evidence_read.py make  "<사건 폴더>" --글다시 [사6 ...]    # 면별 글만 지금 판으로 다시 낸다(기록의 면별 내용은 그대로)
     python -B 4_서면작성/scripts/evidence_read.py make  "1_검토의견/사건/{의뢰인}_{검토내용}" --자료 "<첨부 폴더>"   # 호증 번호 없는 자료
 
@@ -26,6 +27,9 @@ check 모든 호증(자료)에 기록이 있는지, 기록한 뒤 파일이 바�
       이상이 화면에 나왔고 그림으로 볼 면과 압축·문서 안의 그림을 모두 열었으면 기록에 '실측:' 줄을 적는다. 거른 줄과 확인표만 찍으면 모자라게
       나오고, 모음 그림과 하위 작업의 기록은 세지 않는다.
       세션 기록은 PC 마다 따로이고 열흘이 지나면 지워지므로 읽은 그 PC 에서 바로 돌린다.
+계획  아직 실측을 마치지 않은 호증의 읽을 양(면별 글의 글자·줄, 한 장씩 열 그림)을 토큰으로 어림해 한 창에 상한만큼씩 나눈다. 실측은 세션
+      기록을 모두 합쳐 재므로 창을 나누어 읽어도 된다. 한 창의 문맥이 커질수록 턴마다 같은 글을 다시 읽어 사용량이 커진다
+      (2026. 11. 3. 노정일 호증을 한 창에서 다시 읽다가 문맥이 약 82만 토큰까지 찼다).
 
 확인표: 면별 글의 면마다 끝에 '[3면 끝 · 확인표 K7QF]'가 있고, 그림으로 볼 면은 `그림` 이 그린 그림 아래 띠에 있다. 그 면을 끝까지 열어
 본 세션만 알 수 있으므로 기록의 그 면 줄('- 3면: … 확인표 K7QF')에 옮겨 적는다. 묶은 줄('- 5~9면:')에는 그 면들의 확인표를 모두 적는다.
@@ -1165,6 +1169,82 @@ def cmd_실측(a) -> int:
     return 0 if len(통과) == len(잴) else 1
 
 
+# ---------------------------------------------------------------- 계획: 읽을 양을 어림해 창을 나눈다
+글_토큰 = 1.5        # 면별 글의 글자 수를 토큰으로 어림할 때 나누는 수(한글이 많은 글 기준의 어림)
+줄_토큰 = 2          # 읽기 도구가 줄마다 붙이는 줄 번호의 몫
+그림_토큰 = 1600     # 그림 한 장의 어림(긴 변을 줄여 보내므로 장마다 비슷하다)
+창_기본 = 200_000    # 한 창에서 읽을 양의 기본 상한(토큰). 문맥이 커질수록 턴마다 같은 글을 다시 읽어 사용량이 커진다
+
+
+def 읽을_양(자: 자리, k: str, p: Path) -> dict | None:
+    """그 호증을 읽는 데 드는 양. 면별 글(머리 포함 파일 전체)의 줄·글자와 한 장씩 열 그림. 면별 글이 없으면 None."""
+    suf = p.suffix.lower()
+    if suf in IMAGE:
+        n = 그림_조각수(p)
+        return {'줄': 0, '글자': 0, '그림': n, '토큰': n * 그림_토큰} if n else None
+    f = 자.글_파일(k)
+    if not f.is_file() or (suf in 기타_꼴 and not 기타_새판(자, k, p)):
+        return None
+    t = f.read_text(encoding='utf-8', errors='replace')
+    볼 = 기타_글_읽기(t)[1] if suf in 기타_꼴 else 글_읽기(t)[1]
+    줄 = t.count('\n') + 1
+    return {'줄': 줄, '글자': len(t), '그림': len(볼), '토큰': round(len(t) / 글_토큰 + 줄 * 줄_토큰 + len(볼) * 그림_토큰)}
+
+
+def 만(n: float) -> str:
+    return f'{n / 10000:.1f}만' if n >= 10000 else f'{n:,.0f}'
+
+
+def cmd_계획(a) -> int:
+    """아직 실측을 마치지 않은 호증의 읽을 양을 어림하고, 한 창에 상한만큼씩 차례대로 나눈다. 실측은 이 PC 의 세션 기록을 모두 합쳐 재므로
+    창을 나누어 읽어도 된다. 한 호증이 상한을 넘으면 그 호증만 한 창에 두고 면 순서대로 읽다가 문맥이 차면 새 창에서 이어 읽는다."""
+    자, 목록, _ = 대상(a)
+    if not 목록:
+        print('읽을 호증(자료)이 없습니다:', a.case)
+        return 2
+    상한 = a.창 or 창_기본
+    남은, 없음, 다 = [], [], 0
+    for k in sorted(목록, key=호증_정렬):
+        p = 목록[k]
+        if not 잴_수_있나(p):
+            continue
+        f = 자.기록_파일(k)
+        if f.is_file() and not 실측_문제(자, k, p, f.read_text(encoding='utf-8')):
+            다 += 1
+            continue
+        양 = 읽을_양(자, k, p)
+        if 양 is None:
+            없음.append(k)
+            continue
+        남은.append((k, 양))
+    if 없음:
+        print('먼저 make(면별 글이 없거나 옛 판): ' + ', '.join(자.제목(k) for k in 없음))
+    if not 남은:
+        print(f'실측을 마치지 않은 호증이 없습니다(실측을 마친 것 {다}건).')
+        return 0
+    창들, 지금, 합 = [], [], 0
+    for k, 양 in 남은:
+        if 지금 and 합 + 양['토큰'] > 상한:
+            창들.append(지금)
+            지금, 합 = [], 0
+        지금.append((k, 양))
+        합 += 양['토큰']
+    창들.append(지금)
+    전체 = sum(양['토큰'] for _, 양 in 남은)
+    print(f"실측을 마치지 않은 호증 {len(남은)}건(마친 것 {다}건), 읽을 양 어림 {만(전체)} 토큰"
+          f"(글 {만(sum(양['글자'] / 글_토큰 + 양['줄'] * 줄_토큰 for _, 양 in 남은))}, 그림 {sum(양['그림'] for _, 양 in 남은):,}장) "
+          f"→ 창 {len(창들)}개(한 창 {만(상한)} 토큰 안팎)")
+    for i, 창 in enumerate(창들, 1):
+        합 = sum(양['토큰'] for _, 양 in 창)
+        말 = f"{i}창: " + ', '.join(자.제목(k) for k, _ in 창) + \
+            f" (줄 {sum(양['줄'] for _, 양 in 창):,}, 그림 {sum(양['그림'] for _, 양 in 창):,}장, 약 {만(합)} 토큰)"
+        if len(창) == 1 and 합 > 상한:
+            말 += ' — 한 창을 넘는다. 면 순서대로 읽어 기록을 채우다가 문맥이 차면 새 창에서 이어 읽는다'
+        print(말)
+    print('창마다 그 창의 호증을 끝까지 읽고 기록을 채운 뒤 `실측` 을 돌리고, 다음 창은 새로 연다. 실측은 이 PC 의 세션 기록을 모두 합쳐 잰다.')
+    return 0
+
+
 # ---------------------------------------------------------------- 명령
 def 대상(a) -> tuple:
     사건 = Path(a.case)
@@ -1247,7 +1327,7 @@ def cmd_make(a) -> int:
     for s in 알림:
         print('  ' + s)
     print('다음: 면별 글(' + str(자.글) + ')을 면마다 끝까지 읽고, 그림으로 볼 면과 그림 호증은 `그림 --호증 {호증}` 이 그린 그림을 한 장씩 열어 '
-          '읽은 뒤 면마다 끝의 확인표를 그 면 줄에 옮겨 기록을 채우고 `실측`, `check` 를 돌린다.')
+          '읽은 뒤 면마다 끝의 확인표를 그 면 줄에 옮겨 기록을 채우고 `실측`, `check` 를 돌린다. 호증이 많으면 `계획` 이 나눈 대로 창을 나누어 읽는다.')
     return 0
 
 
@@ -1426,7 +1506,7 @@ def cmd_check(a) -> int:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description='호증(자료)을 모든 면 읽었는지 기록하고 확인한다')
     sub = ap.add_subparsers(dest='cmd', required=True)
-    for name in ('make', 'check', '그림', '실측'):
+    for name in ('make', 'check', '그림', '실측', '계획'):
         s = sub.add_parser(name)
         s.add_argument('case')
         s.add_argument('--자료', nargs='+', help='호증 번호 없는 자료 폴더(검토의견의 첨부 등)')
@@ -1443,8 +1523,10 @@ def main(argv=None) -> int:
         if name == '실측':
             s.add_argument('--보기', action='store_true', help='재기만 하고 기록에 적지 않는다')
             s.add_argument('--기록폴더', help='세션 기록 폴더(시험용)')
+        if name == '계획':
+            s.add_argument('--창', type=int, help=f'한 창에서 읽을 양의 상한(토큰, 기본 {창_기본:,})')
     a = ap.parse_args(argv)
-    return {'make': cmd_make, 'check': cmd_check, '그림': cmd_그림, '실측': cmd_실측}[a.cmd](a)
+    return {'make': cmd_make, 'check': cmd_check, '그림': cmd_그림, '실측': cmd_실측, '계획': cmd_계획}[a.cmd](a)
 
 
 if __name__ == '__main__':
