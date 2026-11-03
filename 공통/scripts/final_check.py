@@ -24,8 +24,10 @@
   증거 파악      evidence_read.py check — 모든 호증의 전 면 읽기 기록이 찼고 파일이 그 뒤 바뀌지 않았고, 확인표와 세션 기록으로 잰 실측이 있다
   빠진 문구      evidence_words.py --확인 — 쟁점 낱말 대조표가 있고, 서면이 인용하지 않은 면마다 '판단'이 있다
   증거 나누기    우리증거/ 에 상대방 서면·서증·법원 문서가 섞여 있지 않다(evidence_sort.py --확인. 섞여 있으면 아래 '상대 서면'이 상대방 서면을 찾지 못한다)
-  상대 서면      상대증거/ 에 상대방 서면이 있으면 작업/상대주장_맞대기.md 가 있고 판정 칸이 다 찼고 초안보다 새것이다
-  의뢰인 주장    작업/의뢰인주장_대조.md 가 있으면 '반영' 칸이 다 찼다
+  상대 서면      상대증거/ 에 상대방 서면이 있으면 작업/상대주장_맞대기.md 가 있고 판정 칸이 다 찼고 초안보다 새것이다. 초안이 더 새것이어도
+                 표 머리에 적은 '초안 본문:' 해시(`--본문해시`)가 지금 본문과 같으면 하단만 고친 것이다
+  의뢰인 주장    작업/의뢰인주장_대조.md 가 있으면 '반영' 칸이 다 찼고, 인정 표의 '본문 문장' 칸에 따옴표로 옮긴 문장이 지금 초안 본문에
+                 그대로 있다(고친 판에서 7-0단계를 다시 했는가)
   DOCX           9-2단계(`--대상 docx`)와 밤 점검에서, 병합한 서면 docx 가 서면초안.md 보다 낡지 않았다(8-1단계는 병합 전이라 보지 않는다).
                  초안이 더 새것이어도 본문(문단·제목·표·각주, 지운 문단까지)이 병합본과 같으면 하단 메모만 고친 것이다
   서증 압축      출력/제출/ 에 서증 압축파일이 있으면 evidence_zip.py --확인
@@ -46,6 +48,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import html
 import json
 import os
@@ -168,6 +171,30 @@ def 빈_판정(path: Path, 칸말: tuple) -> tuple:
             전체 += 1
             빈 += not r[idx].strip()
     return 빈, 전체
+
+
+def 본문_해시(초안: Path) -> str:
+    """초안 본문(서면 MD 는 '---' 위, 공백은 뺀다)의 해시 앞 10자리. 맞대기 표 머리에 '초안 본문: …'으로 적어 두면 그 뒤 하단만 고친 초안을 알아본다.
+    2026. 11. 4. `/하자보완`: 맞대기 검사가 초안의 수정 시각만 보아 하단 메모만 고쳐도 막았다(11. 3. 남은 하자). 표의 '우리 문장'은 줄여 적어
+    글자로 맞댈 수 없으므로 본문 전체를 해시로 맞댄다."""
+    본문 = cite_check.body_and_bottom(str(초안), cite_check.read_target(str(초안)))[0]
+    return hashlib.sha1(cite_check.norm(본문).encode('utf-8')).hexdigest()[:10]
+
+
+def 인정_문장_없음(대조: Path, 산출물들: list) -> tuple:
+    """(의뢰인 인정 표의 '본문 문장' 칸에 따옴표로 옮긴 문장 가운데 지금 산출물 본문(서면 MD 는 '---' 위)에 없는 것, 맞댄 문장 수).
+    2026. 11. 4. `/하자보완`: 10. 31. 에 만든 인정 표가 11. 2.·3. 고친 판의 바뀐 인정 문장(인정 범위가 넓어진 문장 포함)을 담지 않았는데도
+    '반영' 칸이 찼다는 것만 보고 통과하였다(GGM 답변서(2) Rev_2). 따옴표 없이 자리만 적은 줄은 맞댈 글이 없어 넘긴다."""
+    본문 = ''.join(cite_check.norm(cite_check.body_and_bottom(str(p), cite_check.read_target(str(p)))[0]) for p in 산출물들 if p.is_file())
+    없음, 수 = [], 0
+    for head, rows in 표들(대조.read_text(encoding='utf-8')):
+        i = next((k for k, h in enumerate(head) if '본문 문장' in h), None)
+        for r in rows if i is not None else ():
+            for q in re.findall(r'["“]([^"”]{6,})["”]', r[i]):
+                수 += 1
+                if cite_check.in_order(본문, cite_check.pieces(q)):
+                    없음.append(q)
+    return 없음, 수
 
 
 def 본문_줄(table: Path) -> list:
@@ -570,7 +597,12 @@ def 서면(사건: Path, 라운드번호=None, 대상=None, 초안없음_허용=
             if 빈 or not 전체:
                 res.add('상대 서면 맞대기', '막힘', f'판정이 빈 줄 {빈}/{전체}')
             elif 맞대기.stat().st_mtime + 1 < 초안.stat().st_mtime:
-                res.add('상대 서면 맞대기', '막힘', '초안을 고친 뒤 맞대기 표를 다시 보지 않았다(고친 목을 다시 맞대고 표를 고친다)')
+                적은 = re.search(r'초안 본문:\s*`?([0-9a-f]{10})', 맞대기.read_text(encoding='utf-8'))
+                if 적은 and 적은.group(1) == 본문_해시(초안):
+                    res.add('상대 서면 맞대기', '통과', f'{전체}줄 판정(맞댄 뒤 초안은 하단만 고침)')
+                else:
+                    res.add('상대 서면 맞대기', '막힘', '초안을 고친 뒤 맞대기 표를 다시 보지 않았다(고친 목을 다시 맞대고 표를 고친다'
+                            + (". 표 머리의 '초안 본문' 해시가 지금 본문과 다르다" if 적은 else '') + ')')
             else:
                 res.add('상대 서면 맞대기', '통과', f'{전체}줄 판정')
     else:
@@ -579,7 +611,11 @@ def 서면(사건: Path, 라운드번호=None, 대상=None, 초안없음_허용=
     대조 = 작업 / '의뢰인주장_대조.md'
     if 대조.is_file():
         빈, 전체 = 빈_판정(대조, ('반영',))
-        res.add('의뢰인 주장', '막힘' if 빈 else '통과', f"'반영' 칸이 빈 줄 {빈}/{전체}" if 빈 else f'{전체}줄 반영 표시')
+        없는, 인정 = 인정_문장_없음(대조, [대상] if 대상.suffix.lower() == '.docx' else (초안_목록(라운드) or [초안]))
+        말 = ([f"'반영' 칸이 빈 줄 {빈}/{전체}"] if 빈 else []) + (
+            [f"인정 표의 본문 문장 {len(없는)}/{인정}개가 지금 초안 본문에 없다(초안을 고친 뒤 7-0단계를 다시 하여 바뀐 인정 문장을 글자 그대로 옮긴다): "
+             + ' / '.join(f"'{q[:30]}…'" for q in 없는[:5])] if 없는 else [])
+        res.add('의뢰인 주장', '막힘' if 말 else '통과', ' — '.join(말) if 말 else f'{전체}줄 반영 표시' + (f', 인정 문장 {인정}개 초안과 같음' if 인정 else ''))
     else:
         res.add('의뢰인 주장', '해당 없음', '의뢰인주장_대조.md 없음')
 
@@ -760,7 +796,11 @@ def main(argv=None) -> int:
     ap.add_argument('--대상', help='맞댈 산출물(담당자 저장본 위의 수정안이면 그 docx)')
     ap.add_argument('--최근', type=float, help='이 시간(시) 안에 손댄 사건마다 돌린다')
     ap.add_argument('--out', help='보고를 이 md 파일에도 쓴다')
+    ap.add_argument('--본문해시', metavar='초안', help="초안 본문의 해시를 낸다(맞대기 표 머리에 '초안 본문: …'으로 적는다)")
     a = ap.parse_args(argv)
+    if a.본문해시:
+        print(f'초안 본문: {본문_해시(Path(a.본문해시))}')
+        return 0
     if a.최근:
         사건들 = 최근_사건(a.최근)
     elif a.case:

@@ -175,6 +175,45 @@ class BriefGateTest(unittest.TestCase):
         self.assertEqual(status(res, '증거 인용'), '막힘')
         self.assertEqual(status(res, '의뢰인 주장'), '막힘')
 
+    def test_opponent_table_with_body_hash_survives_a_bottom_only_edit(self):
+        """2026. 11. 3. 남은 하자: 맞대기 검사가 초안의 수정 시각만 보아 하단 메모만 고쳐도 막았다. 표 머리의 '초안 본문' 해시가 지금 본문과
+        같으면 지나가고, 본문을 고치면 해시가 달라 다시 막는다. 해시가 없으면 종전대로 수정 시각으로 막는다."""
+        self.complete()
+        맞대기 = self.r / '작업' / '상대주장_맞대기.md'
+        표 = 맞대기.read_text(encoding='utf-8')
+        with redirect_stdout(io.StringIO()) as out:
+            fc.main(['--본문해시', str(self.draft)])
+        맞대기.write_text(out.getvalue().strip() + '\n\n' + 표, encoding='utf-8')
+        self.draft.write_text(self.draft.read_text(encoding='utf-8') + '\n---\n\n① 1. 확인할 것.\n', encoding='utf-8')
+        os.utime(self.draft, (time.time() + 20, time.time() + 20))
+        self.assertEqual(status(fc.서면(self.case), '상대 서면 맞대기'), '통과')
+        self.draft.write_text(self.draft.read_text(encoding='utf-8').replace('안전 수칙을', '안전 규칙을'), encoding='utf-8')
+        os.utime(self.draft, (time.time() + 30, time.time() + 30))
+        res = fc.서면(self.case)
+        self.assertEqual(status(res, '상대 서면 맞대기'), '막힘')
+        self.assertIn('해시가 지금 본문과 다르다', next(m for n, _, m in res.줄 if n == '상대 서면 맞대기'))
+        맞대기.write_text(표, encoding='utf-8')
+        os.utime(맞대기, (time.time() - 100, time.time() - 100))
+        self.assertEqual(status(fc.서면(self.case), '상대 서면 맞대기'), '막힘')
+
+    def test_client_admission_table_must_match_the_current_draft(self):
+        """2026. 11. 4. `/하자보완`: 10. 31. 에 만든 인정 표가 11. 2.·3. 고친 판의 바뀐 인정 문장을 담지 않았는데도 '반영' 칸이 찼다는 것만 보고
+        통과하였다(GGM 답변서(2) Rev_2). 인정 표의 '본문 문장' 칸에 따옴표로 옮긴 문장은 지금 초안 본문에 그대로 있어야 한다."""
+        self.complete()
+        (self.r / '작업' / '의뢰인주장_대조.md').write_text(
+            '| 문서·위치 | 주장·사실(원문) | 넣을 목차 | 반영 |\n|---|---|---|---|\n| 소명서 1 | 알렸다 | 1항 | 넣음 |\n\n'
+            '## 2. 의뢰인의 인정\n\n| 문서·위치 | 인정한 말 | 본문 문장 |\n|---|---|---|\n'
+            '| 소명서 2 | 알렸다 | 1항 "안전 수칙을 알렸습니다" |\n| 소명서 3 | 회신 뒤 대응 없음 | 2항 회신까지만 적음 |\n', encoding='utf-8')
+        res = fc.서면(self.case)
+        self.assertEqual(status(res, '의뢰인 주장'), '통과', res.줄)
+        self.draft.write_text(self.draft.read_text(encoding='utf-8').replace('안전 수칙을 알렸습니다', '안전 수칙과 그 뒤의 경과를 알렸습니다'),
+                              encoding='utf-8')
+        res = fc.서면(self.case)
+        self.assertEqual(status(res, '의뢰인 주장'), '막힘')
+        self.assertIn("'안전 수칙을 알렸습니다…'", next(m for n, _, m in res.줄 if n == '의뢰인 주장'))
+        self.draft.write_text(self.draft.read_text(encoding='utf-8') + '\n---\n\n① 1. 안전 수칙을 알렸습니다.\n', encoding='utf-8')
+        self.assertEqual(status(fc.서면(self.case), '의뢰인 주장'), '막힘')        # 하단 목록에만 남은 문장은 본문의 인정 문장이 아니다
+
     def test_stale_docx_blocks_after_merge_but_not_before(self):
         self.complete()
         frame = self.r / '출력' / '서면_프레임.docx'

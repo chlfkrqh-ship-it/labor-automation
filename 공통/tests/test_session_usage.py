@@ -1,9 +1,11 @@
 """세션 기록의 모델·노력 수준과 사용량(공통/scripts/session_usage.py)을 확인한다.
 
 한 API 응답이 기록에 여러 줄로 남아도 한 번만 세는지, 다음 요청이 넣은 글을 앞 응답이 부른 도구의 갈래로 나누는지,
-쉬었다 이어 캐시를 다시 쓴 몫과 대화 압축을 따로 세는지, `--이세션` 이 Opus 5.5·최대가 아니면 1 을 돌려주는지 본다.
+쉬었다 이어 캐시를 다시 쓴 몫과 대화 압축을 따로 세는지, `--이세션` 이 Opus 5.5·최대가 아니면 1 을 돌려주는지,
+`--시간` 이 범위 안의 줄만 세는지 본다.
 2026. 11. 3. 담당 노무사 "하자 고칠 땐 오푸스 5.5 최대 노력으로 가야 하고", "사용량 측면에서는 어떤 결과가 있었노".
 """
+import datetime as dt
 import importlib.util
 import io
 import json
@@ -127,6 +129,47 @@ class UsageTest(unittest.TestCase):
         self.assertIn('세션 1개', 글)
         self.assertIn('지금 세션', 글)
         self.assertIn('사용량을 센 세션', 글)
+
+    def test_time_range_counts_only_lines_in_range(self):
+        """2026. 11. 4. `/하자보완`: 앱이 지난 세션 기록 끝에 시각 없는 줄(mode·cost-state)을 덧붙여 파일 시각이 바뀌자, 10. 28.·10. 31. 에 끝난
+        세션 둘이 21시간 범위에 통째로 들어왔다. 범위 앞에서 이어진 세션은 범위 안의 응답만 세고, 앞 응답은 갈래를 가르는 데만 쓴다."""
+        지금 = dt.datetime.now(dt.timezone.utc)
+        오래, 요즘 = 지금 - dt.timedelta(hours=48), 지금 - dt.timedelta(hours=1)
+
+        def 때(줄들, t):
+            for r in 줄들:
+                r['timestamp'] = t.strftime('%Y-%m-%dT%H:%M:%S.000Z')
+            return 줄들
+        덧붙임 = [{'type': 'mode', 'mode': 'normal'}, {'type': 'cost-state', 'totalCostUSD': 0}]
+        self.put('지난', [*때(말('지난 일'), 오래), *때(응답(1, 10, 0, 1, [('Agent', {'prompt': '찾기'})]), 오래), *덧붙임])
+        f = self.put('이음', [*때(말('서면 써 줘'), 오래), *때(응답(1, 1_000_000, 0, 0, [('Read', {'file_path': '증거/갑 제1호증.pdf'})]), 오래),
+                             *때(도구결과(그림=2), 오래), *때(응답(2, 500, 1_000_000, 10), 요즘),
+                             *때(말('고쳐 줘'), 요즘), *때(응답(3, 300, 1_000_500, 20), 요즘)])
+        sub = self.d / '이음' / 'subagents'
+        sub.mkdir(parents=True)
+        (sub / 'a.jsonl').write_text('\n'.join(json.dumps(r, ensure_ascii=False) for r in 때(응답(1, 10, 0, 1), 오래)) + '\n', encoding='utf-8')
+        buf = io.StringIO()
+        with redirect_stdout(buf), mock.patch.dict(os.environ, {'CLAUDE_CODE_SESSION_ID': 'other'}):
+            su.main(['--시간', '24', '--폴더', str(self.d)])
+        글 = buf.getvalue()
+        self.assertIn('세션 1개', 글)
+        self.assertIn('지난(범위 안 응답 없음)', 글)
+        self.assertIn('범위 앞 응답 1회는 세지 않음', 글)
+        self.assertIn('응답 2회 · 대화 압축 0회 · 그림 0장 · 하위 작업 0개', 글)
+        self.assertIn('첫 지시: 고쳐 줘', 글)
+        c = su.셈(su.읽기(f, (요즘 - dt.timedelta(minutes=30)).timestamp())['응답'])
+        self.assertEqual({k: v[0] for k, v in c['갈래'].items() if v[0]}, {'호증·자료 읽기': 501, '담당자 말·첨부': 301})      # 범위 앞 응답이 부른 도구로 가른다
+        self.assertEqual(su.셈(su.읽기(f)['응답'])['합']['응답'], 3)      # 범위를 주지 않으면 종전대로 세션 전체를 센다
+
+    def test_mail_and_teams_connector_tools_are_their_own_branch(self):
+        """2026. 11. 4. `/하자보완`: 메일·팀즈 연결의 도구 이름이 커넥터 id 로 시작해 메일반영 세션의 호출 40회가 '그 밖'으로 잡혔다."""
+        for n, s in (('mcp__e78f8043-6cee-480b-9ebb-3d7500a1ebeb__read_resource', '{"uri": "teams:///chats/1/messages"}'),
+                     ('mcp__e78f8043-6cee-480b-9ebb-3d7500a1ebeb__outlook_email_search', '{}'),
+                     ('mcp__claude_ai_Microsoft_365__teams_list_chats', '{}'),
+                     ('PowerShell', '{"command": "python -B 공통/scripts/mail_attach.py 메일"}')):
+            self.assertEqual(su.갈래([(n, s)]), '메일·팀즈', n)
+        for n in ('mcp__ccd_session_mgmt__list_sessions', 'mcp__ccd_session_mgmt__get_session', 'mcp__scheduled-tasks__list_task_runs'):
+            self.assertEqual(su.갈래([(n, '{}')]), '그 밖', n)
 
     def test_this_session_must_be_opus_5_5_at_max_effort(self):
         self.put('s1', [*말('하자보완'), *응답(1, 10, 0, 1)])

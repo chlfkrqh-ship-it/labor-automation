@@ -149,6 +149,27 @@ class CiteCheckTest(unittest.TestCase):
         self.assertEqual(cite_check.body_and_bottom("a.docx", "본문\n---\n하단"), ("본문\n---\n하단", ""))
         self.assertEqual(cite_check.body_and_bottom("a.md", "---\n머리\n본문\n---\n하단"), ("---\n머리\n본문", "하단"))
 
+    def test_bottom_list_may_name_a_dropped_citation(self):
+        """2026. 11. 4. `/하자보완`: 하단 ① 메모가 '이번 판에서 … 뺐습니다'라고 적으며 뺀 판결 번호를 들자 '본문 인용 줄을 두라'고 막았다.
+        뺀 줄도 원문과 맞대므로 하단 목록의 번호는 받친다. 본문에 남은 뺀 번호와 대조표에 없는 하단 번호는 그대로 막는다."""
+        rows = "| 뺌 | 대법원 2021. 1. 1. 선고 2020두2 판결 | 뺌 | 차카타파하가나다라 | 판결요지 | 기각 | 없음 | 확정 | 보관함 일치 |\n"
+        os.makedirs(self.p("사건/라운드1/작업"), exist_ok=True)
+        table = os.path.join(self.p("사건/라운드1/작업"), "인용대조표.md")
+        with open(table, "w", encoding="utf-8") as f:
+            f.write(HEAD + ROW + rows)
+        body = TARGET.split("\n\n## 보완 메모")[0]
+        bottom = "\n\n---\n\n① 1. 대법원 2020두2 판결은 이번 판에서 뺐습니다.\n"
+        self.write("산출물.md", body + bottom)
+        res = cite_check.check(table, [self.p("산출물.md")])
+        self.assertEqual(res["불일치"], 0, res["내용"])
+        self.write("산출물.md", "대법원 2021. 1. 1. 선고 2020두2 판결도 남았다. " + body + bottom)
+        res = cite_check.check(table, [self.p("산출물.md")])
+        self.assertIn("뺀 인용의 2020두2 가 산출물에 남아 있다", "\n".join(res["내용"]))
+        self.assertEqual(res["불일치"], 1, res["내용"])
+        self.write("산출물.md", body + bottom + "② 1. 대법원 2003다8862 판결은 다시 들지 않았습니다.\n")
+        res = cite_check.check(table, [self.p("산출물.md")])
+        self.assertIn("산출물의 2003다8862 가 대조표에 없다", "\n".join(res["내용"]))
+
     def test_statute_and_dates_are_not_case_numbers(self):
         self.assertEqual(cite_check.cases("근로기준법 제60조제5항, 제76조의3, 2026년10월31일, 11일분, 99두202, 2022가단23572"), {"99두202", "2022가단23572"})
 
