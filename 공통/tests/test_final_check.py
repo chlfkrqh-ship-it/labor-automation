@@ -330,6 +330,22 @@ class BriefGateTest(unittest.TestCase):
         self.assertEqual(status(res, '증거 인용'), '막힘')
         self.assertIn('인용 읽기가 바뀌었다', next(m for n, _, m in res.줄 if n == '증거 인용'))
 
+    def test_evidence_review_is_stale_when_an_exhibit_file_changed(self):
+        """판정한 뒤 호증 파일을 바꾸면 다시 대조할 때 그 인용의 판정이 비워진다. 관문도 막는다(2026. 11. 5. `/하자보완`: 호증·면·문장만 맞대어 통과시켰다)."""
+        self.complete()
+        검토 = self.r / '작업' / '증거인용검토'
+        사6 = self.r / '우리증거' / '사 제6호증 문자.pdf'
+        items = json.loads((검토 / 'review.json').read_text(encoding='utf-8'))
+        for r in items:
+            r['file_hash'] = fc.증거검토().file_hash(사6)
+        (검토 / 'review.json').write_text(json.dumps(items, ensure_ascii=False), encoding='utf-8')
+        later(검토 / 'review.json')
+        self.assertEqual(status(fc.서면(self.case), '증거 인용'), '통과')
+        make_pdf(사6, [글 + '1면', 글 + '2면', 글 + '작업 중 시험 기기 사용 금지', 글 + '4면'])
+        res = fc.서면(self.case)
+        self.assertEqual(status(res, '증거 인용'), '막힘')
+        self.assertIn('대조한 뒤 호증 파일이 바뀌었다(사6)', next(m for n, s, m in res.줄 if n == '증거 인용'))
+
     def test_grouped_exhibit_citation_needs_evidence_review(self):
         """'사 제6 내지 7호증'처럼 묶어 적은 인용만 있는 서면도 증거 인용 대조를 거친다(2026. 11. 3. '제N호증' 꼴만 인용으로 보았다)."""
         self.complete()
@@ -828,6 +844,46 @@ class NightReportTest(unittest.TestCase):
             self.assertIn('## 검사별 모음', 글자)
             self.assertIn('## 가사건', 글자)
             self.assertIn('위반 2건', 글자)
+
+    def test_night_checks_each_round_changed_in_range(self):
+        """새 라운드 폴더가 생긴 날 앞 라운드에서 고친 판도 본다(2026. 11. 5. `/하자보완`: GGM 라운드2 의 Rev_3 를 라운드3(초안 없음)만 보고 넘겼다).
+        사건 전체를 보는 검사는 한 번만 센다."""
+        with tempfile.TemporaryDirectory() as d:
+            사건 = Path(d) / '4_서면작성' / '사건' / '가사건'
+            for n in (1, 2, 3):
+                (사건 / f'라운드{n}' / '출력').mkdir(parents=True)
+                (사건 / f'라운드{n}' / '출력' / '서면초안.md').write_text('본문', encoding='utf-8')
+            옛 = time.time() - 86400 * 3
+            os.utime(사건 / '라운드1' / '출력' / '서면초안.md', (옛, 옛))
+            불린 = []
+
+            def 가짜(c, 라운드, 대상, 밤):
+                불린.append(라운드)
+                res = fc.결과()
+                res.add('증거 파악(전 면 읽기)', '막힘', '호증 2건이 덜 되었다')
+                res.add('문체', '막힘', f'라운드{라운드} 위반')
+                return [('', res)]
+            out = Path(d) / '관문.md'
+            화면 = io.StringIO()
+            with mock.patch.object(fc, '최근_사건', return_value=[사건]), mock.patch.object(fc, '돌리기', side_effect=가짜), redirect_stdout(화면):
+                self.assertEqual(fc.main(['--최근', '24', '--out', str(out)]), 1)
+            self.assertEqual(불린, [2, 3])                                        # 범위 밖인 라운드1 은 보지 않는다
+            self.assertIn('| 증거 파악(전 면 읽기) | 1 |', 화면.getvalue())
+            self.assertIn('| 문체 | 2 |', 화면.getvalue())
+            글자 = out.read_text(encoding='utf-8')
+            self.assertIn('## 가사건 · 라운드2 (서면) — 막힘 2', 글자)
+            self.assertIn('## 가사건 · 라운드3 (서면) — 막힘 1', 글자)
+            self.assertIn('앞 라운드의 줄과 같다', 글자)
+            self.assertIn('사건 1건, 막힘 3건', 글자)
+            for n in (2, 3):                                                     # 라운드 밖(증거관리/)만 바뀌었으면 마지막 라운드를 본다
+                os.utime(사건 / f'라운드{n}' / '출력' / '서면초안.md', (옛, 옛))
+            (사건 / '증거관리').mkdir()
+            (사건 / '증거관리' / '우리호증목록.md').write_text('목록', encoding='utf-8')
+            불린.clear()
+            with mock.patch.object(fc, '최근_사건', return_value=[사건]), mock.patch.object(fc, '돌리기', side_effect=가짜), \
+                    redirect_stdout(io.StringIO()):
+                fc.main(['--최근', '24'])
+            self.assertEqual(불린, [None])
 
 
 if __name__ == '__main__':

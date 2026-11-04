@@ -192,6 +192,51 @@ class TableTest(unittest.TestCase):
         self.assertEqual(run(self.case, '--확인')[0], 0)          # 지금 초안이 그 면을 인용하면 판단 없이도 된다
         self.assertEqual(run(self.case / 'x', '--확인')[0], 2)
 
+    def test_check_blocks_exhibits_added_or_changed_after_the_table(self):
+        """표를 만든 뒤 들어오거나 파일이 바뀐 호증은 낱말로 찾지 않았다(2026. 11. 5. `/하자보완`: 표의 줄만 보아 통과시켰다)."""
+        r = self.case / '라운드1'
+        run(self.case, '--낱말', '시험', '--no-ocr')
+        self.set_judgement('사 제6호증', 3, '본문 2항에 씀')
+        self.assertEqual(run(self.case, '--확인')[0], 0)
+        make_pdf(r / '우리증거' / '사 제8호증 추가.pdf', [글 + '시험 기기 반입 금지'])
+        code, out = run(self.case, '--확인')
+        self.assertEqual(code, 1)
+        self.assertIn('표를 만든 뒤 들어온 호증 1건: 사 제8호증', out)
+        run(self.case, '--낱말', '시험', '--no-ocr')
+        self.assertTrue(any('| 사 제6호증 | 3 |' in l and '본문 2항에 씀' in l for l in self.rows()))      # 판단은 이어받는다
+        self.set_judgement('사 제8호증', 1, '본문 3항에 씀')
+        self.assertEqual(run(self.case, '--확인')[0], 0)
+        make_pdf(r / '우리증거' / '사 제7호증 공지.pdf', [글 + '공지 1면 바뀐 판'])                       # 같은 번호에 다른 파일
+        code, out = run(self.case, '--확인')
+        self.assertEqual(code, 1)
+        self.assertIn('표를 만든 뒤 파일이 바뀐 호증 1건: 사 제7호증', out)
+        run(self.case, '--낱말', '시험', '--no-ocr')
+        self.assertEqual(run(self.case, '--확인')[0], 0)
+
+    def test_rerun_of_some_exhibits_keeps_the_others_in_the_list(self):
+        상대 = self.case / '라운드1' / '상대증거'
+        상대.mkdir()
+        make_pdf(상대 / '노 제1호증 주장.pdf', [글 + '노 1면'])
+        run(self.case, '--낱말', '시험', '--no-ocr')
+        self.set_judgement('사 제6호증', 3, '본문 2항에 씀')
+        make_pdf(상대 / '노 제1호증 주장.pdf', [글 + '노 1면 바뀐 판'])
+        run(self.case, '--낱말', '시험', '--호증', '사', '--no-ocr')                  # 사 호증만 다시 찾았다
+        code, out = run(self.case, '--확인')
+        self.assertEqual(code, 1)
+        self.assertIn('파일이 바뀐 호증 1건: 노 제1호증', out)                          # 노 호증은 앞 표의 해시가 남아 바뀐 것을 안다
+        run(self.case, '--낱말', '시험', '--호증', '노', '--no-ocr')
+        self.assertEqual(run(self.case, '--확인')[0], 0)
+
+    def test_old_table_without_the_list_compares_only_counts(self):
+        run(self.case, '--낱말', '시험', '--no-ocr')
+        self.set_judgement('사 제6호증', 3, '본문 2항에 씀')
+        self.table.write_text(self.table.read_text(encoding='utf-8').split(ew.찾은_머리)[0], encoding='utf-8')   # 11. 5. 앞에 만든 표
+        self.assertEqual(run(self.case, '--확인')[0], 0)
+        make_pdf(self.case / '라운드1' / '우리증거' / '사 제8호증 추가.pdf', [글])
+        code, out = run(self.case, '--확인')
+        self.assertEqual(code, 1)
+        self.assertIn('표를 만든 뒤 호증이 늘었다(표 2건, 지금 3건)', out)
+
     def test_text_only_does_not_touch_the_table(self):
         code, out = run(self.case, '--글', '사6', '--no-ocr')
         self.assertEqual(code, 0)

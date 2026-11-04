@@ -217,6 +217,21 @@ class SystemTests(unittest.TestCase):
         self.put('.claude/commands/없는명령.md', '---\ndescription: 절차\n---\n절차')
         self.assertEqual(self.system.broken_refs(), [])
 
+    def test_check_finds_scripts_no_guide_or_code_names(self):
+        """만들어 두고 지침에 쓰는 법을 적지 않은 도구는 세션이 모른다(2026. 11. 5. `/하자보완`: 11. 4. 만든 메일 초안 도구가 지침에 없었다)."""
+        self.put('공통/scripts/새도구.py', '"""새 도구"""')
+        self.put('공통/scripts/도우미.py', '')
+        self.put('공통/scripts/부르는것.py', 'import 도우미\n')
+        self.put('공통/tests/test_새도구.py', '새도구.py 를 시험한다')                       # 시험이 부르는 것은 쓰는 법이 아니다
+        self.put('6_손해배상계산/scripts/추출.py', '')
+        self.put('6_손해배상계산/표추출.bat', 'python scripts\\추출.py'.encode('cp949'))      # CP949 배치 파일이 부르는 것
+        self.put('6_손해배상계산/사건/가/작업/메모.md', '`공통/scripts/새도구.py`')            # 사건 자료의 글은 지침이 아니다
+        self.put('.claude/commands/서면.md', '`python -B 공통/scripts/부르는것.py`')
+        self.assertEqual(self.system.unreferenced_scripts(), ['공통/scripts/새도구.py'])
+        self.assertEqual(self.system.check()['unreferenced'], ['공통/scripts/새도구.py'])      # check 를 막는다
+        self.put('공통/운영.md', '메일 초안은 `python -B 공통/scripts/새도구.py` 로 만든다')
+        self.assertEqual(self.system.unreferenced_scripts(), [])
+
     def test_budget_reports_without_capping_guides(self):
         self.put('CLAUDE.md', '가' * 10)
         self.put('공통/운영.md', '나' * 10)

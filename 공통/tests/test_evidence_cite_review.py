@@ -292,6 +292,85 @@ class CarryJudgementsTest(unittest.TestCase):
                 self.assertEqual(json.loads((out / 'notes_옮기지못함.json').read_text(encoding='utf-8')), 판정)
 
 
+class OcrCacheTest(unittest.TestCase):
+    """문자인식 캐시는 호증키 폴더에 쌓인다. 같은 번호에 다른 파일을 넣으면 앞 파일의 글과 면 그림을 쓰지 않는다(2026. 11. 5. `/하자보완`:
+    읽기 도구만 표지를 보아, 대조·낱말 도구가 바뀐 호증에 앞 파일의 문자인식을 쓸 수 있었다)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.rnd = Path(self.tmp.name) / '사건B' / '라운드1'
+        for d in ('출력', '우리증거'):
+            (self.rnd / d).mkdir(parents=True)
+        self.pdf = self.rnd / '우리증거' / '갑 제1호증 스캔.pdf'
+        d = pymupdf.open()
+        d.new_page()                                                   # 글자층이 없는 스캔 면
+        d.save(self.pdf)
+        self.out = self.rnd / '작업' / '증거인용검토'
+        self.cache = self.out / 'ocr' / '갑1'
+        self.cache.mkdir(parents=True)
+        (self.cache / 'pages.json').write_text(json.dumps({'1': {'png': 'p001.png', 'src': '문자인식', 'units': [['앞 파일의 글', [0, 0, 10, 10]]]}},
+                                                          ensure_ascii=False), encoding='utf-8')
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def 글(self, fresh=False):
+        ex = ecr.Exhibit('갑1', self.pdf, self.out, use_ocr=False, fresh=fresh)
+        try:
+            ex.prepare([1])
+            return ' '.join(t for t, _ in ex.pages[1]['units'])
+        finally:
+            ex.close()
+
+    def test_cache_marked_for_another_file_is_not_read(self):
+        self.assertIn('앞 파일의 글', self.글())                              # 표지 없는 옛 캐시는 쓴다
+        self.assertNotIn('앞 파일의 글', self.글(fresh=True))                 # 파일이 바뀐 것을 아는 자리에서는 쓰지 않는다
+        (self.cache / ecr.MARK).write_text('deadbeef0000', encoding='utf-8')
+        self.assertNotIn('앞 파일의 글', self.글())                           # 다른 파일의 표지
+        (self.cache / ecr.MARK).write_text(ecr.file_hash(self.pdf), encoding='utf-8')
+        self.assertIn('앞 파일의 글', self.글(fresh=True))                    # 지금 파일의 표지
+
+    def test_new_ocr_is_marked_and_not_merged_with_another_files_pages(self):
+        (self.cache / ecr.MARK).write_text('deadbeef0000', encoding='utf-8')
+        pages = json.loads((self.cache / 'pages.json').read_text(encoding='utf-8'))
+        pages['2'] = pages['1']                                              # 앞 파일의 다른 면
+        (self.cache / 'pages.json').write_text(json.dumps(pages, ensure_ascii=False), encoding='utf-8')
+
+        def 가짜_인식(folder):
+            return [{'file': p.name, 'lines': [{'t': '지금 파일의 글입니다 안전 수칙', 'x': 0, 'y': 0, 'w': 10, 'h': 10}]}
+                    for p in sorted(Path(folder).glob('*.png'))]
+        원래 = ecr.run_windows_ocr
+        ecr.run_windows_ocr = 가짜_인식
+        try:
+            ex = ecr.Exhibit('갑1', self.pdf, self.out, use_ocr=True)
+            ex.prepare([1])
+            ex.close()
+        finally:
+            ecr.run_windows_ocr = 원래
+        self.assertIn('지금 파일의 글', ' '.join(t for t, _ in ex.pages[1]['units']))
+        self.assertEqual((self.cache / ecr.MARK).read_text(encoding='utf-8'), ecr.file_hash(self.pdf))
+        self.assertEqual(list(json.loads((self.cache / 'pages.json').read_text(encoding='utf-8'))), ['1'])   # 앞 파일의 2면은 버렸다
+
+    def test_scan_does_not_reuse_unmarked_ocr_after_the_exhibit_changed(self):
+        md = self.rnd / '출력' / '서면초안.md'
+        md.write_text('- 다 음 -\n\n가. 첫째 사실입니다(갑 제1호증 1면).\n', encoding='utf-8')
+        (self.cache / 'pages.json').unlink()
+        ecr.main(['scan', str(md), '--no-ocr'])                              # 앞 대조가 파일 해시를 적는다
+        (self.cache / 'pages.json').write_text(json.dumps({'1': {'png': 'p001.png', 'src': '문자인식', 'units': [['앞 파일의 글', [0, 0, 10, 10]]]}},
+                                                          ensure_ascii=False), encoding='utf-8')
+        report = json.loads((self.out / 'review.json').read_text(encoding='utf-8'))
+        self.assertEqual(ecr.file_changes(md, report), [])
+        d = pymupdf.open()
+        d.new_page()
+        d.new_page()
+        d.save(self.pdf)                                                     # 같은 번호에 다른 파일
+        self.assertEqual(ecr.file_changes(md, report), ['갑1'])              # 관문이 판정 뒤 바뀐 호증을 안다
+        ecr.main(['scan', str(md), '--no-ocr'])
+        report = json.loads((self.out / 'review.json').read_text(encoding='utf-8'))
+        self.assertEqual(report[0]['windows'], [])                           # 앞 파일의 글로 대목을 찾지 않는다
+        self.assertEqual(ecr.file_changes(md, report), [])
+
+
 class PrintedPageTest(unittest.TestCase):
     def test_report_page_number_printed_on_page(self):
         """'220면'이 보고서에 인쇄된 쪽 번호이면 그 쪽이 인쇄된 PDF 면에서 찾는다(감사보고서 '- 220 -' = PDF 226면)."""

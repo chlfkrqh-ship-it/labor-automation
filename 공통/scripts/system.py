@@ -264,8 +264,42 @@ class System:
                     out.append(f'{self.rel(p)} → {ref}')
         return sorted(set(out))
 
+    def unreferenced_scripts(self):
+        """지침(사건·캐시·백업 밖의 모든 md 와 설정)이 파일 이름을 들지 않고 다른 코드(시험 제외)도 부르지 않는 `scripts/` 폴더의 스크립트.
+        세션이 쓰는 법을 모르는 도구다. 2026. 11. 3. 지침 없는 배치 파일이, 2026. 11. 5. 담당자가 시켜 11. 4. 만든 메일 초안 도구가
+        지침 어디에도 없었다(`/하자보완`). 배치 파일은 CP949 인 것도 있으므로 UTF-8 로 읽히지 않으면 CP949 로 읽는다."""
+        import os
+
+        def 읽기(p):
+            b = p.read_bytes()
+            try:
+                return b.decode('utf-8-sig')
+            except UnicodeDecodeError:
+                return b.decode('cp949', errors='replace')
+
+        제외 = SKIP | {'사건', '캐시', '백업', '__pycache__', 'tests', 'models', 'data'}
+        글, 코드 = [], {}
+        for folder, dirs, names in os.walk(self.root):
+            dirs[:] = [d for d in dirs if d not in 제외 and (not d.startswith('.') or d == '.claude')]
+            for n in names:
+                p = Path(folder) / n
+                if n.endswith('.md') or n == 'settings.json':
+                    글.append(읽기(p))
+                elif n.endswith(('.py', '.ps1', '.bat')):
+                    코드[p] = 읽기(p)
+        지침 = '\n'.join(글)
+        out = []
+        for p in sorted(코드):
+            if p.parent.name != 'scripts' or p.name == '__init__.py':
+                continue
+            부름 = re.compile(rf'(?<![\w가-힣]){re.escape(p.name)}(?![\w가-힣])|(?:^|\n)\s*(?:import|from)\s+{re.escape(p.stem)}\b')
+            if 부름.search(지침) or any(q != p and 부름.search(t) for q, t in 코드.items()):
+                continue
+            out.append(self.rel(p))
+        return out
+
     def check(self):
-        """필수 지침과 명령어가 있고, 지침이 부르는 파일이 있고, 스킬 머리말이 바른지 본다."""
+        """필수 지침과 명령어가 있고, 지침이 부르는 파일이 있고, 지침이 모르는 스크립트가 없고, 스킬 머리말이 바른지 본다."""
         missing = [f for f in ('CLAUDE.md', '공통/운영.md', '공통/사건상태.md', '공통/브라우저.md', '공통/자체검토.md')
                    if not self.path(f).is_file()]
         commands = {p.stem for p in self.path('.claude/commands').glob('*.md')}
@@ -280,8 +314,9 @@ class System:
                 skill_errors.append(self.rel(p))
             elif re.search(r'^name:\s*(.+)$', match[1], re.M)[1].strip() != p.parent.name:
                 skill_errors.append(self.rel(p))
-        broken = self.broken_refs()
-        return {'missing': missing, 'skill_errors': skill_errors, 'broken_refs': broken, 'ok': not missing and not skill_errors and not broken}
+        broken, unreferenced = self.broken_refs(), self.unreferenced_scripts()
+        return {'missing': missing, 'skill_errors': skill_errors, 'broken_refs': broken, 'unreferenced': unreferenced,
+                'ok': not missing and not skill_errors and not broken and not unreferenced}
 
     def budget(self, only=None, record=False):
         """명령어별 지침 분량과 중복·고아 지침을 보고한다.

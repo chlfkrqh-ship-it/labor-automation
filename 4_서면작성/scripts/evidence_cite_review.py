@@ -335,15 +335,38 @@ def _read_ocr_json(path: Path) -> list:
     return [data] if isinstance(data, dict) else data
 
 
-class Exhibit:
-    """호증 하나의 면별 글. 글자층을 쓰고, 없거나 깨진 면은 문자인식."""
+MARK = '파일해시.txt'          # 문자인식 캐시 폴더의 표지: 그 글과 그림을 만든 호증 파일의 해시(evidence_read.py 와 같은 이름)
 
-    def __init__(self, key, path, cache: Path, ocr_dirs=(), ocr_map=None, use_ocr=True):
+
+def file_hash(path) -> str:
+    """호증 파일의 해시(sha1 앞 12자리). review.json 의 file_hash, 읽기 기록의 해시, 캐시 표지가 모두 이 꼴이다."""
+    h = hashlib.sha1()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            h.update(chunk)
+    return h.hexdigest()[:12]
+
+
+class Exhibit:
+    """호증 하나의 면별 글. 글자층을 쓰고, 없거나 깨진 면은 문자인식.
+    문자인식 캐시는 호증키 폴더에 쌓이므로, 같은 호증 번호에 다른 파일을 넣으면 앞 파일의 글과 면 그림이 남는다. 표지(파일해시.txt)가
+    지금 파일과 다른 폴더는 읽지 않고, fresh 를 주면(파일이 바뀐 것을 아는 자리) 표지가 없는 옛 폴더도 읽지 않는다. 문자인식을 하면
+    표지를 적는다. 2026. 11. 5. `/하자보완`: 읽기 도구만 표지를 보아, 대조·낱말 도구가 바뀐 호증에 앞 파일의 문자인식을 쓸 수 있었다."""
+
+    def __init__(self, key, path, cache: Path, ocr_dirs=(), ocr_map=None, use_ocr=True, fresh=False):
         self.key, self.path = key, path
         self.doc = pymupdf.open(path)
         self.cache = cache / 'ocr' / key
         self.ocr_dirs, self.ocr_map, self.use_ocr = list(ocr_dirs), dict(ocr_map or {}), use_ocr
+        self.hash, self.fresh = file_hash(path), fresh
         self.pages = {}
+
+    def _same_file(self, folder: Path) -> bool:
+        """그 캐시 폴더의 글이 지금 파일에서 나왔다고 볼 수 있나. 표지가 없으면 fresh 가 아닐 때만 그렇게 본다(옛 캐시)."""
+        m = Path(folder) / MARK
+        if m.is_file():
+            return m.read_text(encoding='utf-8').strip() == self.hash
+        return not self.fresh
 
     def __len__(self):
         return len(self.doc)
@@ -394,7 +417,7 @@ class Exhibit:
         cands.append(self.cache)
         for c in cands:
             j = c / 'pages.json' if (c / 'pages.json').is_file() else c / 'ocr.json'
-            if not j.is_file():
+            if not j.is_file() or not self._same_file(c):
                 continue
             if j.name == 'pages.json':
                 for no, e in json.loads(j.read_text(encoding='utf-8')).items():
@@ -407,9 +430,9 @@ class Exhibit:
                 no = int(m[-1]) if m else k2
                 if no in need and no not in got:
                     got[no] = {'src': '문자인식', 'units': _ocr_lines(e), 'png': str(c / e['file'])}
-        for d in self.ocr_dirs:                       # '<호증키>_p01.png' 묶음
+        for d in self.ocr_dirs:                       # '<호증키>_p01.png' 묶음(표지를 둘 수 없는 옛 꼴)
             j = Path(d) / 'ocr.json'
-            if not j.is_file():
+            if not j.is_file() or self.fresh:
                 continue
             for e in _read_ocr_json(j):
                 m = re.match(re.escape(self.key) + r'_p(\d+)\.png$', e.get('file', ''))
@@ -466,9 +489,12 @@ class Exhibit:
                             got[no] = {'src': f'문자인식({r}도 돌림)', 'units': units, 'png': e['file'], 'q': q}
             for no, e in got.items():
                 shutil.copy2(work / e['png'], self.cache / e['png'])
-            old = json.loads((self.cache / 'pages.json').read_text(encoding='utf-8')) if (self.cache / 'pages.json').is_file() else {}
+            # 다른 파일에서 나온 앞 글과는 합치지 않는다
+            old = (json.loads((self.cache / 'pages.json').read_text(encoding='utf-8'))
+                   if (self.cache / 'pages.json').is_file() and self._same_file(self.cache) else {})
             old.update({str(no): {'png': e['png'], 'units': e['units'], 'src': e['src']} for no, e in got.items()})
             (self.cache / 'pages.json').write_text(json.dumps(old, ensure_ascii=False), encoding='utf-8')
+            (self.cache / MARK).write_text(self.hash, encoding='utf-8')
             for no in got:
                 got[no]['png'] = str(self.cache / got[no]['png'])
             return got
@@ -645,6 +671,24 @@ def citation_changes(md: Path, items: list) -> tuple:
     return len(now - old), len(old - now)
 
 
+def file_changes(md: Path, items: list) -> list:
+    """대조해 둔 인용(review.json) 가운데 대조한 뒤 호증 파일이 바뀐 것의 호증키. scan 과 같은 자리에서 파일을 찾아 대조 때 적은
+    해시(file_hash)와 맞댄다. 해시를 적지 않은 옛 대조와 파일을 찾지 못한 인용은 보지 않는다. 다시 대조하면 이 인용들의 판정은 비워진다
+    (판정_옮기기). 2026. 11. 5. `/하자보완`: 관문이 호증·면·문장만 맞대어, 판정한 뒤 호증 파일을 바꾼 판도 통과시켰다."""
+    rnd = round_of(md)
+    exhibits = find_exhibits(rnd.parent, rnd)
+    hashes, out = {}, []
+    for r in items:
+        path = lookup(exhibits, r.get('key')) if r.get('file_hash') else None
+        if not path:
+            continue
+        if path not in hashes:
+            hashes[path] = file_hash(path)
+        if hashes[path] != r['file_hash'] and r.get('key') not in out:
+            out.append(r.get('key'))
+    return out
+
+
 def brief_pdf_of(md: Path):
     out = md.resolve().parent
     # 같은 폴더의 PT·합본은 서면이 아니다(2026. 10. 31. GGM 답변서(2) 대조표 머리에 PT 이름이 찍혔다)
@@ -686,6 +730,11 @@ def cmd_scan(args) -> int:
     brief = Path(args.pdf) if args.pdf else brief_pdf_of(md)
     brief_txt = [canon(p.get_text()) for p in pymupdf.open(brief)] if brief and brief.is_file() else []
     brief_nums = brief_page_numbers(brief) if brief_txt else []
+    try:      # 앞 대조가 적은 호증 파일 해시. 그 뒤 파일이 바뀐 호증은 표지가 없는 옛 문자인식도 쓰지 않는다
+        old_hash = {r['key']: r['file_hash'] for r in json.loads((out / 'review.json').read_text(encoding='utf-8'))
+                    if isinstance(r, dict) and r.get('file_hash')}
+    except (OSError, ValueError, TypeError):
+        old_hash = {}
     opened = {}
     report = []
     for n, c in enumerate(cites, 1):
@@ -712,9 +761,10 @@ def cmd_scan(args) -> int:
         if not path:
             report.append(r)
             continue
-        r['file_hash'] = hashlib.sha1(Path(path).read_bytes()).hexdigest()[:12]
+        r['file_hash'] = file_hash(path)
         if c['key'] not in opened:
-            opened[c['key']] = Exhibit(c['key'], path, out, args.ocr_dir or [], ocr_map, not args.no_ocr)
+            opened[c['key']] = Exhibit(c['key'], path, out, args.ocr_dir or [], ocr_map, not args.no_ocr,
+                                       fresh=c['key'] in old_hash and old_hash[c['key']] != r['file_hash'])
         ex = opened[c['key']]
         r['npages'] = len(ex)
         pages = expand_pages(c['pages'], len(ex))

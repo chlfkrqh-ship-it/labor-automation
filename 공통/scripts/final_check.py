@@ -2,7 +2,7 @@
 
     python -B 공통/scripts/final_check.py "4_서면작성/사건/{사건명}" [--라운드 N] [--대상 "<서면초안.md 또는 담당자 저장본 docx>"]
     python -B 공통/scripts/final_check.py "1_검토의견/사건/{의뢰인}_{검토내용}" [--대상 "<검토의견서 docx 또는 회신초안.md>"]
-    python -B 공통/scripts/final_check.py --최근 24 --out "<보고.md>"   # 24시간 안에 손댄 사건마다. 화면에는 검사별 모음, 파일에 사건별 전문(`/하자보완`)
+    python -B 공통/scripts/final_check.py --최근 24 --out "<보고.md>"   # 24시간 안에 손댄 사건의 고친 라운드마다. 화면에는 검사별 모음, 파일에 사건별 전문(`/하자보완`)
 
 검사마다 '통과'·'막힘'·'해당 없음'을 적고, 막힘이 하나라도 있으면 종료 코드 1 이다. 각 검사는 그 스크립트를 그대로 부른다
 (규칙을 두 벌로 두지 않는다). 이 관문이 보는 것은 검사를 했는지와 판정 칸이 다 찼는지이다. 판정이 맞는지는 작성 세션이
@@ -20,7 +20,8 @@
                  미확정·확인 못한 판결은 7일 안에 다시 본 날짜가 있다(미확정 줄은 '참고'로 따로 보인다)
   판결문 PDF     본문 인용 판결이 있으면 참고자료/인용판결_PDF 가 있고 cite_pdf_check.py 문제 0, '사람 판정' 표가 본문 인용 줄마다
                  판단 부분인지·방향·사안 비교까지 찼고, '주의'(앞 글에 주장·원심·인정사실) 줄은 비고가 있다
-  증거 인용      증거 인용이 있으면 작업/증거인용검토/ (서면초안_{이름}.md 는 증거인용검토_{이름}/) 의 review.json 이 초안의 지금 인용과 같고 notes.json 에 인용마다 판정이 있다
+  증거 인용      증거 인용이 있으면 작업/증거인용검토/ (서면초안_{이름}.md 는 증거인용검토_{이름}/) 의 review.json 이 초안의 지금 인용과 같고, 대조한 뒤
+                 호증 파일이 바뀌지 않았고(review.json 의 파일 해시), notes.json 에 인용마다 판정이 있다
   증거 파악      evidence_read.py check — 모든 호증의 전 면 읽기 기록이 찼고 파일이 그 뒤 바뀌지 않았고, 확인표와 세션 기록으로 잰 실측이 있다
   빠진 문구      evidence_words.py --확인 — 쟁점 낱말 대조표가 있고, 서면이 인용하지 않은 면마다 '판단'이 있다
   증거 나누기    우리증거/ 에 상대방 서면·서증·법원 문서가 섞여 있지 않다(evidence_sort.py --확인. 섞여 있으면 아래 '상대 서면'이 상대방 서면을 찾지 못한다)
@@ -570,9 +571,13 @@ def 서면(사건: Path, 라운드번호=None, 대상=None, 초안없음_허용=
             # 초안이 더 새것이어도 인용이 그대로이면 대조는 낡지 않았다(2026. 11. 3. 하단 메모만 고친 초안을 막았다). 거꾸로 대조가 더 새것이어도
             # 지금 읽은 인용과 다르면 낡은 것이다(같은 날 '3·5면'의 3면을 버리던 인용 읽기를 고쳤다)
             새것, 없어짐 = 증거검토().citation_changes(초안, items)
+            바뀐파일 = [] if 새것 or 없어짐 else 증거검토().file_changes(초안, items)      # 판정한 뒤 호증 파일을 바꾸면 판정은 낡았다
             if 새것 or 없어짐:
                 res.add('증거 인용', '막힘', f'지금 초안의 인용과 대조해 둔 인용이 다르다(새로 생긴 인용 {새것}건, 없어진 인용 {없어짐}건. '
                         '초안을 고쳤거나 인용 읽기가 바뀌었다) — scan 을 다시 돌리면 같은 인용의 판정은 옮겨지고 바뀐 인용만 다시 판정한다')
+            elif 바뀐파일:
+                res.add('증거 인용', '막힘', f'대조한 뒤 호증 파일이 바뀌었다({", ".join(바뀐파일[:10])}{" 외" if len(바뀐파일) > 10 else ""}) — '
+                        'scan 을 다시 돌리면 그 호증 인용의 판정만 비워지고 나머지는 옮겨진다. 바뀐 파일로 다시 판정한다')
             else:
                 notes = json.loads(nj.read_text(encoding='utf-8')) if nj.is_file() else {}
                 빈 = [str(r.get('n')) for r in items if not (notes.get(str(r.get('n'))) or [''])[0]]
@@ -736,23 +741,50 @@ def 사건_종류(사건: Path) -> str:
     return '서면' if any(사건.glob('라운드*')) else '검토의견'
 
 
+def 바뀐_파일_있나(폴더: Path, 끝: float) -> bool:
+    """끝(시각) 뒤에 고친 파일이 있나. 면별 글·문자인식 캐시와 백업은 세지 않는다."""
+    for dp, dn, fn in os.walk(폴더):
+        if any(x in Path(dp).parts for x in ('호증글자', 'ocr', '백업')):
+            continue
+        if any(os.path.getmtime(os.path.join(dp, f)) >= 끝 for f in fn if not f.startswith('~$')):
+            return True
+    return False
+
+
 def 최근_사건(시간: float) -> list:
-    """시간(시) 안에 파일을 고친 사건 폴더. 면별 글·문자인식 캐시는 세지 않는다."""
+    """시간(시) 안에 파일을 고친 사건 폴더."""
     끝 = time.time() - 시간 * 3600
     out = []
     for 폴더 in ('4_서면작성', '1_검토의견', '6_손해배상계산'):
         base = ROOT / 폴더 / '사건'
         if not base.is_dir():
             continue
-        for c in sorted(base.iterdir()):
-            if not c.is_dir() or c.name.startswith('_'):
+        out += [c for c in sorted(base.iterdir()) if c.is_dir() and not c.name.startswith('_') and 바뀐_파일_있나(c, 끝)]
+    return out
+
+
+# 사건 전체를 보는 검사. 밤 점검에서 한 사건의 라운드를 여럿 보면 첫 라운드에서만 센다
+사건_전체_검사 = ('증거 파악(전 면 읽기)',)
+
+
+def 바뀐_라운드들(사건: Path, 끝: float) -> list:
+    """밤 점검(`--최근`)에서 볼 라운드 번호. 그 시간 안에 파일을 고친 라운드마다 보고, 고친 라운드가 없으면(증거관리/ 만 바뀜) 빈 목록이다.
+    마지막 라운드만 보면 새 라운드 폴더가 생긴 날 앞 라운드에서 고쳐 넘긴 판을 보지 않는다(2026. 11. 5. `/하자보완`: 11. 4. 상대방의
+    새 이유서로 GGM 라운드3 이 생긴 뒤 같은 날 고친 라운드2 의 답변서(2) Rev_3·예상 질의답변 Rev_2 를 밤 점검이 라운드3(초안 없음)만 보고 넘겼다)."""
+    라운드들 = sorted((p for p in 사건.glob('라운드*') if p.is_dir()), key=lambda p: int(re.sub(r'\D', '', p.name) or 0))
+    return [int(re.sub(r'\D', '', p.name) or 0) for p in 라운드들 if 바뀐_파일_있나(p, 끝)]
+
+
+def 한_번만(줄: list, 본: set) -> list:
+    """한 사건의 라운드를 여럿 볼 때 사건 전체를 보는 검사는 처음 나온 결과만 세고, 뒤 라운드의 같은 결과는 '해당 없음'으로 둔다."""
+    out = []
+    for 이름, 상태, 말 in 줄:
+        if 이름 in 사건_전체_검사:
+            if (이름, 상태, 말) in 본:
+                out.append((이름, '해당 없음', '앞 라운드의 줄과 같다(사건 전체를 보는 검사)'))
                 continue
-            for dp, dn, fn in os.walk(c):
-                if any(x in Path(dp).parts for x in ('호증글자', 'ocr', '백업')):
-                    continue
-                if any(os.path.getmtime(os.path.join(dp, f)) >= 끝 for f in fn if not f.startswith('~$')):
-                    out.append(c)
-                    break
+            본.add((이름, 상태, 말))
+        out.append((이름, 상태, 말))
     return out
 
 
@@ -810,12 +842,20 @@ def main(argv=None) -> int:
     글들, 막힘, 묶음 = [], 0, []
     끝 = time.time() - a.최근 * 3600 if a.최근 else None
     for c in 사건들:
-        for 표제, res in 돌리기(c, a.라운드, a.대상, bool(a.최근)):
-            막힘 += len(res.막힘)
-            글들.append(보고(c, res, 표제, 끝=끝))
-            묶음.append((c.name + (' · ' + 표제 if 표제 else ''), res))
-            if not a.최근:
-                print(보고(c, res, 표제, 400, 끝))
+        라운드들 = [a.라운드]
+        if a.최근 and a.라운드 is None and 사건_종류(c) == '서면':
+            라운드들 = 바뀐_라운드들(c, 끝) or [None]          # 고친 라운드마다. 없으면 마지막 라운드
+        본 = set()
+        for 라운드 in 라운드들:
+            for 표제, res in 돌리기(c, 라운드, a.대상, bool(a.최근)):
+                if len(라운드들) > 1:
+                    표제 = f'라운드{라운드}' + (f' · {표제}' if 표제 else '')
+                    res.줄 = 한_번만(res.줄, 본)
+                막힘 += len(res.막힘)
+                글들.append(보고(c, res, 표제, 끝=끝))
+                묶음.append((c.name + (' · ' + 표제 if 표제 else ''), res))
+                if not a.최근:
+                    print(보고(c, res, 표제, 400, 끝))
     모음 = 검사별_모음(묶음, 끝) + '\n' if a.최근 and 사건들 else ''
     if 모음:
         print(모음)

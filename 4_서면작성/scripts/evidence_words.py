@@ -10,8 +10,11 @@
 '이 면 인용'이 아닌 줄을 먼저 싣는다. 판정은 작성 세션이 원본 그림으로 읽고 '판단' 칸에 적는다. 이 도구는 찾아 보여 줄 뿐 유불리를 판정하지 않는다.
 글자가 없는 면(사진 등)과 PDF 가 아닌 호증은 끝에 목록으로 적으니 눈으로 본다. 찾지 못한 것을 '없다'로 단정하지 않는다.
 문자인식 결과는 `증거관리/호증글자/` 에 쌓아 다시 쓰고, 그림은 남기지 않는다. `라운드*/작업/증거인용검토*/ocr` 의 결과도 읽는다.
+표 끝 '찾은 호증(파일 해시)' 절에 낱말을 찾은 호증과 그 파일의 해시를 적는다. `--확인` 은 표를 만든 뒤 들어오거나 파일이 바뀐 호증이
+있으면 막는다(같은 낱말로 다시 돌리면 같은 면의 판단은 이어받는다). 그 절이 없는 옛 표는 머리의 '읽은 호증 N건'과 지금 호증 수만 맞댄다.
 
 2026. 11. 2. GGM 정직 3월: 사 제6호증(38면, 글자층 없음) 3면의 쟁점 문구를 답변서(1)·(2)에 쓰지 못한 일로 만들었다.
+2026. 11. 5. `/하자보완`: `--확인` 이 표의 줄만 보아, 표를 만든 뒤 들어오거나 바뀐 호증은 낱말로 찾지 않았는데도 통과시켰다.
 """
 from __future__ import annotations
 
@@ -100,8 +103,51 @@ def 표_읽기(out: Path) -> list:
     return 줄
 
 
-def 확인(out: Path, 본문: str) -> int:
-    """`/서면` 8-1단계: 표가 있고, 서면이 그 면을 인용하지 않은 줄마다 '판단'이 적혔는지 본다. 서면 인용은 지금 초안으로 다시 본다."""
+찾은_머리 = '## 찾은 호증(파일 해시)'
+
+
+def 찾을_호증(사건: Path, 라운드: Path) -> dict:
+    """이 라운드에서 낱말을 찾을 호증 {호증키: [파일]}. 첫 파일을 읽는다. 작업/ 아래의 지난 판(옛 호증 번호)은 읽지 않는다."""
+    out = {}
+    for k, ps in _ecr.find_exhibits(사건, 라운드).items():
+        ps = [p for p in ps if '작업' not in p.relative_to(사건).parts]
+        if ps:
+            out[k] = ps
+    return out
+
+
+def 찾은_호증_읽기(out: Path):
+    """표 끝 '찾은 호증' 절의 {호증키: 파일 해시}. 절이 없는 옛 표면 None."""
+    글 = out.read_text(encoding='utf-8') if out.is_file() else ''
+    if 찾은_머리 not in 글:
+        return None
+    d = {}
+    for line in 글.split(찾은_머리, 1)[1].splitlines():
+        if line.startswith('## '):
+            break
+        m = re.match(r'^- (.+?) · ([0-9a-f]{12})\s*$', line)
+        if m and 표시_키(m.group(1)):
+            d[표시_키(m.group(1))] = m.group(2)
+    return d
+
+
+def 찾지_않은_호증(out: Path, 사건: Path, 라운드: Path) -> list:
+    """표를 만든 뒤 들어오거나 파일이 바뀌어 낱말로 찾지 않은 호증을 말로. 없으면 빈 목록."""
+    지금 = {k: _ecr.file_hash(ps[0]) for k, ps in 찾을_호증(사건, 라운드).items()}
+    적은 = 찾은_호증_읽기(out)
+    if 적은 is None:          # 옛 표: 수만 맞댄다
+        m = re.search(r'읽은 호증 (\d+)건', out.read_text(encoding='utf-8'))
+        return [f'표를 만든 뒤 호증이 늘었다(표 {m.group(1)}건, 지금 {len(지금)}건)'] if m and int(m.group(1)) < len(지금) else []
+    차례 = sorted(지금, key=호증_정렬)
+    새 = [호증_표시(k) for k in 차례 if k not in 적은]
+    고침 = [호증_표시(k) for k in 차례 if k in 적은 and 적은[k] != 지금[k]]
+    말 = lambda 이름, xs: f"{이름} {len(xs)}건: {', '.join(xs[:10])}{' 외' if len(xs) > 10 else ''}"
+    return ([말('표를 만든 뒤 들어온 호증', 새)] if 새 else []) + ([말('표를 만든 뒤 파일이 바뀐 호증', 고침)] if 고침 else [])
+
+
+def 확인(out: Path, 본문: str, 사건: Path | None = None, 라운드: Path | None = None) -> int:
+    """`/서면` 8-1단계: 표가 있고, 서면이 그 면을 인용하지 않은 줄마다 '판단'이 적혔는지 본다. 서면 인용은 지금 초안으로 다시 본다.
+    사건·라운드를 주면 표를 만든 뒤 들어오거나 바뀐 호증이 없는지도 본다."""
     if not out.is_file():
         print(f'쟁점 낱말 대조표가 없습니다: {out} (`/서면` 6-1단계를 먼저 한다)')
         return 1
@@ -111,10 +157,14 @@ def 확인(out: Path, 본문: str) -> int:
         지금 = 인용_상태(본문, k, no) if k else st
         if 지금 != '이 면 인용' and not 판단:
             빈.append(f'{표시} {no}면({w}, {지금}): {ctx[:80]}')
+    안찾음 = 찾지_않은_호증(out, 사건, 라운드) if 사건 is not None and 라운드 is not None else []
+    if 안찾음:
+        print(f"낱말로 찾지 않은 호증이 있다 — {'; '.join(안찾음)} — 같은 낱말로 다시 돌린다(같은 면의 '판단'은 이어받는다)({out})")
     if 빈:
         print(f"'판단' 칸이 빈 줄 {len(빈)}개 — 원본 그림으로 읽고 적는다({out})")
         for s in 빈:
             print('  - ' + s)
+    if 빈 or 안찾음:
         return 1
     print(f"쟁점 낱말 대조표 {len(줄들)}줄, '판단'이 빈 줄 없음 → {out}")
     return 0
@@ -144,22 +194,21 @@ def main(argv=None) -> int:
     라운드 = 사건 / f'라운드{a.라운드}' if a.라운드 else 라운드들[-1]
     out = Path(a.out) if a.out else 라운드 / '작업' / '쟁점낱말_대조.md'
     if a.확인:
-        return 확인(out, 서면_본문(사건))
+        return 확인(out, 서면_본문(사건), 사건, 라운드)
     캐시 = 사건 / '증거관리' / '호증글자'
     ocr_dirs = list(a.ocr_dir) + [str(p) for p in 사건.glob('라운드*/작업/증거인용검토*/ocr')] + [str(캐시 / 'ocr')]
 
-    호증들 = {}
-    for k, ps in _ecr.find_exhibits(사건, 라운드).items():    # 작업/ 아래의 지난 판(옛 호증 번호)은 읽지 않는다
-        ps = [p for p in ps if '작업' not in p.relative_to(사건).parts]
-        if ps:
-            호증들[k] = ps
+    호증들 = 찾을_호증(사건, 라운드)
     if a.호증:
         호증들 = {k: v for k, v in 호증들.items() if any(k.startswith(x) for x in a.호증)}
     식들 = [(w, 낱말_식(w)) for w in a.낱말]
     본문 = 서면_본문(사건)
-    줄들, 없는면, 합계 = [], {}, {'글자층': 0, '문자인식': 0, '글자 없음': 0}
+    옛찾은 = 찾은_호증_읽기(out) or {}          # 앞 표가 찾은 호증의 파일 해시. 그 뒤 바뀐 호증은 표지 없는 옛 문자인식을 쓰지 않는다
+    줄들, 없는면, 합계, 해시들 = [], {}, {'글자층': 0, '문자인식': 0, '글자 없음': 0}, {}
     for k in sorted(호증들, key=호증_정렬):
         ex = _ecr.Exhibit(k, 호증들[k][0], 캐시, ocr_dirs=ocr_dirs, use_ocr=not a.no_ocr)
+        ex.fresh = k in 옛찾은 and 옛찾은[k] != ex.hash        # prepare 앞에 정하면 된다
+        해시들[k] = ex.hash
         면수 = len(ex)
         try:
             ex.prepare(range(1, 면수 + 1))
@@ -233,6 +282,11 @@ def main(argv=None) -> int:
         글.append(f"- {호증_표시(k)}: {', '.join(map(str, 없는면[k]))}면")
     for f in sorted(비pdf):
         글.append(f'- PDF 가 아닌 호증: {f}')
+    # 찾은 호증과 파일 해시. --호증 으로 좁혀 돌렸으면 이번에 찾지 않은 호증은 앞 표의 줄을 남긴다. `--확인` 이 지금 호증과 맞댄다
+    찾은 = {k: h for k, h in 옛찾은.items() if a.호증 and not any(k.startswith(x) for x in a.호증)}
+    찾은.update(해시들)
+    글 += ['', 찾은_머리, '', "낱말을 찾은 호증과 그때 파일의 해시이다. `--확인` 이 지금 파일과 맞대어 그 뒤 들어오거나 바뀐 호증을 막는다.", '']
+    글 += [f'- {호증_표시(k)} · {찾은[k]}' for k in sorted(찾은, key=호증_정렬)]
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text('\n'.join(글) + '\n', encoding='utf-8')
     안쓴 = [r for r in 새줄 if r[4] != '이 면 인용']

@@ -247,7 +247,8 @@ def 서면_자료(사건: Path, 호증: dict) -> dict:
 
 
 산출물_이름 = re.compile(r'(-회신초안|-간이안)\.md$|관련 검토[_.]|_수정\(|_최종|_Rev_\d|_초안\.(?:docx|pdf)$|_간이안\.(?:docx|pdf)$'
-                    r'|_노동금액계산표|^검산_|^_추출\.txt$')
+                    r'|_노동금액계산표|^검산_|^_추출\.txt$'
+                    r'|^\(리서치\)')      # 우리 리서치 문서(`2_판례검색/양식/(리서치) …`). 2026. 11. 5. 이케아 견적에서 의뢰인 자료로 셌다
 우리_폴더 = re.compile(r'^(?:작업|백업|계산|전환작업|빌드)$|^별첨_|^법제처')
 
 
@@ -1541,6 +1542,12 @@ def cmd_make(a) -> int:
         if not a.no_text and (k in 새로 or k in 옮겨옴 or not 자.글_파일(k).is_file() or 옛글 or 글다시):
             if k in 바뀐_파일:      # 기록한 뒤 파일이 바뀌었으면 앞 파일의 문자인식을 쓰지 않는다
                 shutil.rmtree(자.글 / 'ocr' / 자.이름(k), ignore_errors=True)
+                # 증거 인용 대조가 쌓은 같은 호증의 캐시도 함께 읽으므로, 표지가 없거나 지금 파일과 다르면 지운다(2026. 11. 5. `/하자보완`)
+                for d in 자.사건.glob('라운드*/작업/증거인용검토*/ocr'):
+                    c = d / 자.이름(k)
+                    m = c / _ecr.MARK
+                    if c.is_dir() and not (m.is_file() and m.read_text(encoding='utf-8').strip() == 현재해시[k]):
+                        shutil.rmtree(c, ignore_errors=True)
             msg, 그림 = 글_쓰기(자, k, p, not a.no_ocr)
             if p.suffix.lower() == '.pdf':
                 그림면_적기(f, 그림)

@@ -251,7 +251,9 @@ class EvidenceReadTest(unittest.TestCase):
         (case / 'HPS_근로시간면제_계산표.xlsx').write_bytes(b'x')
         (case / '홍길동_노동금액계산표.xlsx').write_bytes(b'x')
         (case / '상대방 별지 계산표.xlsx').write_bytes(b'x')
-        self.assertEqual(sorted(er.자료_목록(case, [case])), ['단체협약.pdf', '상대방 별지 계산표.xlsx'])
+        make_pdf(case / '(리서치) 근로시간면제 관련.pdf', [글])                       # 우리 리서치 문서(2026. 11. 5.)
+        make_pdf(case / 'RE_ [법무법인 평안] (HPS) 의견서 수정 요청.pdf', [글])      # 우리 메일에 단 의뢰인 회신은 자료이다
+        self.assertEqual(sorted(er.자료_목록(case, [case])), ['RE_ [법무법인 평안] (HPS) 의견서 수정 요청.pdf', '단체협약.pdf', '상대방 별지 계산표.xlsx'])
 
 
 class CheaperReadingTest(unittest.TestCase):
@@ -1115,6 +1117,24 @@ class OtherFormatsTest(unittest.TestCase):
         d.save(self.ours / '사 제6호증 스캔.pdf')                                     # 같은 번호에 다른 파일
         run('make', self.case, '--no-ocr', '--다시', '사6')
         self.assertNotIn('옛 캐시의 문자인식 글', self.text('사6'))
+
+    def test_scan_cache_of_a_replaced_file_is_not_reused(self):
+        """증거 인용 대조가 쌓은 같은 호증의 캐시(표지 없음)도 함께 읽으므로, 기록한 뒤 파일이 바뀌면 그것도 쓰지 않는다(2026. 11. 5. `/하자보완`)."""
+        d = pymupdf.open()
+        d.new_page()
+        d.save(self.ours / '사 제6호증 스캔.pdf')
+        대조 = self.case / '라운드1' / '작업' / '증거인용검토' / 'ocr' / '사6'
+        대조.mkdir(parents=True)
+        (대조 / 'pages.json').write_text('{"1": {"units": [["대조 캐시의 문자인식 글", [0, 0, 10, 10]]], "png": "p001.png"}}', encoding='utf-8')
+        run('make', self.case, '--no-ocr', '--호증', '사6')
+        self.assertIn('대조 캐시의 문자인식 글', self.text('사6'))                      # 기록 전의 표지 없는 캐시는 쓴다
+        d = pymupdf.open()
+        d.new_page()
+        d.new_page()
+        d.save(self.ours / '사 제6호증 스캔.pdf')                                     # 같은 번호에 다른 파일
+        run('make', self.case, '--no-ocr', '--다시', '사6')
+        self.assertNotIn('대조 캐시의 문자인식 글', self.text('사6'))
+        self.assertFalse(대조.exists())
 
     @unittest.skipUnless(er._et.soffice(), 'LibreOffice 가 없다')
     def test_old_word_file_and_emf_picture_go_through_libreoffice(self):
