@@ -31,7 +31,7 @@
 
 내용.json 의 블록
     {"문": "..."}                              본문 문단
-    {"표지": "①", "문": "...", "너비": 300}    굵은 표지 + 내어쓰기 문단(번호·글머리 목록에도 쓴다)
+    {"표지": "①", "문": "...", "너비": 300}    굵은 표지 + 내어쓰기 문단(번호·글머리 목록에도 쓴다). 너비를 빼면 원문자는 300, 그 밖의 표지는 1040
     {"박스": [{"출처": "...", "원문": ["..."], "음영": true, "왼쪽": true}]}   출처(굵게) + 원문. 왼쪽은 그 행만 왼쪽 정렬
     {"표": {"열": [..], "머리": [..], "행": [[..]]}}             여러 칸짜리 표. 칸 안의 줄바꿈은 \n
                                                행에 {"묶음": "..."} 을 넣으면 가로로 합친 음영 행(묶음 제목)
@@ -60,6 +60,7 @@ NBSP = chr(0xA0)      # 줄바꿈 없는 공백(U+00A0). 글자로 직접 적으
 LINE = 252            # 본문·박스 줄 간격(240 = 한 줄, 양식 기본은 276)
 INDENT = 220          # '가.' 아래 본문 들여쓰기(1/20 pt). '가.' 번호 위치와 같다
 LABEL = 1040          # '수정 방향'·'확인' 표지 너비
+CIRCLE = 300          # 원문자(①) 표지 너비. LABEL 로 두면 원문자와 본문이 1.8cm 떨어진다(2026. 11. 4. 담당 노무사 "원문자랑 문단이랑 왜케 떨어짐")
 TEXT_W = 9016         # 본문 폭(1/20 pt)
 SHADE = 'EEF1F5'      # 조서 진술 칸 음영
 HEAD = 'E1E6EC'       # 표 머리 칸 음영
@@ -132,6 +133,11 @@ def body_par(text, bold=False, before=0, after=60, indent=0, keep_next=False, si
         '<w:jc w:val="%s"/>' % align if align else '',
         '<w:rPr><w:b/><w:bCs/></w:rPr>' if bold else '')
     return '<w:p>%s%s</w:p>' % (ppr, rich(text, bold, size) if text else '')
+
+
+def is_circle(label):
+    """원문자 하나(①~⑳)로 된 표지인지."""
+    return len(label) == 1 and 0x2460 <= ord(label) <= 0x2473
 
 
 def label_par(label, text, before=0, after=90, indent=0, width=LABEL):
@@ -475,7 +481,7 @@ def blocks(items, indent, split=False):
         nxt = items[i + 1] if i + 1 < len(items) else {}
         if '표지' in blk:
             parts.append(label_par(blk['표지'], blk['문'], before=before, indent=indent,
-                                   width=blk.get('너비', LABEL)))
+                                   width=blk.get('너비', CIRCLE if is_circle(blk['표지']) else LABEL)))
             after_table = False
         elif '문' in blk:
             # 바로 뒤가 박스·표·카드·대비·표지 문단이면 면이 바뀌어도 떨어지지 않게 묶는다
