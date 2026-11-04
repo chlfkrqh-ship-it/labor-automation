@@ -1,0 +1,295 @@
+"""mail_draft.py — 가짜 Microsoft Graph 와 가짜 로그인 도구로 초안 만들기를 시험한다(네트워크를 쓰지 않는다).
+
+메일·사람·주소는 모두 지어낸 값이다. 실제 메일함에서 본 이름·주소·사건번호를 여기에 옮기지 않는다(git 에 올라간다).
+"""
+import base64
+import importlib.util
+import io
+import json
+import os
+import re
+import tempfile
+import unittest
+import urllib.parse
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+from unittest import mock
+
+spec = importlib.util.spec_from_file_location('mail_draft', Path(__file__).parents[1] / 'scripts' / 'mail_draft.py')
+draft = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(draft)
+
+GRAPH = draft.GRAPH
+ME = 'me@example.com'
+UPLOAD = 'https://outlook.office.com/api/v2.0/Users(1)/Messages(D1)/AttachmentSessions(S1)?authtoken=xyz'
+
+
+def person(name, addr):
+    return {'emailAddress': {'name': name, 'address': addr}}
+
+
+SENT = {'id': 'AAMkADsent=draft-test-0001', 'subject': 'Re: 준비서면 확인 요청', 'from': person('나', ME),
+        'toRecipients': [person('갑 변호사', 'a@example.com')],
+        'ccRecipients': [person('을 변호사', 'b@example.com'), person('병 변호사', 'c@example.com')]}
+RECEIVED = {'id': 'AAMkADrecv-draft-test-0002', 'subject': '자료 송부', 'from': person('정 부장', 'boss@example.com'),
+            'toRecipients': [person('나', ME), person('무 과장', 'x@example.com')],
+            'ccRecipients': [person('나', ME), person('기 대리', 'y@example.com')]}
+SIG = ('<div id="Signature" class="elementToProof"><div style="font-size:11pt"><br /></div>'
+       '<div style="font-size:11pt">감사합니다.</div><div><div>홍길동 올림</div></div></div>')
+QUOTE = '<html><head><meta charset="utf-8"></head><body><hr><div id="divRplyFwdMsg">원문 인용</div></body></html>'
+
+
+class Response(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+
+class FakeGraph:
+    """초안 만들기에 쓰는 Microsoft Graph 몇 갈래만 흉내 낸다."""
+
+    def __init__(self, signature=True):
+        self.seen, self.patch, self.created = [], None, None
+        self.attachments, self.uploads, self.ranges = {}, bytearray(), []
+        self.signature = signature
+
+    def ok(self, data, code=200):
+        return Response(b'' if data is None else json.dumps(data, ensure_ascii=False).encode('utf-8'))
+
+    def __call__(self, request, timeout=None):
+        method, url = request.get_method(), request.full_url
+        self.seen.append((method, url))
+        if url.startswith(UPLOAD.split('?')[0]):
+            assert method == 'PUT' and request.get_header('Authorization') is None, '업로드 주소에는 토큰을 붙이지 않는다'
+            m = re.fullmatch(r'bytes (\d+)-(\d+)/(\d+)', request.get_header('Content-range'))
+            start, end, total = map(int, m.groups())
+            assert start == len(self.uploads), '조각은 이어서 올린다'
+            self.uploads += request.data
+            self.ranges.append((start, end, total))
+            if len(self.uploads) == total:
+                self.attachments['L1'] = {'id': 'L1', 'name': self.upload_name, 'data': bytes(self.uploads)}
+                return self.ok(None, 201)
+            return self.ok({'nextExpectedRanges': [f'{end + 1}-']})
+        assert url.startswith(GRAPH + '/') and request.get_header('Authorization') == 'Bearer T', url
+        split = urllib.parse.urlsplit(url[len(GRAPH):])
+        path = [urllib.parse.unquote(s) for s in split.path.split('/')[1:]]
+        body = json.loads(request.data.decode('utf-8')) if request.data else None
+        if path[:3] == ['me', 'mailFolders', 'sentitems']:
+            plain_mail = {'body': {'content': '<html><body>서명 없는 메일</body></html>'}}
+            signed = {'body': {'content': f'<html><body><div>본문</div>{SIG}<hr><div id="x_Signature">옛 서명</div></body></html>'}}
+            return self.ok({'value': [plain_mail] + ([signed] if self.signature else [])})
+        if path == ['me', 'messages'] and method == 'POST':
+            self.created = body
+            return self.ok({'id': 'D1', **body}, 201)
+        msg = {SENT['id']: SENT, RECEIVED['id']: RECEIVED}.get(path[2])
+        if msg and method == 'GET':
+            return self.ok(msg)
+        if msg and path[3:] in (['createReplyAll'], ['createReply']) and method == 'POST':
+            self.created = {'kind': path[3]}
+            return self.ok({'id': 'D1', 'subject': 'RE: ' + msg['subject'], 'body': {'contentType': 'html', 'content': QUOTE}}, 201)
+        assert path[2] == 'D1', path
+        rest = path[3:]
+        if not rest and method == 'PATCH':
+            self.patch = body
+            return self.ok({'id': 'D1'})
+        if not rest and method == 'GET':
+            fields = self.patch or self.created or {}
+            return self.ok({'id': 'D1', 'subject': fields.get('subject'), 'isDraft': True, 'hasAttachments': bool(self.attachments),
+                            'toRecipients': fields.get('toRecipients'), 'ccRecipients': fields.get('ccRecipients')})
+        if rest == ['attachments'] and method == 'POST':
+            n = f'S{len(self.attachments) + 1}'
+            self.attachments[n] = {'id': n, 'name': body['name'], 'data': base64.b64decode(body['contentBytes'])}
+            return self.ok({'id': n}, 201)
+        if rest == ['attachments', 'createUploadSession'] and method == 'POST':
+            self.upload_name = body['AttachmentItem']['name']
+            assert body['AttachmentItem']['size'] > draft.SMALL
+            return self.ok({'uploadUrl': UPLOAD})
+        if rest == ['attachments'] and method == 'GET':
+            return self.ok({'value': [{'id': a['id'], 'name': a['name'], 'size': len(a['data']), 'isInline': False}
+                                      for a in self.attachments.values()]})
+        if len(rest) == 3 and rest[0] == 'attachments' and rest[2] == '$value':
+            return Response(self.attachments[rest[1]]['data'])
+        raise AssertionError(f'예상하지 못한 요청: {method} {url}')
+
+
+class DraftTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.small = self.dir / '수정안.pdf'
+        self.small.write_bytes(b'%PDF-1.7 small')
+        self.large = self.dir / '준비서면(3)_Rev_2.docx'
+        self.large.write_bytes(os.urandom(draft.SMALL + 700_000))
+        self.body = self.dir / '본문.txt'
+        self.body.write_text('변호사님,\n\n수정본을 <다시> 보냅니다.\n', encoding='utf-8')
+        self.graph = FakeGraph()
+        self.patches = [mock.patch.object(draft, 'OPENER', self.graph),
+                        mock.patch.object(draft, 'session', lambda: ('T', ME))]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.tmp.cleanup()
+
+    def run_cmd(self, fn, *args, **kw):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = fn(*args, **kw)
+        return code, out.getvalue(), err.getvalue()
+
+    def emails(self, entries):
+        return [e['emailAddress']['address'] for e in entries]
+
+    def test_reply_all_to_my_sent_mail_goes_back_to_its_recipients_with_both_attachments(self):
+        code, out, err = self.run_cmd(draft.reply, 'mail:///messages/AAMkADsent%3Ddraft-test-0001', str(self.body), [self.small, self.large],
+                                      everyone=True, prefix='(수정 송부) ')
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.graph.created, {'kind': 'createReplyAll'})
+        p = self.graph.patch
+        self.assertEqual(p['subject'], '(수정 송부) Re: 준비서면 확인 요청')      # 'Re:' 를 겹치지 않는다
+        self.assertEqual(self.emails(p['toRecipients']), ['a@example.com'])
+        self.assertEqual(self.emails(p['ccRecipients']), ['b@example.com', 'c@example.com'])
+        self.assertEqual(p['toRecipients'][0]['emailAddress']['name'], '갑 변호사')
+        content = p['body']['content']
+        top = content.index('<body>') + len('<body>')
+        self.assertTrue(content[top:].startswith('<div class="elementToProof"'), content[:200])
+        self.assertLess(content.index('변호사님,'), content.index('감사합니다.'))
+        self.assertLess(content.index('홍길동 올림'), content.index('원문 인용'))       # 서명은 인용 위에, 통째로
+        self.assertIn('수정본을 &lt;다시&gt; 보냅니다.', content)
+        self.assertNotIn('옛 서명', content)
+        names = {a['name']: a['data'] for a in self.graph.attachments.values()}
+        self.assertEqual(names['수정안.pdf'], self.small.read_bytes())
+        self.assertEqual(names['준비서면(3)_Rev_2.docx'], self.large.read_bytes())
+        self.assertEqual(len(self.graph.ranges), 2)                                 # 3MB 넘는 파일은 나누어 올렸다
+        self.assertTrue(all((e - s + 1) % (320 * 1024) == 0 for s, e, t in self.graph.ranges[:-1]))
+        self.assertEqual(out.count('같음'), 2)
+        self.assertIn('받는 사람: 갑 변호사 <a@example.com>', out)
+        self.assertIn('주소: mail:///messages/D1', out)
+
+    def test_reply_to_someone_elses_mail_goes_to_sender_and_drops_my_address(self):
+        to, cc = draft.recipients(RECEIVED, 'ME@example.com', everyone=True)
+        self.assertEqual(self.emails(to), ['boss@example.com', 'x@example.com'])
+        self.assertEqual(self.emails(cc), ['y@example.com'])
+        to, cc = draft.recipients(RECEIVED, ME, everyone=False)
+        self.assertEqual((self.emails(to), cc), (['boss@example.com'], []))
+        to, cc = draft.recipients(SENT, ME, everyone=False)
+        self.assertEqual((self.emails(to), cc), (['a@example.com'], []))
+        code, out, err = self.run_cmd(draft.reply, 'AAMkADrecv-draft-test-0002', str(self.body), [], everyone=False)
+        self.assertEqual((code, self.graph.created), (0, {'kind': 'createReply'}))
+        self.assertEqual(self.graph.patch['subject'], 'Re: 자료 송부')
+
+    def test_recipients_and_subject_can_be_given(self):
+        code, out, err = self.run_cmd(draft.reply, 'AAMkADsent=draft-test-0001', str(self.body), [], everyone=True, subject='제목 통째로',
+                                      to=['z@example.com'], cc=['w@example.com'])
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.graph.patch['subject'], '제목 통째로')
+        self.assertEqual(self.emails(self.graph.patch['toRecipients']), ['z@example.com'])
+        self.assertEqual(self.emails(self.graph.patch['ccRecipients']), ['w@example.com'])
+
+    def test_reply_subject(self):
+        self.assertEqual(draft.reply_subject('Re: 가', '(수정 송부) '), '(수정 송부) Re: 가')
+        self.assertEqual(draft.reply_subject('RE: 가'), 'RE: 가')
+        self.assertEqual(draft.reply_subject('회신: 가'), '회신: 가')
+        self.assertEqual(draft.reply_subject('Fw: 가'), 'Re: Fw: 가')
+        self.assertEqual(draft.reply_subject('가', '[긴급] '), '[긴급] Re: 가')
+
+    def test_signature_is_taken_whole_and_missing_signature_is_reported(self):
+        self.assertEqual(draft.signature_of(f'<p>앞</p>{SIG}<div>뒤</div>'), SIG)
+        self.assertIsNone(draft.signature_of('<div id="x_Signature">인용 속 서명</div>'))
+        self.graph.signature = False
+        code, out, err = self.run_cmd(draft.reply, 'AAMkADsent=draft-test-0001', str(self.body), [], everyone=True)
+        self.assertEqual(code, 0)
+        self.assertIn('서명을 찾지 못해', err)
+        self.assertNotIn('Signature', self.graph.patch['body']['content'])
+
+    def test_no_signature_option_skips_the_sent_items_lookup(self):
+        code, out, err = self.run_cmd(draft.reply, 'AAMkADsent=draft-test-0001', str(self.body), [], signature=False)
+        self.assertEqual(code, 0)
+        self.assertFalse(any('sentitems' in url for _, url in self.graph.seen))
+
+    def test_body_lines_are_escaped_and_blank_lines_kept(self):
+        page = draft.body_html('\n첫 줄 & <b>\n\n끝\n\n')
+        self.assertEqual(page.count('<div class="elementToProof"'), 3)
+        self.assertIn('첫 줄 &amp; &lt;b&gt;', page)
+        self.assertIn('<br />', page)
+        self.assertIn('Malgun Gothic', page)
+
+    def test_new_draft(self):
+        code, out, err = self.run_cmd(draft.new, ['a@example.com'], ['b@example.com'], '새 제목', str(self.body), [self.small])
+        self.assertEqual(code, 0, err)
+        made = self.graph.created
+        self.assertEqual(made['subject'], '새 제목')
+        self.assertEqual(self.emails(made['toRecipients']), ['a@example.com'])
+        self.assertEqual(self.emails(made['ccRecipients']), ['b@example.com'])
+        self.assertIn('홍길동 올림', made['body']['content'])
+        self.assertEqual(out.count('같음'), 1)
+
+    def test_check_reports_a_different_file(self):
+        self.run_cmd(draft.reply, 'AAMkADsent=draft-test-0001', str(self.body), [self.small])
+        self.small.write_bytes(b'%PDF-1.7 changed later')
+        code, out, err = self.run_cmd(draft.check, 'mail:///messages/D1', [str(self.small)])
+        self.assertEqual(code, 1)
+        self.assertIn('다름  수정안.pdf', out)
+
+    def test_requests_never_send_move_or_delete_and_stay_on_microsoft_hosts(self):
+        for method, target in (('POST', '/me/messages/D1/send'), ('POST', '/me/messages/D1/move'), ('POST', '/me/messages/D1/reply'),
+                               ('POST', '/me/messages/D1/replyAll'), ('POST', '/me/messages/D1/forward'),
+                               ('DELETE', '/me/messages/D1'), ('PUT', 'https://outlook.office.com.example.com/upload'),
+                               ('GET', 'https://example.com/me')):
+            with self.assertRaises(draft.MailError, msg=f'{method} {target}'):
+                draft.request(method, target, 'T', {})
+        self.assertFalse(any(m in ('DELETE',) or re.search(r'/(send|move)$', u) for m, u in self.graph.seen))
+
+    def test_missing_files_are_refused_before_anything_is_made(self):
+        code, out, err = self.run_cmd(draft.main, ['reply', 'AAMkADsent=draft-test-0001', '--body', str(self.body), '--attach', str(self.dir / '없음.pdf')])
+        self.assertEqual(code, 1)
+        self.assertIn('붙일 파일이 없습니다', err)
+        self.assertEqual(self.graph.seen, [])
+
+
+class FakeApp:
+    def __init__(self, accounts=(), silent=None, interactive=None):
+        self.accounts, self.silent_result, self.interactive, self.scopes = list(accounts), silent, interactive, []
+
+    def get_accounts(self):
+        return self.accounts
+
+    def acquire_token_silent(self, scopes, account):
+        self.scopes.append(('silent', scopes))
+        return self.silent_result
+
+    def acquire_token_interactive(self, scopes, **kw):
+        self.scopes.append(('interactive', scopes))
+        return self.interactive
+
+
+class LoginTests(unittest.TestCase):
+    def test_write_permission_is_asked_separately_from_mail_attach(self):
+        self.assertEqual(draft.SCOPES, ['Mail.ReadWrite'])
+        self.assertEqual(draft.ma.SCOPES, ['Mail.Read'])                            # 첨부 받기는 그대로 읽기 전용
+        with mock.patch.object(draft, 'app', lambda: FakeApp(accounts=[{'username': ME}], silent={'access_token': 'T1'})):
+            self.assertEqual(draft.session(), ('T1', ME))
+        with mock.patch.object(draft, 'app', lambda: FakeApp()):
+            with self.assertRaises(draft.NeedLogin) as caught:
+                draft.session()
+        self.assertEqual(caught.exception.code, 3)
+        self.assertIn('mail_draft.py login', str(caught.exception))
+        fake = FakeApp(interactive={'access_token': 'T', 'id_token_claims': {'preferred_username': ME}})
+        out = io.StringIO()
+        with mock.patch.object(draft, 'app', lambda: fake), redirect_stdout(out):
+            self.assertEqual(draft.login(), 0)
+        self.assertEqual(fake.scopes[-1], ('interactive', ['Mail.ReadWrite']))
+        self.assertIn(ME, out.getvalue())
+
+    def test_admin_approval_message_names_the_write_permission(self):
+        text = draft.explain({'error': 'consent_required', 'error_description': 'AADSTS65001: consent'})
+        self.assertIn('메일 쓰기(Mail.ReadWrite)', text)
+        self.assertIn('화면 제어', text)
+
+
+if __name__ == '__main__':
+    unittest.main()
