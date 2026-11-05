@@ -229,6 +229,22 @@ def body_html(text: str) -> str:
                    for line in lines)
 
 
+빈_서명_첫줄 = re.compile(r'\s*<(?:div|p)\b[^>]*>(?:\s|<br\s*/?>|&nbsp;|<o:p>\s*</o:p>)*</(?:div|p)>', re.I)
+
+
+def sign_gap(text: str, sign: str | None) -> str:
+    """본문과 서명 사이의 빈 줄 하나. 본문 끝이 빈 줄이거나 서명이 빈 줄로 시작하면 넣지 않는다.
+    본문 글의 끝 빈 줄은 body_html 이 지운다. 2026. 11. 5. 보낸 편지함의 최근 서명이 '감사합니다.'로 바로 시작해
+    삼양인터내셔날 내부 회신 초안의 본문 끝 줄에 붙어 나왔다(담당자가 Outlook 에서 쓴 서명은 빈 줄로 시작한다)."""
+    if not sign:
+        return ''
+    lines = text.replace('\r\n', '\n').strip('\n').split('\n')
+    if not lines[-1].strip():
+        return ''
+    안쪽 = re.sub(r'^\s*<div\b[^>]*>', '', sign, count=1)       # 서명 div 를 여는 태그 뒤
+    return '' if 빈_서명_첫줄.match(안쪽) else f'<div class="elementToProof" style="{STYLE}"><br /></div>'
+
+
 def signature_of(page: str) -> str | None:
     """HTML 에서 <div id="Signature">…</div> 를 짝 맞추어 꺼낸다."""
     m = SIGNATURE.search(page or '')
@@ -361,7 +377,7 @@ def reply(ref: str, body: str, attach=(), everyone: bool = False, prefix: str = 
     if signature and not sign:
         print('알림: 보낸 편지함에서 서명을 찾지 못해 서명 없이 만들었습니다.', file=sys.stderr)
     content = put_on_top((draft.get('body') or {}).get('content') or '',
-                         body_html(text) + (sign or '') + '<div id="appendonsend"></div>')
+                         body_html(text) + sign_gap(text, sign) + (sign or '') + '<div id="appendonsend"></div>')
     request('PATCH', f"/me/messages/{q(draft['id'])}", tok, {
         'subject': subject or reply_subject(original.get('subject'), prefix),
         'body': {'contentType': 'html', 'content': content},
@@ -380,7 +396,7 @@ def new(to, cc, subject: str, body: str, attach=(), signature: bool = True) -> i
     sign = my_signature(tok) if signature else None
     draft = request('POST', '/me/messages', tok, {
         'subject': subject, 'toRecipients': plain(to), 'ccRecipients': plain(cc),
-        'body': {'contentType': 'html', 'content': '<html><body>' + body_html(text) + (sign or '') + '</body></html>'}})
+        'body': {'contentType': 'html', 'content': '<html><body>' + body_html(text) + sign_gap(text, sign) + (sign or '') + '</body></html>'}})
     for path in files:
         attach_file(tok, draft['id'], path)
     return report(tok, draft['id'], files)

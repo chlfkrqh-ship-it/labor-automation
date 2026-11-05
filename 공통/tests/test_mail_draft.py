@@ -78,7 +78,8 @@ class FakeGraph:
         body = json.loads(request.data.decode('utf-8')) if request.data else None
         if path[:3] == ['me', 'mailFolders', 'sentitems']:
             plain_mail = {'body': {'content': '<html><body>서명 없는 메일</body></html>'}}
-            signed = {'body': {'content': f'<html><body><div>본문</div>{SIG}<hr><div id="x_Signature">옛 서명</div></body></html>'}}
+            sig = self.signature if isinstance(self.signature, str) else SIG      # 문자열을 주면 그 서명을 쓴다
+            signed = {'body': {'content': f'<html><body><div>본문</div>{sig}<hr><div id="x_Signature">옛 서명</div></body></html>'}}
             return self.ok({'value': [plain_mail] + ([signed] if self.signature else [])})
         if path == ['me', 'messages'] and method == 'POST':
             self.created = body
@@ -217,6 +218,20 @@ class DraftTests(unittest.TestCase):
         self.assertIn('첫 줄 &amp; &lt;b&gt;', page)
         self.assertIn('<br />', page)
         self.assertIn('Malgun Gothic', page)
+
+    def test_one_blank_line_between_body_and_signature(self):
+        """서명이 빈 줄로 시작하지 않으면 본문 끝에 빈 줄 하나를 넣는다(2026. 11. 5. 삼양인터내셔날 내부 회신에서 '감사합니다.'가 본문에 붙었다)."""
+        빈 = '<br /></div>'
+        붙은 = '<div id="Signature" class="elementToProof"><div style="font-size:11pt">감사합니다.</div><div>홍길동 올림</div></div>'
+        self.assertTrue(draft.sign_gap('변호사님,\n\n드립니다.\n', 붙은).endswith(빈))
+        self.assertEqual(draft.sign_gap('변호사님,\n\n드립니다.\n', SIG), '')               # 서명이 빈 줄로 시작한다
+        self.assertEqual(draft.sign_gap('변호사님,\n\n드립니다.\n \n', 붙은), '')            # 본문이 빈 줄로 끝난다
+        self.assertEqual(draft.sign_gap('변호사님,', None), '')
+        self.assertEqual(draft.sign_gap('변호사님,', '<div id="Signature"><p class="MsoNormal">&nbsp;</p><p>감사합니다.</p></div>'), '')
+        self.graph.signature = 붙은
+        code, out, err = self.run_cmd(draft.reply, 'AAMkADsent=draft-test-0001', str(self.body), [], everyone=True)
+        content = self.graph.patch['body']['content']
+        self.assertIn('보냅니다.</div><div class="elementToProof" style="' + draft.STYLE + '"><br /></div><div id="Signature"', content)
 
     def test_new_draft(self):
         code, out, err = self.run_cmd(draft.new, ['a@example.com'], ['b@example.com'], '새 제목', str(self.body), [self.small])
