@@ -124,5 +124,63 @@ class 묶기(unittest.TestCase):
                     z['원본'].close()
 
 
+def 누운_pdf(경로, 글):
+    """가로 표를 눕혀 A4 세로에 넣은 면처럼, 글이 아래에서 위로 읽히는 면 하나."""
+    d = pymupdf.open()
+    pg = d.new_page(width=595, height=842)
+    pg.insert_font(fontname='kr', fontfile=str(글꼴))
+    for k in range(3):
+        pg.insert_text((120 + 40 * k, 760), 글, fontname='kr', fontsize=11, rotate=90)
+    경로.parent.mkdir(parents=True, exist_ok=True)
+    d.save(str(경로))
+    d.close()
+
+
+@unittest.skipUnless(글꼴.exists(), '맑은 고딕이 없음')
+class 누운면(unittest.TestCase):
+    """2026. 11. 5. OES 담당 노무사 "사 제14호증같이 돌려져서 제출한건 적어도 내가 심문회의에서 볼 땐 보기 좋게 돌려줘야지".
+    글자층이 있는 누운 면은 글 방향으로 스스로 세우고, 스캔처럼 글이 없는 면은 설정의 "돌림" 에 적은 면만 돌리며, 0 이면 돌리지 않는다.
+    맞대기(확인)는 원본 그림을 같은 각도로 돌려 견주므로 0 이어야 한다."""
+
+    def test_누운_면_세우기(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            사건 = Path(tmp) / '사건' / '시험'
+            pdf(사건 / '답변서.pdf', ['답 변 서 사 제1호증, 사 제2호증, 사 제3호증'])
+            누운_pdf(사건 / '우리' / '사 제1호증_재계약 현황.pdf', '계약직 채용자의 재계약 현황 및 퇴사사유 표의 한 줄입니다')
+            pdf(사건 / '우리' / '사 제2호증_회의록.pdf', ['회의록 첫 면', '붙임 표가 있는 둘째 면'])
+            누운_pdf(사건 / '우리' / '사 제3호증_표.pdf', '돌리지 않기로 한 누운 표의 한 줄입니다 그대로 둡니다')
+            설정 = {'제목': '시험', '출력': '출력/묶음.pdf',
+                    '문서': [{'이름': '답변서', '약칭': '답1', '갈래': '우리', '파일': '답변서.pdf'}],
+                    '증거': [{'이름': '우리 증거', '갈래': '우리', '파일들': ['우리/*']}],
+                    '돌림': {'사 제2호증': {'2': 90}, '사제3호증': 0}}
+            경로 = 사건 / '설정.json'
+            경로.write_text(json.dumps(설정, ensure_ascii=False), encoding='utf-8')
+            글 = io.StringIO()
+            with redirect_stdout(글):
+                출력, 순서, 앞면수 = hp.묶기(경로)
+                확인 = hp.확인(경로)
+            try:
+                self.assertEqual(확인, 0, 글.getvalue())
+                self.assertIn('바로 세운 면 2', 글.getvalue())
+                d = pymupdf.open(출력)
+                시작 = {z['약칭']: z['시작'] for z in 순서}
+
+                def 크기(pno):
+                    r = d[pno].rect
+                    return round(r.width - hp.B), round(r.height)
+
+                self.assertEqual(크기(시작['사1']), (842, 595))         # 글 방향으로 세워 가로가 된다
+                self.assertEqual(크기(시작['사2']), (595, 842))         # 설정에 없는 면은 그대로
+                self.assertEqual(크기(시작['사2'] + 1), (842, 595))     # 설정의 '2': 90
+                self.assertEqual(크기(시작['사3']), (595, 842))         # 설정 0 은 돌리지 않는다
+                방향 = {(round(l['dir'][0]), round(l['dir'][1])) for b in d[시작['사1']].get_text('dict')['blocks']
+                        for l in b.get('lines', []) if ''.join(s['text'] for s in l['spans']).strip()}
+                self.assertEqual(방향, {(1, 0)})                         # 세운 면의 글은 왼쪽에서 오른쪽으로 읽힌다
+                d.close()
+            finally:
+                for z in 순서:
+                    z['원본'].close()
+
+
 if __name__ == '__main__':
     unittest.main()

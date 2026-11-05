@@ -18,6 +18,9 @@
   굽고 회전을 푼 뒤 원래 보이던 자리만 새 면에 놓는다). 끝에 면마다 원본과 그림을 맞댄다(전체 평균과 12pt 칸별 평균).
 - 면 이름(page label): '처음', '목차-1', '호증목록-1', 문서마다 '답1-23'(인쇄 쪽)·'사17-2' 꼴. 책갈피도 단다.
 - PDF 가 아닌 호증: 그림(jpg·png)은 면으로 넣고, 녹음·영상 등은 자리 면을 두고 파일을 출력 폴더의 '호증 파일/' 에 복사한다.
+- 누운 면: 제출본을 A4 세로로 맞추느라 가로 표를 눕혀 넣은 면은 바로 세워 놓는다. 글자층이 있는 면은 글 방향(80% 넘게 한 방향)으로
+  스스로 정하고, 글자층이 없는 스캔 면은 설정의 "돌림" 에 적은 면만 돌린다. 맞댈 때에는 원본 그림을 같은 각도로 돌려 견준다
+  (2026. 11. 5. OES 담당 노무사 "사 제14호증같이 돌려져서 제출한건 적어도 내가 심문회의에서 볼 땐 보기 좋게 돌려줘야지").
 
 설정 json(경로는 사건 폴더 기준. 사건 폴더는 설정 파일 위로 올라가며 '사건' 폴더 바로 아래의 것):
 {
@@ -36,8 +39,11 @@
   "증거": [
     {"이름": "우리 증거", "갈래": "우리", "파일들": ["라운드1/출력/제출/증거/*", "라운드2/출력/제출/증거/*"]},
     {"이름": "상대 증거", "갈래": "상대", "파일들": ["라운드1/상대증거/호증별/노제*"]}
-  ]
+  ],
+  "돌림": {"사 제7호증": {"7": 90}, "사 제9호증": {"3-4": 90}, "사 제14호증": 0}  # 시계 방향 각도. 숫자 하나면 그 호증(문서)의 모든 면
 }
+- "돌림": 호증 이름('사 제7호증', 띄어쓰기 무시)이나 문서 이름·약칭을 열쇠로, {면 범위: 각도}('3', '8-9', '1,3-4') 또는 각도 하나.
+  글자층이 있어 스스로 세운 면도 여기 적은 값이 앞서고, 0 을 주면 돌리지 않는다. "돌림자동": false 면 글 방향으로 세우지 않는다.
 - "쪽시작면": 인쇄 쪽 번호 1 이 찍힌 PDF 면(표지에 번호가 없는 우리 서면은 2). 없으면 1. 띠·목차·면 이름이 이 번호를 쓴다.
 - "목차": "목차면"(서면 앞쪽 목차 면의 링크), "책갈피"(원본 PDF 의 책갈피), {"찾기": [[단계, 글]]}(글자층에서 차례로 찾음, 공백 무시),
   {"면": [[단계, 글, 면]]}(스캔본처럼 글자가 없을 때 직접), {"질의답변": docx}(예상 질의답변 docx 의 절과 질문). 단계를 0 으로 주면
@@ -508,6 +514,55 @@ def 그림_줄이기(doc, 목표dpi: int, 품질: int) -> tuple:
     return 바꾼, 전, 후
 
 
+# ── 누운 면 바로 세우기 ──
+# 제출본은 호증마다 A4 세로로 맞추므로(4_서면작성/CLAUDE.md 2-1절) 가로 표를 눕혀 넣은 면이 있다(OES 사 제14호증의 재계약 현황표,
+# 회의록에 붙은 심의 대상자 표). 현장에서는 바로 세워 본다(2026. 11. 5. 담당 노무사). 각도는 시계 방향(PDF /Rotate 와 같다).
+
+def 글방향_각도(pg) -> int:
+    """회전(/Rotate) 없는 면의 글자 방향을 세어 바로 세우는 데 드는 시계 방향 각도(0·90·180·270)를 돌려준다.
+    글자가 30자 미만이거나(스캔 면) 한 방향이 80% 에 못 미치면 0 이다."""
+    if pg.rotation:
+        return 0
+    셈 = {}
+    for b in pg.get_text("dict")["blocks"]:
+        for l in b.get("lines", []):
+            k = (round(l["dir"][0]), round(l["dir"][1]))
+            셈[k] = 셈.get(k, 0) + len("".join(s["text"] for s in l["spans"]).strip())
+    전체 = sum(셈.values())
+    if 전체 < 30:
+        return 0
+    for 방향, 각도 in (((0, -1), 90), ((0, 1), 270), ((-1, 0), 180)):     # 아래에서 위로 읽히는 글은 시계 방향 90도로 세운다
+        if 셈.get(방향, 0) >= 전체 * 0.8:
+            return 각도
+    return 0
+
+
+def 면범위(글) -> set:
+    """'3', '8-9', '1,3-4' 를 면 번호(1부터) 집합으로."""
+    out = set()
+    for 조각 in str(글).replace(" ", "").split(","):
+        if "-" in 조각:
+            a, b = 조각.split("-", 1)
+            out |= set(range(int(a), int(b) + 1))
+        elif 조각:
+            out.add(int(조각))
+    return out
+
+
+def 돌림_표(설정: dict) -> dict:
+    """설정의 "돌림" 을 {띄어쓰기 뺀 이름: {면 또는 '*': 각도}} 로 푼다."""
+    표 = {}
+    for 이름, 값 in (설정.get("돌림") or {}).items():
+        if isinstance(값, (int, float)):
+            면각 = {"*": int(값) % 360}
+        else:
+            면각 = {면: int(각) % 360 for 범위, 각 in 값.items() for 면 in 면범위(범위)}
+        if any(각 not in (0, 90, 180, 270) for 각 in 면각.values()):
+            raise SystemExit(f"돌림 각도는 0·90·180·270 가운데 하나이다: {이름} {값}")
+        표[빈칸없이(이름)] = 면각
+    return 표
+
+
 # ── 묶기 ──
 
 def 묶기(설정경로: Path):
@@ -630,34 +685,64 @@ def 묶기(설정경로: Path):
             return (y, W0 - x)
         return (x, y)
 
+    돌림표, 돌림자동, 돌린면 = 돌림_표(설정), 설정.get("돌림자동", True), []
+
+    def 돌림각(z, i, sp):                    # (시계 방향 각도, 까닭). 설정의 "돌림" 이 앞서고, 없으면 글자층의 글 방향
+        이름들 = [z["호증"]["이름"]] if z.get("호증") is not None else [z["이름"], z["약칭"], z.get("단추") or ""]
+        for n in 이름들:
+            면각 = 돌림표.get(빈칸없이(n))
+            if 면각 is not None and (i + 1 in 면각 or "*" in 면각):
+                return 면각.get(i + 1, 면각.get("*", 0)), "설정"
+        if 돌림자동 and z.get("종류", "pdf") == "pdf":
+            각 = 글방향_각도(sp)
+            if 각:
+                return 각, "글 방향"
+        return 0, ""
+
     for z in 순서:
         z["시작"] = 시작 = out.page_count
         src = z["원본"]
         out.insert_pdf(src, links=True, annots=True)
-        z["놓은방식"] = []
+        z["놓은방식"], z["돌림"] = [], {}
         for i in range(src.page_count):
             sp, op = src[i], out[시작 + i]
+            더, 까닭 = 돌림각(z, i, sp)
+            if 더:
+                z["돌림"][i + 1] = 더
+                돌린면.append((z, i + 1, 더, 까닭))
             if 단순상자(sp):
                 회전 = op.rotation
-                if 회전:
+                if 더:
+                    op.set_rotation((회전 + 더) % 360)
+                if op.rotation:
                     op.remove_rotation()
-                z["놓은방식"].append("회전풀고늘림" if 회전 else "늘림")
+                z["놓은방식"].append("돌려세움" if 더 else ("회전풀고늘림" if 회전 else "늘림"))
                 continue
             W, H = sp.rect.width, sp.rect.height
             C, MB, r = fitz.Rect(sp.cropbox), fitz.Rect(sp.mediabox), sp.rotation
+            r2 = (r + 더) % 360                  # 보이는 회전에 바로 세우는 각도를 더한다
             tmp = fitz.open()
             tmp.insert_pdf(src, from_page=i, to_page=i)
             tmp.bake(annots=True, widgets=True)
             tp = tmp[0]
             tp.set_cropbox(tp.mediabox)
+            if 더:
+                tp.set_rotation(r2)
             if tp.rotation:
                 tp.remove_rotation()
-            q = [옮김(r, x - MB.x0, y - MB.y0, MB.width, MB.height) for x in (C.x0, C.x1) for y in (C.y0, C.y1)]
+            q = [옮김(r2, x - MB.x0, y - MB.y0, MB.width, MB.height) for x in (C.x0, C.x1) for y in (C.y0, C.y1)]
             clip = fitz.Rect(min(p[0] for p in q), min(p[1] for p in q), max(p[0] for p in q), max(p[1] for p in q))
+            if 더 in (90, 270):
+                W, H = H, W
             out.delete_page(시작 + i)
             np_ = out.new_page(pno=시작 + i, width=W + B, height=H)
             np_.show_pdf_page(fitz.Rect(B, 0, W + B, H), tmp, 0, clip=clip)
             z["놓은방식"].append("놓음")
+    if 돌린면:
+        묶음 = {}
+        for z, 면, 각, 까닭 in 돌린면:
+            묶음.setdefault((z["호증"]["이름"] if z.get("호증") is not None else z["이름"], 각, 까닭), []).append(면)
+        print(f"바로 세운 면 {len(돌린면)}: " + "; ".join(f"{n} {','.join(map(str, 면들))}면({까닭}, {각}°)" for (n, 각, 까닭), 면들 in 묶음.items()))
     목차면_시작 = 1
     목록면_시작 = 1 + len(목차면들)
     목차면_자리 = {}
@@ -948,7 +1033,8 @@ def 묶기(설정경로: Path):
     기록 = {
         "앞면": 앞면수, "목차면": len(목차면들), "호증목록면": len(목록면들),
         "조각": [{"이름": z["이름"], "파일": str(z["파일"].relative_to(사건)), "시작": z["시작"] + 1, "면수": z["면수"],
-                  "놓은방식": sorted(set(z["놓은방식"])), "인용": len(z.get("인용", []))} for z in 순서],
+                  "놓은방식": sorted(set(z["놓은방식"])), "인용": len(z.get("인용", [])),
+                  **({"돌림": {str(k): v for k, v in z["돌림"].items()}} if z.get("돌림") else {})} for z in 순서],
     }
     (출력.parent / (출력.stem + "_만든기록.json")).write_text(json.dumps(기록, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"만듦: {출력.relative_to(사건)} ({out.page_count}면, {출력.stat().st_size / 1e6:.1f}MB)")
@@ -978,9 +1064,13 @@ def 확인(설정경로: Path) -> int:
         if src_p.suffix.lower() != ".pdf":
             continue
         src = fitz.open(src_p)
+        돌림 = {int(k): v for k, v in z.get("돌림", {}).items()}
         for i in range(z["면수"]):
             # 면 전체를 72dpi(1pt=1화소)로 그린 뒤 왼쪽 띠(B 화소)를 잘라 원본과 맞댄다. 잘라 그리면 보간 차이가 생긴다.
+            # 바로 세운 면은 원본 그림을 같은 각도(시계 방향)로 돌려 견준다.
             a = src[i].get_pixmap(dpi=72).pil_image().convert("L")
+            if 돌림.get(i + 1):
+                a = a.rotate(-돌림[i + 1], expand=True)
             b = d[z["시작"] - 1 + i].get_pixmap(dpi=72).pil_image().convert("L")
             b = b.crop((B, 0, b.width, b.height))
             w, h = min(a.width, b.width), min(a.height, b.height)
@@ -1013,6 +1103,9 @@ def 확인(설정경로: Path) -> int:
     print(f"확인: {출력.name} {d.page_count}면, {출력.stat().st_size / 1e6:.1f}MB")
     print(f"- 원본과 그림이 다른 본 면: {len(다른면)}" + ("" if not 다른면 else " → " + "; ".join(f"{a} {b}면({c})" for a, b, c in 다른면[:10]))
           + f" (그림 다시 압축 {'함' if 손실 else '안 함'}, 면별 평균 차이 최대 {최대평균:.2f}/255, 12pt 칸 평균 차이 최대 {최대칸}/255)")
+    세운 = [f"{z['이름'].split(' ')[0]} {z['이름'].split(' ')[1]} {','.join(z['돌림'])}면" if z["이름"].startswith(("사 ", "노 ", "노위 ", "갑 ", "을 "))
+            else f"{z['이름']} {','.join(z['돌림'])}면" for z in 기록["조각"] if z.get("돌림")]
+    print(f"- 바로 세운 면: {sum(len(z.get('돌림', {})) for z in 기록['조각'])}" + (f" ({'; '.join(세운)})" if 세운 else ""))
     print(f"- 면 안으로 가는 링크 {링크수}, 면 밖을 가리키는 링크 {바깥}")
     print(f"- 책갈피 {len(toc)}, 면 이름 예: {이름}")
     문제 = len(다른면) + 바깥 + (0 if toc else 1)
