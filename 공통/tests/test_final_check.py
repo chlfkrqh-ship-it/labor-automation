@@ -780,6 +780,72 @@ class OpinionGateTest(unittest.TestCase):
         self.assertEqual(res.대상, rev.name)
         self.assertTrue(res.넘긴판)
 
+    def 표_자리(self):
+        """검토의견()이 판례 검사에 넘긴 (대상, 대조표) 이름."""
+        본 = []
+        with mock.patch.object(fc, '판례', lambda res, 대상, table, *a, **k: 본.append((대상.name, table.name))):
+            res = fc.검토의견(self.case, 초안없음_허용=True)
+        return res, 본
+
+    def test_manuscript_named_after_case_is_an_output(self):
+        """의뢰인 명의 의견서의 원고(`{사건}-의견서원고.md`)도 우리 산출물이다(2026. 11. 6. `/하자보완`: 11. 5. SR노조 제3자 의견서를
+        밤 점검이 '검토의견서·회신초안이 없다'로 넘겨 판례 검사를 하나도 돌리지 않았다)."""
+        for p in list(self.case.iterdir()):
+            if p.suffix in ('.docx', '.md'):
+                p.unlink()
+        원고 = self.case / 'HPS_근로시간면제-의견서원고.md'
+        원고.write_text('1. 의견\n\n비공개대상정보에 해당합니다.\n', encoding='utf-8')
+        (self.case / '검색기록.md').write_text('검색 기록\n', encoding='utf-8')      # 사건 이름으로 시작하지 않는 md 는 산출물이 아니다
+        later(self.case / '검색기록.md')
+        res, 본 = self.표_자리()
+        self.assertEqual(res.대상, 원고.name)
+        self.assertEqual(본, [(원고.name, '인용대조표.md')])
+        self.assertNotIn('산출물', [n for n, _, _ in res.줄])
+
+    def test_other_manuscript_is_seen_at_night_with_its_own_table(self):
+        """검토의견서·회신초안이 있으면 다른 원고(`-추가질의 회신초안.md`)가 더 새것이어도 기본 대상은 바뀌지 않는다(회신 둘이 대조표
+        하나를 쓰는 옛 사건을 잘못 막지 않게). 밤 점검은 그날 고친 다른 원고를 그 이름의 대조표가 있으면 따로 보고, 없으면 참고로 적는다."""
+        추가 = self.case / 'HPS_근로시간면제-추가질의 회신초안.md'
+        추가.write_text('1. 추가 질의\n\n대법원 판결이 있습니다.\n', encoding='utf-8')
+        os.utime(추가, (time.time() + 30, time.time() + 30))
+        (self.case / '작업').mkdir(exist_ok=True)
+        본 = []
+        with mock.patch.object(fc, '판례', lambda res, 대상, table, *a, **k: 본.append((대상.name, table.name))):
+            결과들 = fc.돌리기(self.case, 밤=True, 끝=time.time() - 60)
+            self.assertEqual([표제 for 표제, _ in 결과들], [''])
+            self.assertEqual(결과들[0][1].대상, self.reply.name)
+            self.assertEqual(status(결과들[0][1], '다른 원고'), '참고')
+            self.assertIn('인용대조표_추가질의 회신초안.md', next(m for n, s, m in 결과들[0][1].줄 if n == '다른 원고'))
+            (self.case / '작업' / '인용대조표_추가질의 회신초안.md').write_text('| 본문 문장 |\n', encoding='utf-8')
+            본.clear()
+            결과들 = fc.돌리기(self.case, 밤=True, 끝=time.time() - 60)
+            self.assertEqual([표제 for 표제, _ in 결과들], ['', 추가.name])
+            self.assertEqual(본, [(self.reply.name, '인용대조표.md'), (추가.name, '인용대조표_추가질의 회신초안.md')])
+            self.assertNotIn('다른 원고', [n for n, _, _ in 결과들[0][1].줄])
+            결과들 = fc.돌리기(self.case, 밤=True, 끝=time.time() + 3600)      # 범위 밖에 고친 원고는 보지 않는다
+            self.assertEqual([표제 for 표제, _ in 결과들], [''])
+            결과들 = fc.돌리기(self.case, 밤=False)                              # 사건 세션의 관문은 --대상 으로 고른다
+            self.assertEqual(len(결과들), 1)
+
+    def test_review_copy_with_tracked_changes_is_not_the_target(self):
+        """같은 판의 검토용 변경 표시본은 고르지 않는다. 판 이름 'N차 수정안'의 N 으로 대조표를 나누지 않는다."""
+        깨끗 = self.case / '(HPS) 근로시간면제 관련 검토_1차 수정안.docx'
+        표시 = self.case / '(HPS) 근로시간면제 관련 검토_1차 수정안_검토용(변경분 표시).docx'
+        깨끗.write_bytes(b'PK')
+        표시.write_bytes(b'PK')
+        os.utime(표시, (time.time() + 40, time.time() + 40))
+        (self.case / '작업').mkdir(exist_ok=True)
+        (self.case / '작업' / '인용대조표_1차.md').write_text('| 본문 문장 |\n', encoding='utf-8')
+        res, 본 = self.표_자리()
+        self.assertEqual(본, [(깨끗.name, '인용대조표.md')])
+
+    def test_no_output_still_blocks_outside_night_check(self):
+        for p in list(self.case.iterdir()):
+            if p.suffix in ('.docx', '.md'):
+                p.unlink()
+        self.assertEqual(status(fc.검토의견(self.case), '산출물'), '막힘')
+        self.assertEqual(status(fc.검토의견(self.case, 초안없음_허용=True), '산출물'), '해당 없음')
+
 
 class CalcGateTest(unittest.TestCase):
     def test_calculation_case_checks_material_reading_only(self):
@@ -857,7 +923,7 @@ class NightReportTest(unittest.TestCase):
             os.utime(사건 / '라운드1' / '출력' / '서면초안.md', (옛, 옛))
             불린 = []
 
-            def 가짜(c, 라운드, 대상, 밤):
+            def 가짜(c, 라운드, 대상, 밤, 끝=None):
                 불린.append(라운드)
                 res = fc.결과()
                 res.add('증거 파악(전 면 읽기)', '막힘', '호증 2건이 덜 되었다')

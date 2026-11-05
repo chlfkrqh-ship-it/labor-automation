@@ -16,7 +16,8 @@ OneDrive 가 맞춰 두지만, 이어 쓰는 대화는 그것을 모른다. `.cl
 다만 대화 기록에 사용자가 끊은 표시가 있거나 3시간이 지났으면 끊긴 응답으로 보고 알린다.
 30분 넘게 쉬었으면 `receive.py --auto` 로 시스템 파일도 받는다.
 
-prompt 는 담당자가 결과를 지적한 것으로 보이는 메시지('왜', '빠뜨', '틀렸', '재발' 등)를 `공통/사건/_지적기록/{PC}.jsonl` 에 적는다.
+prompt 는 담당자가 결과를 지적한 것으로 보이는 메시지('왜', '빠뜨', '너무', '야지', '앞으로' 등)를 `공통/사건/_지적기록/{PC}.jsonl` 에 적는다.
+응답 도중에 보낸 말은 UserPromptSubmit 을 거치지 않으므로 stop 이 대화 기록에서 읽어 같은 낱말로 가려 적는다('응답 도중': true).
 매일 자정 `/하자보완` 이 그 기록을 읽고 지적이 지침·검사로 옮겨졌는지 본다(2026. 11. 2. 담당 노무사 "매일 자정에 자체 하자보완 시스템").
 
 어떤 오류가 나도 종료 코드 0 으로 끝나 메시지를 막지 않는다. 출력은 ASCII JSON 이다(Windows 콘솔 인코딩과 무관).
@@ -209,6 +210,10 @@ def on_stop(data: dict, root: Path, sdir: Path, now: float | None = None) -> Non
         return
     now = time.time() if now is None else now
     state = load_state(sdir, sid) or {}
+    try:                                                # 응답 도중에 보낸 지적(UserPromptSubmit 을 거치지 않는다)
+        state['queued'] = log_queued(data, root, float(state.get('queued', state.get('stop', 0.0)) or 0.0))
+    except Exception:                                   # 기록하지 못해도 응답은 막지 않는다
+        pass
     state.update(files=snapshot(root), stop=now)
     save_state(sdir, sid, state)
     prune(sdir, now)
@@ -247,27 +252,106 @@ def on_prompt(data: dict, root: Path, sdir: Path, now: float | None = None, rece
     return compose(changes, cur, since, caveat, got)
 
 
-# 담당자가 결과를 지적한 메시지(`/하자보완` 이 밤에 읽고 지침·검사로 옮겨졌는지 본다). 지나치게 넓어도 밤에 가려 읽으므로 놓치지 않는 쪽을 택한다
-지적말 = re.compile(r'왜|빠뜨|빠졌|빠진|놓쳤|놓친|틀렸|틀린|잘못|다시\s*(?:해|봐|보|확인|검토)|재발|지침화|지침\s*(?:반영|마련|으로)|'
-                 r'이상하|이상해|아니잖|아닌데|퀄리티|엉망|개판|누락|오류|실수|의문|이해할 수 없|하자(?!보완)|제대로|생경|어색')
+# 담당자가 결과를 지적한 메시지(`/하자보완` 이 밤에 읽고 지침·검사로 옮겨졌는지 본다). 지나치게 넓어도 밤에 가려 읽으므로 놓치지 않는 쪽을 택한다.
+# 2026. 11. 6. `/하자보완`: 11. 5. 지적 넷 가운데 셋('보기 좋게 돌려줘야지', '너무 길어서 … 줄여보자', '장황하게 쓰던데')이 낱말에 걸리지 않아
+# 지적기록에 없었다. 기대·평가·상시 지시의 꼴을 더하였다(지침에 옮긴 담당자 말 168개로 재어 18% → 50%, 이 PC 담당자 말 184개 가운데 15% → 34%).
+지적말 = re.compile(r'왜|빠뜨|빠졌|빠진|놓쳤|놓친|틀렸|틀린|잘못|다시\s*(?:해|봐|보|확인|검토)|재발|지침|'
+                 r'이상하|이상해|아니잖|아닌데|퀄리티|엉망|개판|누락|오류|실수|의문|이해할 수 없|하자(?!보완)|제대로|생경|어색|'
+                 r'너무|장황|길어서|길다|짧아|부족|빈약|아쉽|아쉬|별로|부적절|맘에\s*안|마음에\s*안|보기\s*(?:안|싫)|말도\s*안|말이\s*안|'
+                 r'쪽팔|창피|웃기|대충|헷갈|모르겠|불필요|필요\s*없|굳이|구태여|줄여|줄일|야지|야겠지|했어야|맞지\s*않|'
+                 r'앞으로|다음부터|다음에는|매번|있잖|했잖|말했|얘기했|아님\s*\?|아니야|아니냐|저자세|인위적|거꾸로|반대로|엉뚱|뜬금|'
+                 r'의미\s*없|ㅜ|ㅠ|느낌|좋겠|좋을\s*듯|나을\s*듯|낫겠')
+QUEUED = b'"queued_command"'
+QUEUED_TAIL = 20_000_000     # 응답 하나에 그림이 많으면 기록이 몇 MB 를 넘는다. Stop 은 응답마다 돌므로 그 응답 몫이면 된다
+
+
+def _지적기록(root: Path) -> Path | None:
+    """이 PC 의 지적기록 파일. `공통/사건/` 이 없는 곳(클라우드 세션)이면 None."""
+    base = root / '공통' / '사건'
+    if not base.is_dir():
+        return None
+    import socket
+    pc = re.sub(r'[^\w.-]', '_', os.environ.get('COMPUTERNAME') or socket.gethostname() or 'PC')
+    return base / '_지적기록' / f'{pc}.jsonl'
+
+
+def _적을_말(text) -> bool:
+    """예약 실행의 지시문·작업 알림처럼 앱이 태그로 싸서 넣는 글은 담당자의 말이 아니다."""
+    return isinstance(text, str) and not text.lstrip().startswith('<') and bool(지적말.search(text))
+
+
+def _적기(path: Path, row: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, 'a', encoding='utf-8') as f:
+        f.write(json.dumps(row, ensure_ascii=False) + '\n')
 
 
 def log_feedback(data: dict, root: Path, now: float | None = None) -> Path | None:
     """지적으로 보이는 메시지를 `공통/사건/_지적기록/{PC}.jsonl` 에 한 줄 덧붙인다(git 밖, OneDrive 로 두 PC가 함께 본다).
-    `공통/사건/` 이 없는 곳(클라우드 세션)에서는 적지 않는다. 예약 실행의 지시문처럼 앱이 태그로 싸서 넣는 글은 담당자의 말이 아니다."""
+    `공통/사건/` 이 없는 곳(클라우드 세션)에서는 적지 않는다."""
     text = data.get('prompt')
-    base = root / '공통' / '사건'
-    if not isinstance(text, str) or not base.is_dir() or text.lstrip().startswith('<') or not 지적말.search(text):
+    path = _지적기록(root)
+    if path is None or not _적을_말(text):
         return None
-    import socket
-    pc = re.sub(r'[^\w.-]', '_', os.environ.get('COMPUTERNAME') or socket.gethostname() or 'PC')
-    path = base / '_지적기록' / f'{pc}.jsonl'
-    path.parent.mkdir(parents=True, exist_ok=True)
-    row = {'시각': datetime.fromtimestamp(time.time() if now is None else now).isoformat(timespec='minutes'), 'PC': pc, 'session': data.get('session_id'),
-           'cwd': data.get('cwd'), '글': text[:2000]}
-    with open(path, 'a', encoding='utf-8') as f:
-        f.write(json.dumps(row, ensure_ascii=False) + '\n')
+    _적기(path, {'시각': datetime.fromtimestamp(time.time() if now is None else now).isoformat(timespec='minutes'), 'PC': path.stem,
+               'session': data.get('session_id'), 'cwd': data.get('cwd'), '글': text[:2000]})
     return path
+
+
+def queued_messages(transcript: str | None, since: float) -> list[tuple[float, str]]:
+    """대화 기록 끝부분에서 since 뒤에 담당자가 응답 도중에 보낸 말([(시각, 글)]). 앱은 이 말을 새 차례로 열지 않고
+    도구 결과에 끼워 넣으며(기록에는 attachment 'queued_command'), UserPromptSubmit 훅을 거치지 않는다."""
+    if not transcript:
+        return []
+    try:
+        with open(transcript, 'rb') as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - QUEUED_TAIL))
+            tail = f.read()
+    except OSError:
+        return []
+    out = []
+    for line in tail.splitlines():
+        if QUEUED not in line:
+            continue
+        try:
+            d = json.loads(line)
+            a = d.get('attachment') or {}
+            if d.get('type') != 'attachment' or a.get('type') != 'queued_command':
+                continue
+            t = datetime.fromisoformat(d['timestamp'].replace('Z', '+00:00')).timestamp()
+        except (ValueError, KeyError, TypeError, AttributeError):
+            continue
+        p = a.get('prompt')
+        if isinstance(p, list):
+            p = '\n'.join(x.get('text', '') for x in p if isinstance(x, dict) and x.get('type') == 'text')
+        if isinstance(p, str) and t > since:
+            out.append((t, p))
+    return out
+
+
+def log_queued(data: dict, root: Path, since: float) -> float:
+    """응답 도중에 보낸 말 가운데 지적으로 보이는 것을 지적기록에 적고, 본 마지막 시각을 돌려준다(Stop 훅이 부른다).
+    같은 말이 이미 적혀 있으면(프롬프트 훅이 적었으면) 다시 적지 않는다. 2026. 11. 6. `/하자보완`: 이 PC 에서 11. 2. 뒤 담당자 말 69개 가운데
+    22개가 응답 도중에 보낸 말이었고, 지적기록에는 하나도 없었다(11. 5. OES '상대방 주장 짧게 언급하고 이에 답변하는 형식이 좋겠고' 등)."""
+    msgs = queued_messages(data.get('transcript_path'), since)
+    path = _지적기록(root)
+    if path is None:
+        return max([since] + [t for t, _ in msgs])
+    적힌 = set()
+    if path.exists():
+        for line in path.read_text(encoding='utf-8', errors='replace').splitlines()[-300:]:
+            try:
+                적힌.add(re.sub(r'\s+', '', json.loads(line).get('글', ''))[:80])
+            except (ValueError, AttributeError):
+                continue
+    for t, text in msgs:
+        key = re.sub(r'\s+', '', text)[:80]
+        if _적을_말(text) and key not in 적힌:
+            적힌.add(key)
+            _적기(path, {'시각': datetime.fromtimestamp(t).isoformat(timespec='minutes'), 'PC': path.stem, 'session': data.get('session_id'),
+                       'cwd': data.get('cwd'), '글': text[:2000], '응답 도중': True})
+    return max([since] + [t for t, _ in msgs])
 
 
 def main(argv: list[str] | None = None) -> int:

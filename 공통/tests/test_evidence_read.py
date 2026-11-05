@@ -254,14 +254,16 @@ class EvidenceReadTest(unittest.TestCase):
         make_pdf(case / '(리서치) 근로시간면제 관련.pdf', [글])                       # 우리 리서치 문서(2026. 11. 5.)
         make_pdf(case / 'RE_ [법무법인 평안] (HPS) 의견서 수정 요청.pdf', [글])      # 우리 메일에 단 의뢰인 회신은 자료이다
         for 우리 in ('(HPS) 근로시간면제 관련 검토_최종.docx', '(HPS) 답변서_수정(클린).docx', '261013_(HPS) 답변서_수정(검토, 변경 표시).docx',
-                   '(HPS) 근로시간면제 관련 검토_Rev_1.docx', '(HPS 견적) 수행 실적_초안.docx'):
+                   '(HPS) 근로시간면제 관련 검토_Rev_1.docx', '(HPS 견적) 수행 실적_초안.docx',
+                   '(HPS) 제3자 의견서(비공개 요청서)_초안.hwp', '(HPS) 의견서_간이안.hwpx'):    # 한글로 만든 우리 초안(2026. 11. 6.)
             (case / 우리).write_bytes(b'x')
         # 의뢰인이 보낸 판 이름 붙은 파일은 자료이다(2026. 11. 5. 삼양인터내셔날 '답변서_최종.docx' 가 산출물로 빠졌다)
-        for 자료 in ('답변서_최종.docx', '1. 2025년 일반직 임금협약서_최종.pdf', '영업양수도계약서_초안.pdf', '(주)HPS 계약서_최종.pdf'):
+        for 자료 in ('답변서_최종.docx', '1. 2025년 일반직 임금협약서_최종.pdf', '영업양수도계약서_초안.pdf', '(주)HPS 계약서_최종.pdf',
+                   '취업규칙 개정안_초안.hwp', '(주)HPS 인사규정_초안.hwp'):
             (case / 자료).write_bytes(b'x')
         self.assertEqual(sorted(er.자료_목록(case, [case])), sorted(['RE_ [법무법인 평안] (HPS) 의견서 수정 요청.pdf', '단체협약.pdf', '상대방 별지 계산표.xlsx',
                                                                '답변서_최종.docx', '1. 2025년 일반직 임금협약서_최종.pdf', '영업양수도계약서_초안.pdf',
-                                                               '(주)HPS 계약서_최종.pdf']))
+                                                               '(주)HPS 계약서_최종.pdf', '취업규칙 개정안_초안.hwp', '(주)HPS 인사규정_초안.hwp']))
 
 
 class CheaperReadingTest(unittest.TestCase):

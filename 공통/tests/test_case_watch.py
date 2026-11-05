@@ -215,6 +215,47 @@ class CaseWatchTests(unittest.TestCase):
         self.assertEqual(rows[0]['글'], '증거를 왜 빠뜨렸는지 확인하고 재발 방지')
         self.assertEqual(rows[0]['PC'], 'HOME-PC')
 
+    def test_expectations_and_standing_instructions_are_logged(self):
+        """2026. 11. 5. 지적 셋이 낱말에 걸리지 않았다. 기대('~야지')·평가('너무', '장황')·상시 지시('앞으로')도 적는다."""
+        (self.root / '공통' / '사건').mkdir(parents=True, exist_ok=True)
+        with mock.patch.dict(os.environ, {'COMPUTERNAME': 'HOME-PC'}):
+            for 말 in ('사 제14호증같이 돌려져서 제출한건 적어도 내가 심문회의에서 볼 땐 보기 좋게 돌려줘야지 ;',
+                      '최종진술 2. 부분은 잘 정리했는데 너무 길어서 위원들 집중 떨어질 수 있으니 분량좀 줄여보자',
+                      '보니까 초안 만들면 메일 본문에 좀 장황하게 쓰던데, 어짜피 내부적으로 보내는 거니까 최소화해주기 바람',
+                      '오 좋아 잘 고쳤네 앞으로도 들어오는 족족 어느 피시에서든 이렇게 진행해보자고',
+                      '뭔가 여전히 증거는 대충 읽는 느낌이 있네'):
+                self.assertIsNotNone(cw.log_feedback({'prompt': 말, 'session_id': 's'}, self.root), 말)
+            for 말 in ('좋아 진행해', '둘 다 넣어 줘', '팀즈에 심문회의 결과 올림 확인해봐 수고 많았다'):
+                self.assertIsNone(cw.log_feedback({'prompt': 말, 'session_id': 's'}, self.root), 말)
+
+    def test_messages_sent_during_a_reply_are_logged_at_stop(self):
+        """응답 도중에 보낸 말(대화 기록의 attachment 'queued_command')은 UserPromptSubmit 을 거치지 않으므로 Stop 이 적는다.
+        지난 Stop 앞의 말·작업 알림·지적이 아닌 말은 적지 않고, 프롬프트 훅이 이미 적은 말은 되풀이하지 않는다."""
+        base = self.root / '공통' / '사건'
+        base.mkdir(parents=True, exist_ok=True)
+        log = base / '_지적기록' / 'HOME-PC.jsonl'
+
+        def 끼운말(t, 말):
+            return {'type': 'attachment', 'timestamp': iso(t), 'attachment': {'type': 'queued_command', 'prompt': 말}}
+
+        옛 = 끼운말(T0 - 100, '증거를 왜 빠뜨렸어')
+        with mock.patch.dict(os.environ, {'COMPUTERNAME': 'HOME-PC'}):
+            self.write_transcript(옛)
+            cw.on_stop(self.data, self.root, self.state, now=T0)
+            self.assertEqual(len(log.read_text(encoding='utf-8').splitlines()), 1)          # 첫 Stop 은 그 응답의 말을 본다
+            cw.log_feedback({'prompt': '이미 적힌 말인데 너무 장황해', 'session_id': 'sess-1'}, self.root)
+            self.write_transcript(옛, 끼운말(T0 + 10, '상대방 주장 짧게 언급하고 이에 답변하는 형식이 좋겠고\n2문단은 좀만 더 보충해주고'),
+                                  끼운말(T0 + 11, '<task-notification>\n<status>completed</status>\n왜</task-notification>'),
+                                  끼운말(T0 + 12, '아 그 아이패드 자료에는 qna 넣고'),
+                                  끼운말(T0 + 14, '이미 적힌 말인데 너무 장황해'))
+            cw.on_stop(self.data, self.root, self.state, now=T0 + 20)
+            rows = [json.loads(l) for l in log.read_text(encoding='utf-8').splitlines()]
+            self.assertEqual([r['글'][:12] for r in rows], ['증거를 왜 빠뜨렸어', '이미 적힌 말인데 너무', '상대방 주장 짧게 언급'])
+            self.assertTrue(rows[2]['응답 도중'])
+            self.assertEqual(rows[2]['session'], 'sess-1')
+            cw.on_stop(self.data, self.root, self.state, now=T0 + 30)                       # 같은 말을 다시 적지 않는다
+            self.assertEqual(len(log.read_text(encoding='utf-8').splitlines()), 3)
+
     def test_old_baselines_are_pruned(self):
         self.state.mkdir(parents=True)
         old = self.state / 'old-session.json'
