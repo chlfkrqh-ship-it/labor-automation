@@ -20,6 +20,9 @@ prompt 는 담당자가 결과를 지적한 것으로 보이는 메시지('왜',
 응답 도중에 보낸 말은 UserPromptSubmit 을 거치지 않으므로 stop 이 대화 기록에서 읽어 같은 낱말로 가려 적는다('응답 도중': true).
 매일 자정 `/하자보완` 이 그 기록을 읽고 지적이 지침·검사로 옮겨졌는지 본다(2026. 11. 2. 담당 노무사 "매일 자정에 자체 하자보완 시스템").
 
+stop 은 마지막 보고나 마무리 요약(wrap_up 의 recap·ask)이 영어이면 한국어로 다시 쓰라는 막음(decision: block)을 한 번 낸다
+(2026. 11. 7. `/하자보완`, 아래 '영어 보고'). 담당자가 영어·번역을 시킨 차례는 막지 않는다.
+
 어떤 오류가 나도 종료 코드 0 으로 끝나 메시지를 막지 않는다. 출력은 ASCII JSON 이다(Windows 콘솔 인코딩과 무관).
 """
 from __future__ import annotations
@@ -204,10 +207,11 @@ def compose(changes: list[str], cur: dict, since: float, caveat: bool, got: str)
             'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'additionalContext': '\n'.join(context)}}
 
 
-def on_stop(data: dict, root: Path, sdir: Path, now: float | None = None) -> None:
+def on_stop(data: dict, root: Path, sdir: Path, now: float | None = None) -> dict | None:
+    """응답을 마칠 때. 마지막 보고나 마무리 요약이 영어이면 한국어로 다시 쓰게 막는 답(dict)을 돌려준다(아래 '영어 보고')."""
     sid = session_id(data)
     if not sid:
-        return
+        return None
     now = time.time() if now is None else now
     state = load_state(sdir, sid) or {}
     try:                                                # 응답 도중에 보낸 지적(UserPromptSubmit 을 거치지 않는다)
@@ -217,6 +221,83 @@ def on_stop(data: dict, root: Path, sdir: Path, now: float | None = None) -> Non
     state.update(files=snapshot(root), stop=now)
     save_state(sdir, sid, state)
     prune(sdir, now)
+    try:
+        return 영어_보고_막기(data)
+    except Exception:                                   # 판별하지 못하면 막지 않는다
+        return None
+
+
+# 영어 보고. 담당자에게 하는 보고와 마무리 요약(wrap_up 의 recap·ask)은 한국어로 쓴다(루트 CLAUDE.md, `공통/운영.md` '작업 보고').
+# 2026. 9. 14.·9. 17. 에 이어 2026. 11. 6. SR노조 제3자 의견서에서 긴 작업 끝의 recap 과 마지막 보고를 영어로 써서 담당 노무사가 "왠 영어?"라고
+# 짚었다. 2026. 11. 7. `/하자보완`: 글로만 있던 규칙을 기계로 잡는다. 코드·경로·주소를 걷어 낸 글의 한글 글자가 영문 글자의 절반이 안 되면
+# 영어로 본다(이 PC 의 마지막 응답 448개로 재니 영어 보고 4개는 0.0~0.19, 한국어 보고는 가장 낮은 것이 4.77). 담당자가 영어·번역을 시킨 차례와
+# 이 훅이 이미 한 번 막은 뒤(stop_hook_active)에는 막지 않는다.
+보고_꼬리 = 3_000_000
+영어_요청 = re.compile(r'영어|영문|영작|번역|English|english|translate', re.I)
+
+
+def 영어인가(text: str, 최소: int = 120) -> bool:
+    t = re.sub(r'```.*?```', ' ', text or '', flags=re.S)
+    t = re.sub(r'`[^`\n]*`', ' ', t)
+    t = re.sub(r'https?://\S+', ' ', t)
+    t = re.sub(r'\]\([^)]*\)', ']', t)
+    t = re.sub(r'[\w.\-]*[\\/][\w.\-\\/ ]*\.\w{1,5}', ' ', t)
+    t = re.sub(r'\b[\w\-]+\.(?:py|md|docx|pdf|hwpx?|json|jsonl|xlsx|zip|txt|bat|ps1|png)\b', ' ', t)
+    한글 = len(re.findall(r'[가-힣]', t))
+    영문 = len(re.findall(r'[A-Za-z]', t))
+    return 영문 >= 최소 and 한글 < 영문 * 0.5
+
+
+def 마지막_차례(transcript: str | None) -> tuple:
+    """(담당자의 마지막 말, 그 뒤 마지막 응답 글, 그 뒤 wrap_up 의 recap·ask). 대화 기록 끝부분만 읽는다."""
+    if not transcript:
+        return '', '', ''
+    try:
+        with open(transcript, 'rb') as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 보고_꼬리))
+            tail = f.read()
+    except OSError:
+        return '', '', ''
+    사람, 응답, 요약 = '', '', ''
+    for line in tail.splitlines():
+        if b'"user"' not in line and b'"assistant"' not in line:
+            continue
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        c = (d.get('message') or {}).get('content')
+        if d.get('type') == 'user' and not d.get('isMeta') and not d.get('isCompactSummary'):
+            if isinstance(c, list) and any(isinstance(x, dict) and x.get('type') == 'tool_result' for x in c):
+                continue
+            글 = c if isinstance(c, str) else '\n'.join(x.get('text', '') for x in c or [] if isinstance(x, dict) and x.get('type') == 'text')
+            if 글.strip() and not 글.lstrip().startswith('<'):
+                사람, 응답, 요약 = 글, '', ''
+        elif d.get('type') == 'assistant' and isinstance(c, list):
+            for x in c:
+                if not isinstance(x, dict):
+                    continue
+                if x.get('type') == 'text' and x.get('text', '').strip():
+                    응답 = x['text']
+                elif x.get('type') == 'tool_use' and str(x.get('name', '')).endswith('wrap_up'):
+                    i = x.get('input') or {}
+                    요약 = ' '.join(str(i.get(k) or '') for k in ('recap', 'ask'))
+    return 사람, 응답, 요약
+
+
+def 영어_보고_막기(data: dict) -> dict | None:
+    if data.get('stop_hook_active'):
+        return None
+    사람, 응답, 요약 = 마지막_차례(data.get('transcript_path'))
+    if 영어_요청.search(사람):
+        return None
+    if 영어인가(응답) or 영어인가(요약, 60):
+        return {'decision': 'block',
+                'reason': '마지막 보고나 마무리 요약(wrap_up 의 recap·ask)이 영어로 쓰였습니다. 담당자에게 하는 보고는 모두 한국어로 씁니다'
+                          "(루트 CLAUDE.md, 공통/운영.md '작업 보고'). 내용은 그대로 두고 한국어로 다시 쓰고, 마무리 요약을 영어로 냈으면 "
+                          'wrap_up 도 한국어로 다시 부릅니다.'}
+    return None
 
 
 def on_prompt(data: dict, root: Path, sdir: Path, now: float | None = None, receive=run_receive) -> dict | None:
@@ -377,7 +458,7 @@ def main(argv: list[str] | None = None) -> int:
     out = None
     try:
         if args.mode == 'stop':
-            on_stop(data, args.root, sdir)
+            out = on_stop(data, args.root, sdir)
         else:
             try:
                 log_feedback(data, args.root)

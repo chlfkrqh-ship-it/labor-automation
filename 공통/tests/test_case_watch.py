@@ -258,6 +258,37 @@ class CaseWatchTests(unittest.TestCase):
             cw.on_stop(self.data, self.root, self.state, now=T0 + 30)                       # 같은 말을 다시 적지 않는다
             self.assertEqual(len(log.read_text(encoding='utf-8').splitlines()), 3)
 
+    def test_english_report_is_sent_back_once(self):
+        """2026. 11. 7. `/하자보완`: 마지막 보고·마무리 요약이 영어이면 Stop 이 한국어로 다시 쓰게 막는다(11. 6. "왠 영어?").
+        코드·경로가 많은 한국어 보고, 담당자가 번역을 시킨 차례, 이미 한 번 막은 뒤(stop_hook_active)에는 막지 않는다."""
+        영어 = ('The 제3자 의견서 now cites the three lower-court judgments and has 참고자료 1~12 attached. The final check came back with 0 blocks. '
+              '소요시간: 약 40분 (03:52~04:31). **판결 3건 반영** - I read all pages of the three judgments, including the image pages. '
+              '- Added 울산지방법원 2016구합5376 and 서울행정법원 2016구합74125. In both, a member of another union requested a union '
+              "officer's attendance records, and the court held the exception did not apply.")
+        한국어 = ('제3자 의견서에 하급심 3건을 넣고 참고자료 12건을 붙였습니다. 최종 관문은 막힘 0입니다. `python -B 공통/scripts/final_check.py "1_검토의견/사건/SR노조"` '
+               '결과는 [SR노조_정보공개 제3자 의견서-의견서원고.md](1_검토의견/사건/SR노조_정보공개%20제3자%20의견서/x.md) 에 있습니다.\n```\nRan 637 tests in 371.660s\nOK\n```')
+
+        def 차례(사람, 응답, recap=''):
+            줄 = [{'type': 'user', 'timestamp': iso(T0), 'message': {'role': 'user', 'content': 사람}},
+                 {'type': 'assistant', 'timestamp': iso(T0 + 5), 'message': {'content': [{'type': 'text', 'text': '진행 중입니다.'}]}}]
+            if recap:
+                줄.append({'type': 'assistant', 'timestamp': iso(T0 + 6),
+                          'message': {'content': [{'type': 'tool_use', 'name': 'mcp__ccd_turn__wrap_up', 'input': {'recap': recap}}]}})
+            줄.append({'type': 'assistant', 'timestamp': iso(T0 + 7), 'message': {'content': [{'type': 'text', 'text': 응답}]}})
+            self.write_transcript(*줄)
+
+        차례('하급심 판결 넣어줘', 영어)
+        막음 = cw.on_stop(self.data, self.root, self.state, now=T0 + 10)
+        self.assertEqual(막음['decision'], 'block')
+        self.assertIn('한국어', 막음['reason'])
+        self.assertIsNone(cw.on_stop({**self.data, 'stop_hook_active': True}, self.root, self.state, now=T0 + 11))   # 한 번만 막는다
+        차례('하급심 판결 넣어줘', 한국어)
+        self.assertIsNone(cw.on_stop(self.data, self.root, self.state, now=T0 + 12))
+        차례('하급심 판결 넣어줘', 한국어, recap='The 의견서 now cites three more judgments and the final check came back clean with no blocks.')
+        self.assertEqual(cw.on_stop(self.data, self.root, self.state, now=T0 + 13)['decision'], 'block')      # 마무리 요약만 영어여도
+        차례('이 메일 영어로 번역해줘', 영어)
+        self.assertIsNone(cw.on_stop(self.data, self.root, self.state, now=T0 + 14))                         # 영어를 시킨 차례
+
     def test_old_baselines_are_pruned(self):
         self.state.mkdir(parents=True)
         old = self.state / 'old-session.json'
