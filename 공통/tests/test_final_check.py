@@ -570,6 +570,35 @@ class CaseLawGateTest(unittest.TestCase):
         self.assertIn('문제 1건', 말)
         self.assertNotIn('대조.md', 말)
 
+    def test_without_pdf_folder_the_viewing_record_is_checked(self):
+        """2026. 11. 6. 담당자 지시로 대조용 판결문 PDF 를 받지 않고 법제처 본문·LBOX 화면 글을 열람해 맞댄다.
+        PDF 폴더가 없으면 판결원문_열람대조.md 의 '사람 판정' 표를 보고, 그 기록도 없으면 막는다."""
+        폴더 = self.d / '자문'
+        (폴더 / '작업').mkdir(parents=True)
+        table = 폴더 / '작업' / '인용대조표.md'
+        table.write_text('| 번호 | 사건 표시 | 원문 문장 |\n|---|---|---|\n| 1 | 대법원 2020. 1. 1. 선고 2019두1 판결 | 가 |\n', encoding='utf-8')
+        대상 = 폴더 / '회신초안.md'
+        대상.write_text('본문\n', encoding='utf-8')
+        머리 = ('# 판결 원문 열람 대조\n\n## 사람 판정\n\n'
+              '| 줄 | 판결 | 원문의 자리 | 판단 부분인지 | 방향 | 사안 비교 | 비고 |\n|---|---|---|---|---|---|---|\n')
+        with mock.patch.object(fc, 'RUN', lambda args: (0, 'ok')):
+            res = fc.결과()
+            fc.판례(res, 대상, table, 폴더 / '작업' / '인용판결_PDF', 폴더)
+            self.assertEqual(status(res, '판결 원문 대조'), '막힘')
+            (폴더 / '작업' / '판결원문_열람대조.md').write_text(
+                머리 + '| 1 | 대법원 2020. 1. 1. 선고 2019두1 판결 | 판결요지(주의: 앞 글이 원심 판단) | 판단 부분 | 같은 방향 |  |  |\n', encoding='utf-8')
+            res = fc.결과()
+            fc.판례(res, 대상, table, 폴더 / '작업' / '인용판결_PDF', 폴더)
+            self.assertEqual(status(res, '판결 판단 부분·방향·사안 비교'), '막힘')
+            self.assertIn('1(사안 비교, 비고(주의 줄))', res.줄[-1][2])
+            (폴더 / '작업' / '판결원문_열람대조.md').write_text(
+                머리 + '| 1 | 대법원 2020. 1. 1. 선고 2019두1 판결 | 판결요지(주의: 앞 글이 원심 판단) | 판단 부분 | 같은 방향 | 사안이 다름 | 원심 판단은 인용하지 않음 |\n',
+                encoding='utf-8')
+            res = fc.결과()
+            fc.판례(res, 대상, table, 폴더 / '작업' / '인용판결_PDF', 폴더)
+            self.assertEqual(status(res, '판결 판단 부분·방향·사안 비교'), '통과')
+            self.assertNotIn('판결문 PDF', [n for n, _, _ in res.줄])
+
     def test_pointer_or_one_grouped_sentence_is_not_the_handling_of_each_row(self):
         """2026. 11. 3. '수확 목록'이라는 말이 사건상태의 파일 안내에 한 번만 있어도 기록에 없는 줄 전부를 가린 것으로 보았고,
         고친 뒤에도 '나머지는 사안이 다름' 한 문장으로 161건이 지나갔다. 처리는 보고서의 줄마다 적는다."""
