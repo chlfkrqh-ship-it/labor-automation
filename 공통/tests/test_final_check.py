@@ -924,6 +924,40 @@ class BriefCaseOtherOutputTest(unittest.TestCase):
         self.assertEqual(status(res, '판례 대조'), '막힘')                 # 가리키는 대조표가 없으면 막는다
 
 
+class FinalCopyTest(unittest.TestCase):
+    """2026. 11. 7. `/하자보완`: 의뢰인 송부판(`_최종`)의 확인(변경 추적·메모 없음, 작성자 '법무법인 평안', Word 로 내보낸 PDF)이 글로만 있었다."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.docx = Path(self.tmp.name) / '(가나) 휴가 관련 검토_최종.docx'
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def make(self, 본문='<w:p><w:r><w:t>본문</w:t></w:r></w:p>', 메모='', 작성자='법무법인 평안', 수정자='법무법인 평안'):
+        with zipfile.ZipFile(self.docx, 'w') as z:
+            z.writestr('word/document.xml', f'<w:document><w:body>{본문}</w:body></w:document>')
+            if 메모:
+                z.writestr('word/comments.xml', f'<w:comments>{메모}</w:comments>')
+            z.writestr('docProps/core.xml', f'<cp:coreProperties><dc:creator>{작성자}</dc:creator><cp:lastModifiedBy>{수정자}</cp:lastModifiedBy></cp:coreProperties>')
+
+    def test_final_copy_is_clean_named_and_exported(self):
+        self.make()
+        self.assertEqual(fc.최종판_검사(self.docx)[0], '막힘')                       # PDF 가 없다
+        self.docx.with_suffix('.pdf').write_bytes(b'%PDF')
+        later(self.docx.with_suffix('.pdf'))
+        self.assertEqual(fc.최종판_검사(self.docx), ('통과', f'{self.docx.name} 변경 추적·메모 없음, 작성자 법무법인 평안, PDF 있음'))
+        self.make(본문='<w:ins w:author="최락보"><w:r><w:t>더함</w:t></w:r></w:ins>', 메모='<w:comment w:id="0"/>', 수정자='최락보 노무사')
+        later(self.docx.with_suffix('.pdf'))
+        상태, 말 = fc.최종판_검사(self.docx)
+        self.assertEqual(상태, '막힘')
+        for 낱말 in ('변경 추적 1곳', '메모 1개', "마지막으로 수정한 사람 '최락보 노무사'"):
+            self.assertIn(낱말, 말)
+        self.make(작성자='법무법인 평안 강민석 변호사')                               # 개인 이름을 붙인 작성자도 고친다
+        later(self.docx.with_suffix('.pdf'))
+        self.assertIn("작성자 '법무법인 평안 강민석 변호사'", fc.최종판_검사(self.docx)[1])
+
+
 class OpinionGateTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

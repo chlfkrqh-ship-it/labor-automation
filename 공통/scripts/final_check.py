@@ -47,6 +47,7 @@
                  PDF 를 받아 두었으면 작업/인용판결_PDF)
   자료 파악      evidence_read.py check --자료 — 사건 폴더의 의뢰인 자료마다 전 면 읽기 기록
   문체           루트 CLAUDE.md 가 쓰지 말라고 한 낙관 표현과 '적다'(→ 기재하다). 보완 메모는 보지 않는다
+  송부판(_최종)  사건 폴더 맨 위의 `_최종.docx` 마다 변경 추적·메모가 없고 작성자·마지막 수정자가 '법무법인 평안'이며 같은 이름의 PDF 가 낡지 않았다(7절)
 계산(6_손해배상계산/사건/{사건명})
   자료 파악      evidence_read.py check --자료 — 받은 자료마다 전 면 읽기 기록(`/손배계산` 2-1·3-1절)
 
@@ -970,7 +971,42 @@ def 검토의견(사건: Path, 대상=None, 초안없음_허용=False) -> 결과
     걸림 = [w for w in 낙관 if w in text] + [m.group(0) for m in 적다.finditer(text)]
     res.add('문체(낙관 표현·적다)', '막힘' if 걸림 else '통과',
             ('쓰지 않는 표현: ' + ', '.join(dict.fromkeys(걸림))) if 걸림 else '낙관 표현·적다 없음')
+    for 최종 in sorted(p for p in 사건.glob('*_최종.docx') if not p.name.startswith('~$')):
+        res.add('송부판(_최종)', *최종판_검사(최종))
     return res
+
+
+def 최종판_검사(docx: Path) -> tuple:
+    """(상태, 말). 의뢰인에게 보낼 `_최종` docx 에 변경 추적·메모가 남지 않았고 작성자·마지막으로 수정한 사람이 '법무법인 평안'이며,
+    Word 로 내보낸 같은 이름의 PDF 가 docx 보다 낡지 않았는가(`1_검토의견/CLAUDE.md` 7절). 2026. 11. 7. `/하자보완`: 11. 6. 담당 노무사가
+    정한 이 확인("_최종 이런거")이 글로만 있었다. PDF 면수와 Word 면수의 맞대기는 Word 가 있어야 하므로 작성 세션이 한다."""
+    문제 = []
+    try:
+        with zipfile.ZipFile(docx) as z:
+            이름들 = z.namelist()
+            본문 = ''.join(z.read(n).decode('utf-8', 'replace') for n in 이름들 if re.fullmatch(r'word/(?:document|footnotes|endnotes|header\d*|footer\d*)\.xml', n))
+            메모 = z.read('word/comments.xml').decode('utf-8', 'replace') if 'word/comments.xml' in 이름들 else ''
+            core = z.read('docProps/core.xml').decode('utf-8', 'replace') if 'docProps/core.xml' in 이름들 else ''
+    except (OSError, zipfile.BadZipFile, KeyError) as e:
+        return '막힘', f'{docx.name} 을 열지 못했다({e})'
+    추적 = len(re.findall(r'<w:(?:ins|del|moveFrom|moveTo)\b', 본문))
+    if 추적:
+        문제.append(f'변경 추적 {추적}곳')
+    if re.search(r'<w:comment\b', 메모):
+        문제.append(f"메모 {len(re.findall(r'<w:comment\b', 메모))}개")
+    for 칸, 이름 in (('dc:creator', '작성자'), ('cp:lastModifiedBy', '마지막으로 수정한 사람')):
+        m = re.search(rf'<{칸}>(.*?)</{칸}>', core, re.S)
+        값 = html.unescape(m.group(1)).strip() if m else ''
+        if 값 != '법무법인 평안':
+            문제.append(f"{이름} '{값}'")
+    pdf = docx.with_suffix('.pdf')
+    if not pdf.is_file():
+        문제.append(f'{pdf.name} 없음')
+    elif pdf.stat().st_mtime + 1 < docx.stat().st_mtime:
+        문제.append(f'{pdf.name} 이 docx 보다 낡음')
+    if 문제:
+        return '막힘', f"{docx.name}: {', '.join(문제)} — 변경 추적·메모를 걷고 문서 속성을 '법무법인 평안'으로 맞춘 뒤 Word 로 PDF 를 다시 내보낸다(`1_검토의견/CLAUDE.md` 7절)"
+    return '통과', f'{docx.name} 변경 추적·메모 없음, 작성자 법무법인 평안, PDF 있음'
 
 
 # ---------------------------------------------------------------- 계산
