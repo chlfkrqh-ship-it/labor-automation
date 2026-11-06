@@ -70,6 +70,24 @@ class SortTest(unittest.TestCase):
         self.assertEqual(새자리['노제1호증_취업규칙.pdf'], (es.우리, es.상대))
         self.assertEqual(새자리['사제2호증_문자.pdf'], (es.상대, es.우리))      # 반대쪽에 잘못 든 것도 옮긴다
 
+    def test_no_opposing_side_when_the_list_uses_only_jeung(self):
+        """심사청구처럼 호증을 주고받지 않는 절차(호증목록이 '증 제N호증')에서는 민사 기록의 피고 서면·서증을 상대증거/ 로 옮기지 않는다.
+        법원 문서·제3자 회신은 참고자료/ 로 옮긴다(2026. 11. 7. `/하자보완`, 이승민 심사청구). 다른 부호가 함께 있으면 종전대로 나눈다."""
+        (self.case / '증거관리').mkdir()
+        목록 = self.case / '증거관리' / '우리호증목록.md'
+        목록.write_text('| 호증번호 | 파일명 |\n|---|---|\n| 증 제1호증 | a |\n| 증 제20호증 | 민사 을나2 발췌 |\n', encoding='utf-8')
+        (self.case / '증거관리' / '상대호증목록.md').write_text('| 호증번호 | 파일명 |\n|---|---|\n', encoding='utf-8')
+        안 = es.계획(self.case, self.r)
+        새자리 = {n: 새 for _, 새, n, _ in 안['옮김']}
+        for n in (피고서면, 피고서증, 잘린서증):
+            self.assertNotIn(n, 새자리)
+        그대로 = {n: 이유 for _, n, 이유 in 안['그대로']}
+        self.assertIn('주고받지 않는 절차', 그대로[피고서면])
+        self.assertEqual((새자리[법원1], 새자리[법원2], 새자리[제3자]), (es.참고, es.참고, es.참고))
+        목록.write_text(목록.read_text(encoding='utf-8') + '| 갑 제1호증 | b |\n', encoding='utf-8')     # 소송 라운드가 함께 있으면 종전대로
+        새자리 = {n: 새 for _, 새, n, _ in es.계획(self.case, self.r)['옮김']}
+        self.assertEqual(새자리[피고서면], es.상대)
+
     def test_apply_moves_and_fixes_paths_and_is_idempotent(self):
         기록 = self.case / '증거관리' / '호증읽기'
         기록.mkdir(parents=True)

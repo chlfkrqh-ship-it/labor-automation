@@ -599,6 +599,97 @@ class CaseLawGateTest(unittest.TestCase):
             self.assertEqual(status(res, '판결 판단 부분·방향·사안 비교'), '통과')
             self.assertNotIn('판결문 PDF', [n for n, _, _ in res.줄])
 
+    def test_supreme_court_disposition_is_checked_in_the_viewing_record(self):
+        """2026. 11. 7. `/하자보완`: 열람 대조로 바꾼 뒤(11. 6.) 관문이 산출물에 적은 상급심의 처리를 판결문으로 보았는지 보지 않았다
+        (PDF 대조의 상급심 검사가 하던 일, 2026. 11. 2. 이케아 각주 16). '확정' 칸의 대법원 번호가 산출물에 나오고 심리불속행·문서 없음 표기가
+        없으면 열람 대조 기록의 '상급심' 절에 그 번호가 있어야 한다. 산출물에 상급심을 적지 않은 글은 보지 않는다."""
+        폴더 = self.d / '자문'
+        (폴더 / '작업').mkdir(parents=True)
+        table = 폴더 / '작업' / '인용대조표.md'
+        table.write_text('| 번호 | 사건 표시 | 원문 문장 | 확정 |\n|---|---|---|---|\n'
+                         '| 1 | 서울고등법원 2021. 1. 1. 선고 2020누1 판결 | 가 | 대법원 2021두9 판결로 확정 |\n'
+                         '| 2 | 서울고등법원 2022. 1. 1. 선고 2021누2 판결 | 나 | 대법원 2022두8 심리불속행 기각으로 확정 |\n', encoding='utf-8')
+        대상 = 폴더 / '회신초안.md'
+        대상.write_text('서울고등법원 2020누1 판결(대법원 2021두9 판결로 확정), 서울고등법원 2021누2 판결(대법원 2022두8 심리불속행 기각으로 확정)\n',
+                      encoding='utf-8')
+        판정 = ('# 판결 원문 열람 대조\n\n## 사람 판정\n\n| 줄 | 판결 | 원문의 자리 | 판단 부분인지 | 방향 | 사안 비교 | 비고 |\n|---|---|---|---|---|---|---|\n'
+              '| 1 | 2020누1 | 이유 2. | 판단 | 같음 | 같음 | |\n| 2 | 2021누2 | 이유 3. | 판단 | 같음 | 같음 | |\n')
+        열람 = 폴더 / '작업' / '판결원문_열람대조.md'
+        열람.write_text(판정, encoding='utf-8')
+
+        def 돌림():
+            res = fc.결과()
+            fc.판례(res, 대상, table, 폴더 / '작업' / '인용판결_PDF', 폴더)
+            return res
+        with mock.patch.object(fc, 'RUN', lambda args: (0, 'ok')):
+            res = 돌림()
+            self.assertEqual(status(res, '상급심 처리'), '막힘')
+            말 = next(m for n, _, m in res.줄 if n == '상급심 처리')
+            self.assertIn('1 대법원 2021두9', 말)
+            self.assertNotIn('2022두8', 말)                 # 심리불속행 표기는 판결문이 없어도 칸의 표기대로 넘어간다
+            열람.write_text(판정 + '\n## 상급심의 처리\n\n| 줄 | 산출물의 표기 | 확인한 것 |\n|---|---|---|\n'
+                          '| 1 | 대법원 2021두9 판결로 확정 | 2021두9 화면 글(상고이유를 판단한 뒤 상고기각) |\n', encoding='utf-8')
+            self.assertEqual(status(돌림(), '상급심 처리'), '통과')
+            열람.write_text(판정 + '\n## 원문 자리\n\n대법원 2021두9 는 다음에 본다.\n', encoding='utf-8')     # 다른 절에 번호만 있으면 본 것이 아니다
+            self.assertEqual(status(돌림(), '상급심 처리'), '막힘')
+            대상.write_text('서울고등법원 2020누1 판결, 서울고등법원 2021누2 판결\n', encoding='utf-8')     # 상급심을 적지 않은 글
+            self.assertNotIn('상급심 처리', [n for n, _, _ in 돌림().줄])
+
+    def test_pdf_folder_case_takes_the_viewing_record_for_rows_without_pdf(self):
+        """2026. 11. 7. `/하자보완`: 판결문 PDF 를 받아 둔 사건(PDF 폴더 있음)에서 고친 판에 더한 판결·상급심은 11. 6. 지시로 PDF 를 받지 않는데,
+        관문이 PDF 를 더 받으라고 막았다(이승민 심사청구 상급심 2건). 문제가 모두 'PDF 없음'이고 그 줄·상급심을 열람 대조 기록이 다루면 지나간다.
+        PDF 로 맞댄 줄에 다른 문제가 있으면 그대로 막는다."""
+        폴더 = self.d / '라운드1'
+        (폴더 / '작업').mkdir(parents=True)
+        pdfdir = 폴더 / '참고자료' / '인용판결_PDF'
+        pdfdir.mkdir(parents=True)
+        make_pdf(pdfdir / '대법원 2019두1 판결.pdf', ['대법원 2020. 1. 1. 선고 2019두1 판결\n가나다라마바사 판단이다.'])
+        table = 폴더 / '작업' / '인용대조표.md'
+        table.write_text('| 번호 | 사건 표시 | 원문 문장 | 확정 |\n|---|---|---|---|\n'
+                         '| 1 | 대법원 2020. 1. 1. 선고 2019두1 판결 | 가나다라마바사 판단이다 | 확정 |\n'
+                         '| 2 | 서울고등법원 2021. 1. 1. 선고 2020누1 판결 | 아자차카타 | 대법원 2021두9 판결로 확정 |\n'
+                         '| 3 | 대법원 2020. 1. 1. 선고 2019두1 판결 | 가나다라마바사 | 확정(환송 뒤 대법원 2020두5 판결로 확정) |\n', encoding='utf-8')
+        대상 = 폴더 / '서면초안.md'
+        대상.write_text('대법원 2019두1 판결(환송 뒤 대법원 2020두5 판결로 확정)과 서울고등법원 2020누1 판결(대법원 2021두9 판결로 확정)\n',
+                      encoding='utf-8')
+        (폴더 / '작업' / '판결원문_PDF대조.md').write_text(
+            '# 대조\n\n## 사람 판정\n\n| 줄 | 판결 | PDF 의 자리 | 판단 부분인지 | 방향 | 사안 비교 | 비고 |\n|---|---|---|---|---|---|---|\n'
+            '| 1 | 2019두1 | 본문 · 이유 | 판단 | 같음 | 같음 | |\n| 2 | 2020누1 |  |  |  |  | |\n| 3 | 2019두1 | 본문 · 이유 | 판단 | 같음 | 같음 | |\n',
+            encoding='utf-8')
+        판정 = ('# 판결 원문 열람 대조\n\n## 사람 판정\n\n| 줄 | 판결 | 원문의 자리 | 판단 부분인지 | 방향 | 사안 비교 | 비고 |\n|---|---|---|---|---|---|---|\n'
+              '| 2 | 2020누1 | 이유 3. | 판단 | 같음 | 같음 | |\n')
+        한줄 = '\n## 상급심의 처리\n\n| 줄 | 산출물의 표기 | 확인한 것 |\n|---|---|---|\n| 2 | 대법원 2021두9 판결로 확정 | 2021두9 화면 글(상고기각) |\n'
+        상급 = 한줄 + '| 3 | 대법원 2020두5 판결로 확정 | 2020두5 화면 글(상고기각) |\n'
+        열람 = 폴더 / '작업' / '판결원문_열람대조.md'
+
+        def 돌림():
+            res = fc.결과()
+            with mock.patch.object(fc, '검색_완결', lambda *a: None):
+                fc.판례(res, 대상, table, pdfdir, 폴더)
+            return res
+        res = 돌림()                                           # 열람 기록이 없으면 종전대로 PDF 를 요구한다
+        self.assertEqual(status(res, '판결문 PDF'), '막힘')
+        열람.write_text(판정, encoding='utf-8')
+        res = 돌림()                                           # 본문 줄은 열람 기록에 있으나 상급심이 없다
+        self.assertEqual(status(res, '판결문 PDF'), '막힘')
+        말 = next(m for n, _, m in res.줄 if n == '판결문 PDF')
+        self.assertIn('2 대법원 2021두9', 말)                  # PDF 가 없는 줄의 상급심
+        self.assertIn('3 대법원 2020두5', 말)                  # PDF 가 있는 줄의 상급심(PDF 대조가 'PDF 없음'으로 짚은 것)
+        열람.write_text(판정 + 한줄, encoding='utf-8')
+        self.assertEqual(status(돌림(), '판결문 PDF'), '막힘')
+        열람.write_text(판정 + 상급, encoding='utf-8')
+        res = 돌림()
+        self.assertEqual(status(res, '판결문 PDF'), '통과')
+        self.assertEqual(status(res, '판결 판단 부분·방향·사안 비교'), '통과')     # 2 의 빈 PDF 판정 줄은 열람 기록의 판정으로 갈음한다
+        열람.write_text(판정.replace('| 판단 | 같음 | 같음 |', '| 판단 | 같음 |  |') + 상급, encoding='utf-8')
+        res = 돌림()
+        self.assertEqual(status(res, '판결 판단 부분·방향·사안 비교'), '막힘')
+        self.assertIn('2(사안 비교)', next(m for n, _, m in res.줄 if n == '판결 판단 부분·방향·사안 비교'))
+        열람.write_text(판정 + 상급, encoding='utf-8')
+        table.write_text(table.read_text(encoding='utf-8').replace('가나다라마바사 판단이다', '없는 문장입니다'), encoding='utf-8')
+        res = 돌림()                                           # PDF 로 맞댄 줄의 다른 문제는 열람 기록으로 갈음하지 않는다
+        self.assertEqual(status(res, '판결문 PDF'), '막힘')
+
     def test_pointer_or_one_grouped_sentence_is_not_the_handling_of_each_row(self):
         """2026. 11. 3. '수확 목록'이라는 말이 사건상태의 파일 안내에 한 번만 있어도 기록에 없는 줄 전부를 가린 것으로 보았고,
         고친 뒤에도 '나머지는 사안이 다름' 한 문장으로 161건이 지나갔다. 처리는 보고서의 줄마다 적는다."""
@@ -763,6 +854,74 @@ class CaseLawGateTest(unittest.TestCase):
         with mock.patch.object(fc, 'RUN', lambda a: run(a, 0)):
             fc.검색_완결(res, 폴더)
         self.assertEqual(status(res, '판례 검색 기록'), '막힘')
+
+
+class BriefCaseOtherOutputTest(unittest.TestCase):
+    """2026. 11. 7. `/하자보완`: 서면 사건의 서면이 아닌 인용 산출물(리서치·검토 메모·회신 메일)을 관문이 찾지 못해 판례 검사를 하나도 돌리지
+    않았다(11. 6. 최문희 중노위 재심 가능성 검토). 대조표 이름의 `_{산출물}` 이나 머리 제목으로 산출물을 찾아 검토의견처럼 본다."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.case = Path(self.tmp.name) / '4_서면작성' / '사건' / '홍길동_부당강등'
+        self.작업 = self.case / '라운드1' / '작업'
+        self.작업.mkdir(parents=True)
+        (self.case / '라운드1' / '출력').mkdir()
+        (self.case / '작업').mkdir()
+        self.메모 = self.작업 / '재심_가능성_검토.md'
+        self.메모.write_text('# 검토\n\n대법원 2022. 9. 29. 선고 2018다301527 판결은 취업규칙 해석을 다루었습니다.\n', encoding='utf-8')
+        self.표 = self.작업 / '인용대조표.md'
+        self.표.write_text('# 인용 대조표 — 재심_가능성_검토.md (2026. 11. 6.)\n\n| 번호 | 사건 표시 | 원문 문장 |\n|---|---|---|\n'
+                          '| 1 | 대법원 2022. 9. 29. 선고 2018다301527 판결 | 가 |\n', encoding='utf-8')
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_target_memo_is_checked_with_its_table(self):
+        with mock.patch.object(fc, 'RUN', lambda args: (0, 'ok')):
+            [(표제, res)] = fc.돌리기(self.case, None, str(self.메모))
+        이름들 = [n for n, _, _ in res.줄]
+        self.assertNotIn('초안', 이름들)                              # 전에는 '초안이 없다'로 막혔다
+        self.assertEqual(status(res, '판결 원문 대조'), '막힘')        # 열람 대조 기록(사안 비교)이 없다
+        self.assertIn('문체(낙관 표현·적다)', 이름들)
+        (self.작업 / '판결원문_열람대조.md').write_text(
+            '## 사람 판정\n\n| 줄 | 판결 | 원문의 자리 | 판단 부분인지 | 방향 | 사안 비교 | 비고 |\n|---|---|---|---|---|---|---|\n'
+            '| 1 | 2018다301527 | 판결요지 [2] | 판단 | 같음 |  | |\n', encoding='utf-8')
+        with mock.patch.object(fc, 'RUN', lambda args: (0, 'ok')):
+            [(_, res)] = fc.돌리기(self.case, None, str(self.메모))
+        self.assertEqual(status(res, '판결 판단 부분·방향·사안 비교'), '막힘')   # 사실관계가 다른 판결을 가려내는 칸
+
+    def test_night_check_finds_other_outputs_changed_in_range(self):
+        끝 = time.time() - 3600
+        with mock.patch.object(fc, 'RUN', lambda args: (0, 'ok')):
+            out = fc.서면_다른_산출물들(self.case, 끝)
+            self.assertEqual([t for t, _ in out], ['다른 산출물 재심_가능성_검토.md'])
+            self.assertEqual(fc.서면_다른_산출물들(self.case, time.time() + 60), [])      # 범위 밖이면 보지 않는다
+
+    def test_draft_tables_are_not_other_outputs_and_tail_name_finds_the_file(self):
+        (self.case / '라운드1' / '출력' / '서면초안_림프종.md').write_text('본문\n', encoding='utf-8')
+        (self.case / '작업' / '인용대조표_심사청구_림프종.md').write_text('# 인용 대조표 — 서면초안_림프종.md\n', encoding='utf-8')
+        (self.작업 / '강변호사_회신메일_초안.md').write_text('대법원 2018다301527\n', encoding='utf-8')
+        (self.작업 / '인용대조표_회신메일.md').write_text('# 인용 대조표 — 강 변호사님 회신 메일 초안(2026. 10. 27.)\n', encoding='utf-8')
+        (self.작업 / '인용대조표_보강검색.md').write_text('# 인용 대조표 — 보강 검색(제조인지 건설인지)\n', encoding='utf-8')
+        짝 = {표.name: (p.name if p else None) for 표, p, _ in fc.서면_다른_대조표(self.case)}
+        self.assertNotIn('인용대조표_심사청구_림프종.md', 짝)              # 서면 초안의 대조표
+        self.assertEqual(짝['인용대조표.md'], '재심_가능성_검토.md')        # 머리 제목
+        self.assertEqual(짝['인용대조표_회신메일.md'], '강변호사_회신메일_초안.md')   # 이름 꼬리
+        self.assertIsNone(짝['인용대조표_보강검색.md'])
+        with mock.patch.object(fc, 'RUN', lambda args: (0, 'ok')):
+            out = dict(fc.서면_다른_산출물들(self.case, time.time() - 3600))
+        self.assertIn('인용대조표_보강검색.md', out['다른 산출물(찾지 못함)'].줄[0][2])       # 산출물을 찾지 못한 표는 참고로 알린다
+        self.assertEqual(out['다른 산출물(찾지 못함)'].줄[0][1], '참고')
+
+    def test_brief_draft_target_still_goes_to_the_brief_check(self):
+        초안 = self.case / '라운드1' / '출력' / '서면초안.md'
+        초안.write_text('본문\n', encoding='utf-8')
+        with mock.patch.object(fc, '서면', lambda *a, **k: '서면 검사') as _:
+            self.assertEqual(fc.돌리기(self.case, None, str(초안)), [('', '서면 검사')])
+        표없는 = self.작업 / '다른_메모.md'
+        표없는.write_text('대법원 2018다301527 판결\n', encoding='utf-8')
+        [(_, res)] = fc.돌리기(self.case, None, str(표없는))
+        self.assertEqual(status(res, '판례 대조'), '막힘')                 # 가리키는 대조표가 없으면 막는다
 
 
 class OpinionGateTest(unittest.TestCase):

@@ -1,6 +1,6 @@
 """넘기기 전 마지막 관문. 서면·검토의견 하나에 문체·판례·증거(파악·인용·편철) 검사를 모두 돌리고, 빠뜨린 검사까지 잡는다.
 
-    python -B 공통/scripts/final_check.py "4_서면작성/사건/{사건명}" [--라운드 N] [--대상 "<서면초안.md 또는 담당자 저장본 docx>"]
+    python -B 공통/scripts/final_check.py "4_서면작성/사건/{사건명}" [--라운드 N] [--대상 "<서면초안.md 또는 담당자 저장본 docx, 리서치·검토 메모 원고>"]
     python -B 공통/scripts/final_check.py "1_검토의견/사건/{의뢰인}_{검토내용}" [--대상 "<검토의견서 docx 또는 회신초안.md>"]
     python -B 공통/scripts/final_check.py --최근 24 --out "<보고.md>"   # 24시간 안에 손댄 사건의 고친 라운드마다. 화면에는 검사별 모음, 파일에 사건별 전문(`/하자보완`)
 
@@ -21,7 +21,8 @@
   판결 원문      본문 인용 판결이 있으면 작업/판결원문_열람대조.md(법제처 본문·LBOX 화면 글을 열람해 맞댄 기록)의 '사람 판정' 표가
                  본문 인용 줄마다 판단 부분인지·방향·사안 비교까지 찼고, '주의'(앞 글에 주장·원심·인정사실) 줄은 비고가 있다.
                  판결문 PDF 를 받아 둔 폴더(참고자료/인용판결_PDF)가 있으면 예전대로 cite_pdf_check.py 문제 0 과 판결원문_PDF대조.md 의 표를 본다
-                 (2026. 11. 6. 담당자 지시로 대조용 PDF 는 받지 않는다)
+                 (2026. 11. 6. 담당자 지시로 대조용 PDF 는 받지 않는다. 그래서 PDF 가 없는 줄·상급심은 열람 대조 기록으로 받는다)
+  상급심 처리    산출물에 적은 상급심('확정' 칸의 대법원 판결. 심리불속행·문서 없음 표기가 없는 것)은 열람 대조 기록의 '상급심의 처리' 절에 번호가 있다
   증거 인용      증거 인용이 있으면 작업/증거인용검토/ (서면초안_{이름}.md 는 증거인용검토_{이름}/) 의 review.json 이 초안의 지금 인용과 같고, 대조한 뒤
                  호증 파일이 바뀌지 않았고(review.json 의 파일 해시), notes.json 에 인용마다 판정이 있다
   증거 파악      evidence_read.py check — 모든 호증의 전 면 읽기 기록이 찼고 파일이 그 뒤 바뀌지 않았고, 확인표와 세션 기록으로 잰 실측이 있다
@@ -36,6 +37,9 @@
   서증 압축      출력/제출/ 에 서증 압축파일이 있으면 evidence_zip.py --확인
   제출본         출력/제출/ 의 `_제출본` docx·pdf 가 넘길 판(DOCX 검사의 병합본)과 바이트까지 같다. 옛 이름 사본만 있으면 참고(4_서면작성/CLAUDE.md 2-1절)
   예상 질의답변  출력/ 에 심문회의 예상 질의답변 docx 가 있으면 qna_check.py·style_check.py·작업/예상질의_인용대조표.md 의 cite_check.py(`/예상질의` 5절)
+서면 사건의 다른 인용 산출물(리서치 문서·검토 메모·회신 메일 초안. `--대상 "<그 원고>"`, 밤 점검은 그날 대조표나 산출물을 고친 것)
+  서면 초안의 것이 아닌 인용대조표*.md(라운드·사건의 작업/)가 이름의 `_{산출물}` 이나 첫 줄 '# 인용 대조표 — {산출물 이름}' 으로 가리키는 원고를
+  아래 검토의견과 같이 본다(판례 대조·대조표 칸·판례 검색 기록·다시 훑기·판결 원문·상급심 처리·문체). 원고를 찾지 못한 표는 '참고'로 알린다
 검토의견(사건 폴더 맨 위의 검토의견서 docx(판 이름이 가장 높은 것. 검토용 변경 표시본은 빼고)·회신초안.md·간이안.md 가운데 가장 새것.
         이들이 없으면 `{사건}-…md` 처럼 다른 원고(의견서·내용증명·추가 질의 회신). 밤 점검은 그날 고친 다른 원고를
         `작업/인용대조표_{산출물 이름}.md` 가 있으면 따로 보고, 없으면 '참고'로 알린다)
@@ -226,12 +230,17 @@ def 같은_자리(줄: str, 표줄: str) -> bool:
     return False
 
 
-def 사람판정_빈(table: Path, report: Path) -> list:
+def 사람판정_빈(table: Path, report: Path, 만=None, 빼고=frozenset()) -> list:
     """판결 본문 인용 줄(cite_pdf_check 가 보는 줄)마다 '사람 판정' 표에 판단 부분인지·방향·사안 비교가 있는지,
     'PDF 의 자리'에 '주의'(앞 글에 주장·원심·인정사실 등)가 붙은 줄은 비고가 있는지. 빠진 줄을 '줄(빠진 칸)'로 돌려준다.
     같은 이름의 표 줄이 없으면 같은 판결이면서 번호가 겹치는 표 줄로 본다(묶어 적은 줄). 다른 목의 판정으로 이 줄을 통과시키지 않고,
-    걸리는 표 줄이 여럿이면 하나라도 비었을 때 막는다. 2026. 11. 3. 같은 판결의 표 줄 하나만 차면 그 판결의 다른 인용 줄까지 통과하였다."""
-    want = [(r.get('번호', '').strip(), cite_check.cases(r.get('사건 표시', ''))) for r in 본문_줄(table) if '법원' in r.get('사건 표시', '')]
+    걸리는 표 줄이 여럿이면 하나라도 비었을 때 막는다. 2026. 11. 3. 같은 판결의 표 줄 하나만 차면 그 판결의 다른 인용 줄까지 통과하였다.
+    만·빼고는 (줄 이름, 사건 표시) 묶음이다. PDF 를 받아 둔 사건에서 PDF 가 없는 줄은 열람 대조 기록에서, 나머지는 PDF 대조 보고서에서 본다."""
+    want = [(r.get('번호', '').strip(), cite_check.cases(r.get('사건 표시', ''))) for r in 본문_줄(table) if '법원' in r.get('사건 표시', '')
+            and (만 is None or (r.get('번호', '').strip(), r.get('사건 표시', '')) in 만)
+            and (r.get('번호', '').strip(), r.get('사건 표시', '')) not in 빼고]
+    if not want:
+        return []
     if not report.is_file():
         return [f'{n}(표 없음)' for n, _ in want]
     표줄 = []          # (줄 이름, 그 줄의 판결 번호, 빠진 칸)
@@ -262,6 +271,46 @@ def 사람판정_빈(table: Path, report: Path) -> list:
         if 빠짐:
             out.append(f"{n}({', '.join(빠짐)})")
     return out
+
+
+def 상급심_절(열람: Path) -> str:
+    """열람 대조 기록에서 머리에 '상급심'이 든 절(본보기의 '## 상급심의 처리')의 글을 공백·따옴표를 맞추어 돌려준다."""
+    if not 열람.is_file():
+        return ''
+    text = 열람.read_text(encoding='utf-8', errors='replace')
+    out = []
+    for m in re.finditer(r'(?m)^##+ [^\n]*상급심[^\n]*$', text):
+        rest = text[m.end():]
+        n = re.search(r'(?m)^## ', rest)
+        out.append(rest[:n.start()] if n else rest)
+    return cite_check.norm('\n'.join(out))
+
+
+def 상급심_빠짐(table: Path, 산출물글: str, 열람: Path, 볼것=None, 줄들=frozenset()) -> tuple:
+    """([빠진 '{줄} 대법원 {번호}'], 본 상급심 수). 본문 인용 줄의 '확정' 칸에 적은 대법원 상급심 가운데 산출물에 번호가 나오고
+    (서면처럼 상급심을 적지 않는 글은 보지 않는다) 칸에 '심리불속행'·'문서 없음'이 없는 것은 판결문을 열람해 처리를 보았는지
+    열람 대조 기록의 '상급심' 절에 그 번호가 있어야 한다(`공통/자체검토.md` 3절·4-1절 4.). 볼것(번호)을 주면 그 번호와,
+    줄들((줄 이름, 사건 표시))에 든 줄의 상급심만 본다(PDF 대조가 보지 못한 것. PDF 가 없는 줄은 그 줄의 상급심도 PDF 대조가 보지 않는다).
+    2026. 11. 7. `/하자보완`: 11. 6. 판결문 PDF 대신 화면 열람으로 맞대게 된 뒤, 관문이 상급심 처리를 판결문으로 보았는지 더는 보지 않았다
+    (PDF 대조의 상급심 검사가 하던 일이다. 2026. 11. 2. 이케아 각주 16번 '판결로 확정'이 실제로는 심리불속행 기각이었다)."""
+    t = cite_check.norm(산출물글)
+    절 = 상급심_절(열람)
+    빠짐, 본 = [], 0
+    for r in 본문_줄(table):
+        if '법원' not in r.get('사건 표시', ''):
+            continue
+        own = cite_check.cases(r.get('사건 표시', ''))
+        cell = r.get('확정', '')
+        줄 = (r.get('번호', '').strip(), r.get('사건 표시', ''))
+        for c, says in cite_check.upper_courts(cell):
+            if c in own or c not in t or (볼것 is not None and c not in 볼것 and 줄 not in 줄들):
+                continue
+            if says or re.search(r'%s.{0,40}문서 없음' % re.escape(c), cell):
+                continue
+            본 += 1
+            if c not in 절:
+                빠짐.append(f"{r.get('번호', '').strip()} 대법원 {c}")
+    return list(dict.fromkeys(빠짐)), 본
 
 
 def 날짜들(cell: str) -> list:
@@ -417,10 +466,10 @@ def 판례(res: 결과, 대상: Path, table: Path, pdfdir: Path, 폴더: Path, r
         res.add('판결문 PDF', '해당 없음', '본문 인용 판결 없음')
         return
     report = report or table.parent / '판결원문_PDF대조.md'
+    열람 = report.with_name(report.name.replace('PDF대조', '열람대조'))
     if not pdfdir.is_dir():
         # 2026. 11. 6. 담당자 지시: 판결문 PDF 를 내려받지 않고 법제처 본문·LBOX 화면 글을 열람해 맞댄다(공통/자체검토.md 4-1절 4.).
-        # 그 기록은 판결원문_열람대조*.md 의 '사람 판정' 표이다. PDF 폴더가 있으면 예전대로 cite_pdf_check.py 로 본다.
-        열람 = report.with_name(report.name.replace('PDF대조', '열람대조'))
+        # 그 기록은 판결원문_열람대조*.md 의 '사람 판정' 표와 '상급심의 처리' 절이다. PDF 폴더가 있으면 아래에서 cite_pdf_check.py 로 본다.
         if not 열람.is_file():
             res.add('판결 원문 대조', '막힘', f'판결 원문 열람 대조 기록이 없다 — 법제처 본문·LBOX 화면 글로 맞대고 {열람} 의 사람 판정 표를 채운다'
                                           '(`공통/자체검토.md` 4-1절 4.)')
@@ -428,15 +477,41 @@ def 판례(res: 결과, 대상: Path, table: Path, pdfdir: Path, 폴더: Path, r
         빈 = 사람판정_빈(table, 열람)
         res.add('판결 판단 부분·방향·사안 비교', '막힘' if 빈 else '통과',
                 (f"'사람 판정' 표에서 빈 줄: {', '.join(빈[:12])} ({열람})") if 빈 else f'{len(본문줄)}줄 판정(원문 열람 대조 {열람.name})')
+        빠짐, 본 = 상급심_빠짐(table, text, 열람)
+        if 본:
+            res.add('상급심 처리', '막힘' if 빠짐 else '통과',
+                    (f"산출물에 적은 상급심의 처리를 판결문을 열람해 본 기록이 없다: {', '.join(빠짐[:12])} — {열람.name} 의 '상급심의 처리' 절에 "
+                     "번호와 판결문에서 본 기각 이유를 적는다(LBOX·법제처에 없으면 대조표 '확정' 칸에 '문서 없음', `공통/자체검토.md` 3절)")
+                    if 빠짐 else f'{본}건 열람 기록 있음')
         return
     with tempfile.TemporaryDirectory() as d:          # 사건 기록의 보고서는 고치지 않는다(밤 점검이 고치면 다음 밤에 손댄 사건으로 잡힌다)
         임시 = Path(d) / '대조.md'
         code = res.run('판결문 PDF', [SC / 'cite_pdf_check.py', table, pdfdir, '--out', 임시, '--target', 대상], '문제 0')
         res.줄[-1] = (*res.줄[-1][:2], res.줄[-1][2].replace(f' → {임시}', ''))     # 곧 지워질 파일을 가리키지 않는다
+    PDF없는줄 = frozenset()
+    if code != 0 and 열람.is_file():
+        # 2026. 11. 7. `/하자보완`: 11. 6. 뒤로 대조용 PDF 를 받지 않으므로, PDF 를 받아 둔 사건에서 고친 판에 더한 판결·상급심은 PDF 가 없다.
+        # 문제가 모두 'PDF 없음'이고 그 줄·상급심을 열람 대조 기록이 다루면 지나간다(그 줄의 사람 판정은 열람 대조 기록에서 본다).
+        # 그때까지는 PDF 폴더만 있으면 PDF 를 더 받으라고 막아 지침(받지 않는다)과 어긋났다(이승민 심사청구 상급심 2건).
+        import cite_pdf_check
+        결과값 = cite_pdf_check.check(str(table), str(pdfdir), [str(대상)])
+        없음 = 결과값.get('없음', [])
+        if 없음 and 결과값['문제'] == len(없음):
+            상급 = {x['판결'] for x in 없음 if x['종류'] == '상급심'}
+            없는줄 = frozenset((x['줄'].strip(), x['표시']) for x in 없음 if x['종류'] == '본문')
+            빠짐, 본상급 = 상급심_빠짐(table, text, 열람, 상급, 없는줄)
+            if 빠짐:
+                res.줄[-1] = (res.줄[-1][0], '막힘', res.줄[-1][2] + f" — 판결문 PDF 가 없는 상급심을 {열람.name} 의 '상급심의 처리' 절에도 적지 않았다: "
+                                                                 + ', '.join(빠짐[:12]))
+            else:
+                PDF없는줄 = 없는줄
+                res.줄[-1] = (res.줄[-1][0], '통과', f"PDF 로 맞댄 판결 {결과값['판결']}건 문제 0, PDF 가 없는 본문 줄 {len(PDF없는줄)}·상급심 {본상급}건은 "
+                                                   f"원문 열람 대조 {열람.name} 으로 봄")
+                code = 0
     if code == 0:
-        빈 = 사람판정_빈(table, report)
+        빈 = 사람판정_빈(table, report, 빼고=PDF없는줄) + (사람판정_빈(table, 열람, 만=PDF없는줄) if PDF없는줄 else [])
         res.add('판결 판단 부분·방향·사안 비교', '막힘' if 빈 else '통과',
-                (f"'사람 판정' 표에서 빈 줄: {', '.join(빈[:12])} ({report})") if 빈 else f'{len(본문줄)}줄 판정')
+                (f"'사람 판정' 표에서 빈 줄: {', '.join(빈[:12])} ({report}{', ' + 열람.name if PDF없는줄 else ''})") if 빈 else f'{len(본문줄)}줄 판정')
 
 
 # ---------------------------------------------------------------- 서면
@@ -689,14 +764,125 @@ def 제출본_검사(res, 제출: Path, 병합본):
     res.add('제출본', '통과', 같은[0].name)
 
 
+# ---------------------------------------------------------------- 서면 사건의 다른 인용 산출물
+# 2026. 11. 7. `/하자보완`: 서면 사건에서 서면 초안이 아닌 인용 산출물(리서치 문서, 담당 변호사에게 올리는 검토 메모, 회신 메일 초안)은
+# 관문이 찾지 못해 판례 검사를 하나도 돌리지 않았다. `--대상` 으로 주어도 '초안이 없다'로 막혔다. 11. 6. 최문희 중노위 재심 가능성 검토
+# (`라운드1/작업/…검토.md`, 대조표 있음)에서 담당 노무사가 "안산 판결도 사실관계 보면 강등에 대한 판단만 있지 우리 사안에 원용하기
+# 어려워 보임(그 전에도 이런 식으로 판례 수집했나? 문젠데)"라고 짚었는데, 관문이 보았으면 '사안 비교' 칸이 빈 것으로 막혔을 일이다.
+# 검토의견 사건의 다른 원고(11. 6. 고침)와 같은 꼴이다. 그 대조표(`인용대조표_{산출물}.md`, 또는 머리 '# 인용 대조표 — {산출물 이름}')로
+# 산출물을 찾아 검토의견과 같은 검사(판례·판결 원문 대조·상급심·문체)를 돌린다.
+기록_이름 = re.compile(r'^(?:인용대조표|판결원문_|검색기록|사건상태|수확목록|쟁점낱말|의뢰인주장|상대주장|사실관계|하이라이트|소요시간|~\$)')
+
+
+def _열쇠(s: str) -> str:
+    return re.sub(r'[\s_]', '', cite_check.norm(s) if s else '')
+
+
+def 대조표_머리(표: Path) -> str:
+    """대조표 첫 줄 '# 인용 대조표 — {제목}' 의 제목."""
+    try:
+        첫 = 표.read_text(encoding='utf-8', errors='replace').lstrip('﻿').splitlines()[0]
+    except (OSError, IndexError):
+        return ''
+    m = re.match(r'#\s*인용\s*대조표\s*[—–-]+\s*(.+)', 첫)
+    return m.group(1).strip() if m else ''
+
+
+def 다른_산출물_찾기(사건: Path, 라운드: Path | None, 표: Path) -> Path | None:
+    """대조표가 가리키는 산출물(.md·.docx). 대조표 이름이 `인용대조표_{이름}.md` 이면 그 이름이 든 파일, 아니면 머리 제목에 이름이 든 파일.
+    대조표 폴더, 라운드의 작업/·출력/, 사건의 작업/ 에서 찾고 여럿이면 가장 새것이다."""
+    제목 = _열쇠(대조표_머리(표))
+    꼬리 = _열쇠(표.stem[len('인용대조표_'):]) if 표.stem.startswith('인용대조표_') else ''
+    폴더들 = [표.parent] + ([라운드 / '작업', 라운드 / '출력'] if 라운드 else []) + [사건 / '작업']
+    후보 = []
+    for d in dict.fromkeys(폴더들):
+        if not d.is_dir():
+            continue
+        for p in d.iterdir():
+            if not p.is_file() or p.suffix.lower() not in ('.md', '.docx') or 기록_이름.search(p.name):
+                continue
+            k = _열쇠(p.stem)
+            if len(k) >= 4 and ((꼬리 and 꼬리 in k) or (제목 and k in 제목)):
+                후보.append(p)
+    return max(후보, key=lambda p: p.stat().st_mtime) if 후보 else None
+
+
+def 서면_다른_대조표(사건: Path) -> list:
+    """[(대조표, 산출물 또는 None, 라운드)]. 서면 사건의 인용 대조표 가운데 어느 라운드의 서면 초안의 것도 아닌 표(빌드·이전판·백업 폴더 밖)."""
+    라운드들 = sorted((p for p in 사건.glob('라운드*') if p.is_dir()), key=lambda p: int(re.sub(r'\D', '', p.name) or 0))
+    초안표 = {대조표_자리(사건, r, p)[0].resolve() for r in 라운드들 for p in 초안_목록(r)}
+    out = []
+    for 라운드, d in [(r, r / '작업') for r in 라운드들] + [(라운드들[-1] if 라운드들 else None, 사건 / '작업')]:
+        if not d.is_dir():
+            continue
+        for 표 in sorted(d.rglob('인용대조표*.md')):
+            if any(x in ('빌드', '백업', '이전판', '자체검토') or x.startswith('이전') for x in 표.relative_to(d).parts[:-1]):
+                continue
+            if 표.resolve() not in 초안표:
+                out.append((표, 다른_산출물_찾기(사건, 라운드, 표), 라운드))
+    return out
+
+
+def 다른_산출물(사건: Path, 대상: Path, 표: Path) -> 결과:
+    """서면 사건의 다른 인용 산출물을 검토의견 산출물처럼 본다. 판결 원문 대조 기록은 대조표 옆(`판결원문_열람대조{_이름}.md`)이다."""
+    res = 결과()
+    res.대상, res.대상시각 = str(대상.relative_to(사건)) if 대상.is_relative_to(사건) else 대상.name, 대상.stat().st_mtime
+    폴더 = next((p.parent for p in 표.parents if p.name == '작업'), 표.parent)
+    판례(res, 대상, 표, 표.parent / '인용판결_PDF', 폴더, 표.with_name(표.name.replace('인용대조표', '판결원문_PDF대조', 1)))
+    text = 글(대상).split('## 보완 메모')[0].split('\n---\n')[0]
+    걸림 = [w for w in 낙관 if w in text] + [m.group(0) for m in 적다.finditer(text)]
+    res.add('문체(낙관 표현·적다)', '막힘' if 걸림 else '통과',
+            ('쓰지 않는 표현: ' + ', '.join(dict.fromkeys(걸림))) if 걸림 else '낙관 표현·적다 없음')
+    return res
+
+
+def 다른_산출물_대상(사건: Path, 대상: Path) -> list:
+    """`--대상` 이 서면 초안·병합본이 아닌 원고이면 [('', 결과)], 아니면 []. 대조표는 그 산출물을 가리키는 표이다."""
+    if 대상.name.startswith('서면초안') or (대상.suffix.lower() == '.docx' and 병합본_이름.search(대상.name)):
+        return []
+    짝 = [표 for 표, p, _ in 서면_다른_대조표(사건) if p and p.resolve() == 대상.resolve()]
+    if 짝:
+        return [('', 다른_산출물(사건, 대상, 짝[0]))]
+    res = 결과()
+    res.대상, res.대상시각 = 대상.name, (대상.stat().st_mtime if 대상.is_file() else time.time())
+    있나 = 대상.is_file() and 인용_있나(글(대상))
+    res.add('판례 대조', '막힘' if 있나 else '해당 없음',
+            f"이 산출물을 가리키는 인용 대조표가 없다 — `인용대조표_{{산출물 이름}}.md` 로 두거나 첫 줄을 '# 인용 대조표 — {대상.name}' 으로 쓴다"
+            '(`공통/자체검토.md` 3절)' if 있나 else '사건번호 없음')
+    return [('', res)]
+
+
+def 서면_다른_산출물들(사건: Path, 끝: float) -> list:
+    """밤 점검: 이번 범위에 대조표나 산출물을 고친 다른 인용 산출물마다 [(표제, 결과)]. 산출물을 찾지 못한 대조표는 '참고'로 알린다."""
+    out, 못찾음 = [], []
+    for 표, 대상, _ in 서면_다른_대조표(사건):
+        if 대상 is None:
+            if 표.stat().st_mtime >= 끝:
+                못찾음.append(str(표.relative_to(사건)))
+            continue
+        if max(표.stat().st_mtime, 대상.stat().st_mtime) >= 끝:
+            out.append((f'다른 산출물 {대상.name}', 다른_산출물(사건, 대상, 표)))
+    if 못찾음:
+        res = 결과()
+        res.add('다른 산출물', '참고', f"이번 범위에 고친 대조표 {', '.join(못찾음)} 의 산출물을 대조표 이름·머리 제목으로 찾지 못해 맞대지 않았다 — "
+                '넘긴 세션이 `--대상` 으로 관문을 돌렸는지 사건상태에서 본다')
+        out.append(('다른 산출물(찾지 못함)', res))
+    return out
+
+
 def 돌리기(사건: Path, 라운드번호=None, 대상=None, 밤=False, 끝=None) -> list:
-    """[(표제, 결과)]. 한 라운드에 서면이 여럿이면 서면마다 본다. 끝(밤 점검 범위의 시작)을 주면 검토의견 사건의 다른 원고도 본다."""
+    """[(표제, 결과)]. 한 라운드에 서면이 여럿이면 서면마다 본다. 끝(밤 점검 범위의 시작)을 주면 검토의견 사건의 다른 원고도 본다.
+    서면 사건에서 `--대상` 이 서면 초안이 아닌 원고(리서치·검토 메모)이면 그 대조표로 본다(서면 사건의 밤 점검은 main 이 사건마다 한 번 본다)."""
     종류 = 사건_종류(사건)
     if 종류 == '계산':
         return [('', 계산(사건))]
     if 종류 == '검토의견':
         기본 = 검토의견(사건, 대상, 밤)
         return [('', 기본)] + (다른_원고들(사건, 기본, 끝) if 끝 is not None and not 대상 else [])
+    if 대상:
+        다른 = 다른_산출물_대상(사건, Path(대상))
+        if 다른:
+            return 다른
     라운드 = 사건 / f'라운드{라운드번호}' if 라운드번호 else 최근_라운드(사건)
     후보 = 초안_목록(라운드) if 라운드 and 라운드.is_dir() else []
     if 대상 or len(후보) < 2:
@@ -911,16 +1097,21 @@ def main(argv=None) -> int:
         if a.최근 and a.라운드 is None and 사건_종류(c) == '서면':
             라운드들 = 바뀐_라운드들(c, 끝) or [None]          # 고친 라운드마다. 없으면 마지막 라운드
         본 = set()
+        돌릴것 = []
         for 라운드 in 라운드들:
             for 표제, res in 돌리기(c, 라운드, a.대상, bool(a.최근), 끝):
                 if len(라운드들) > 1:
                     표제 = f'라운드{라운드}' + (f' · {표제}' if 표제 else '')
                     res.줄 = 한_번만(res.줄, 본)
-                막힘 += len(res.막힘)
-                글들.append(보고(c, res, 표제, 끝=끝))
-                묶음.append((c.name + (' · ' + 표제 if 표제 else ''), res))
-                if not a.최근:
-                    print(보고(c, res, 표제, 400, 끝))
+                돌릴것.append((표제, res))
+        if 끝 is not None and not a.대상 and 사건_종류(c) == '서면':
+            돌릴것 += 서면_다른_산출물들(c, 끝)           # 서면이 아닌 인용 산출물(리서치·검토 메모)은 사건마다 한 번
+        for 표제, res in 돌릴것:
+            막힘 += len(res.막힘)
+            글들.append(보고(c, res, 표제, 끝=끝))
+            묶음.append((c.name + (' · ' + 표제 if 표제 else ''), res))
+            if not a.최근:
+                print(보고(c, res, 표제, 400, 끝))
     모음 = 검사별_모음(묶음, 끝) + '\n' if a.최근 and 사건들 else ''
     if 모음:
         print(모음)

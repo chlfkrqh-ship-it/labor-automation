@@ -13,6 +13,7 @@ PDF 는 lbox-검색 9항 lboxPdfZip 으로 받은 판결문이고, 파일 이름
   4) '확정' 칸에 적은 대법원 상급심의 처리. 그 판결문 PDF 가 있으면 심리불속행 기각인지 판결문으로 보아 칸의 표기와 맞대고,
      없으면 칸에 '심리불속행'이나 '문서 없음'이 적혀 있을 때만 넘어간다. LBOX 판결란의 '상고기각' 표시는 심리불속행 기각을 포함한다.
      --target 을 주면 산출물에 번호가 나오는 상급심만 본다(서면처럼 상급심을 본문에 적지 않는 글은 PDF 를 더 받지 않아도 된다)
+     2026. 11. 6. 대조용 PDF 를 받지 않게 된 뒤로는 PDF 가 없는 줄·상급심을 final_check.py 가 판결원문_열람대조.md 로 받는다(check() 의 '없음')
 찾은 자리마다 판시사항·판결요지 안인지, 가장 가까운 항목 머리(판단·주장·인정사실 등), 앞뒤 글, 앞 글에 든 '주장'·'원심' 같은
 낱말을 보고서에 적는다. 그 문장이 판단 부분인지와 판결의 결론이 우리 주장과 같은 방향인지는 작성 세션이 PDF 를 직접 읽고
 보고서 끝 '## 사람 판정' 표에 적는다. 보고서를 다시 만들어도 그 절은 그대로 남긴다. 문제가 하나라도 있으면 종료 코드 1 이다.
@@ -66,8 +67,8 @@ def part_label(sq, k):
 
 
 def check_upper(cell, own, files, targets, used):
-    """'확정' 칸의 대법원 상급심을 판결문과 맞댄다. (문제 수, 보고서 줄, 짧은 표시)를 돌려준다."""
-    bad, body, notes = 0, [], []
+    """'확정' 칸의 대법원 상급심을 판결문과 맞댄다. (문제 수, 보고서 줄, 짧은 표시, PDF 가 없는 상급심 번호)를 돌려준다."""
+    bad, body, notes, missing = 0, [], [], []
     for c, says in upper_courts(cell):
         if c in own or (targets is not None and not any(c in t for t in targets)):
             continue
@@ -84,9 +85,11 @@ def check_upper(cell, own, files, targets, used):
             body.append("- 상급심 대법원 %s: PDF 없음(칸의 표기대로, 보고에 적는다)" % c)
         else:
             bad += 1
+            missing.append(c)
             notes.append("확정 칸의 대법원 %s 판결문 PDF 없음" % c)
-            body.append("- **상급심 대법원 %s 판결문 PDF 없음** — 받아서 실제 처리를 본다. LBOX 에 없으면 칸에 '문서 없음'을 적는다" % c)
-    return bad, body, notes
+            body.append("- **상급심 대법원 %s 판결문 PDF 없음** — 판결문을 열람해(법제처 본문·LBOX 화면 글) 실제 처리를 보고 판결원문_열람대조.md 의 "
+                        "'상급심의 처리' 절에 적는다(대조용 PDF 는 더 받지 않는다). LBOX·법제처에 없으면 칸에 '문서 없음'을 적는다" % c)
+    return bad, body, notes, missing
 
 
 def check(table, pdfdir, targets=None):
@@ -98,6 +101,7 @@ def check(table, pdfdir, targets=None):
                 files.setdefault(c, os.path.join(pdfdir, n))
     tgt = None if targets is None else [norm(read_target(p)) for p in targets]
     used, bad, lines, body, cache, skel = set(), 0, [], [], {}, []
+    absent = []      # PDF 가 없는 본문 인용 줄과 상급심. final_check.py 는 이것을 판결원문_열람대조.md 로 받는다(2026. 11. 6. 열람 대조)
     for r in rows:
         mark, no = r.get("사건 표시", ""), r.get("번호", "")
         nums = sorted(cases(mark), key=mark.find)
@@ -106,7 +110,8 @@ def check(table, pdfdir, targets=None):
         row_skel = {"줄": no, "판결": nums[0] if nums else mark[:30], "자리": "", "주의": []}
         skel.append(row_skel)
         if not nums or not path:
-            bad += 1; body += ["- **PDF 없음**", ""]; lines.append("%s — PDF 없음" % no); continue
+            bad += 1; body += ["- **PDF 없음**", ""]; lines.append("%s — PDF 없음" % no)
+            absent.append({"줄": no, "판결": row_skel["판결"], "표시": mark, "종류": "본문"}); continue
         used.add(path)
         if path not in cache:
             pages = pdf_texts(path)
@@ -147,15 +152,16 @@ def check(table, pdfdir, targets=None):
                 if warn:
                     body.append("  - 앞 글 300자에 든 낱말: %s — 판단 부분인지 다시 읽는다" % "·".join(warn))
         # 4) '확정' 칸의 상급심
-        b, more, upper_notes = check_upper(r.get("확정", ""), nums, files, tgt, used)
+        b, more, upper_notes, upper_absent = check_upper(r.get("확정", ""), nums, files, tgt, used)
         bad += b; body += more; notes += upper_notes
+        absent += [{"줄": no, "판결": c, "표시": mark, "종류": "상급심"} for c in upper_absent]
         body += ["- 대조표 자리: %s" % r.get("자리", "")[:120],
                  "- 대조표 주문·결론: %s / 확정: %s" % (r.get("주문·결론", "")[:120], r.get("확정", "")[:80]), ""]
         lines.append("%s — %s" % (no, " / ".join(notes) if notes else "일치"))
     extra = sorted(os.path.basename(p) for p in set(files.values()) - used)
     if extra:
         body += ["## 대조표 본문 줄이 가리키지 않는 PDF", ""] + ["- `%s`" % n for n in extra] + [""]
-    return {"줄": len(rows), "판결": len(used), "문제": bad, "내용": lines, "보고서": body, "틀": skel}
+    return {"줄": len(rows), "판결": len(used), "문제": bad, "내용": lines, "보고서": body, "틀": skel, "없음": absent}
 
 
 JUDGE_HEAD = ["줄", "판결", "PDF 의 자리", "판단 부분인지", "방향", "사안 비교", "비고"]
