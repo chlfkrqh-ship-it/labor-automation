@@ -5,6 +5,7 @@
 
     python -B 공통/scripts/mail_draft.py reply "mail:///messages/…" --all --body 본문.txt --attach a.pdf b.docx --prefix "(수정 송부) "
     python -B 공통/scripts/mail_draft.py new --to a@example.com --cc b@example.com --subject "…" --body 본문.txt --attach a.pdf
+    python -B 공통/scripts/mail_draft.py forward "mail:///messages/…" --same-as "mail:///messages/…" --body 본문.txt   # 전달
     python -B 공통/scripts/mail_draft.py check "mail:///messages/…" --files a.pdf b.docx   # 받는 사람·첨부를 보고 SHA-256 을 맞댄다
     python -B 공통/scripts/mail_draft.py login             # PC마다 처음 한 번. 브라우저 창에서 회사 계정을 고르고 메일 쓰기에 동의한다
     python -B 공통/scripts/mail_draft.py login --device    # 브라우저 창이 뜨지 않을 때. 코드를 받아 휴대폰에서 로그인
@@ -20,6 +21,11 @@
 - 회신은 원 메일에 createReply·createReplyAll 로 만들어 대화가 이어진다. 받는 사람은 새 Outlook 과 같게 정한다: 내가 보낸 메일에
   회신하면 그 메일의 받는 사람(전체 회신이면 참조도), 남의 메일이면 보낸 사람(전체 회신이면 받는 사람·참조도). 내 주소는 뺀다.
   제목은 --subject 가 없으면 '{--prefix}{원 제목}' 이고, 원 제목이 Re:·RE:·회신: 으로 시작하지 않으면 'Re: ' 를 붙인다.
+- 전달은 원 메일에 createForward 로 만들어 원 메일의 첨부가 그대로 붙는다. 받는 사람은 --to·--cc 로 주거나, --same-as 로 준
+  메일(예: 앞서 같은 사람들에게 보낸 메일)의 받는 사람·참조를 그대로 쓴다(내 주소는 뺀다). 원문 머리(보낸 사람·보낸 날짜·받는 사람·
+  참조·제목)는 새 Outlook 이 화면에서 전달할 때와 같은 한글 꼴로 바꾸고, 제목은 원 제목 앞에 'Fw: ' 를 붙인다. 2026. 11. 6. OES
+  사건 의결결과 알림 공문을 이유서(3)를 보낸 사람들에게 전달하는 초안(담당 노무사 "이유서(3) 보낸 대상들에게, 금일 김민형 조사관이
+  보낸 사건 의결결과 알림 공문 메일 전달 준비 부탁")에서 넣었다.
 - 첨부는 보통 첨부로 붙인다(OneDrive 링크가 아니다). 3MB 미만은 한 번에, 그 이상은 업로드 세션으로 나누어 올린다.
 - 만든 뒤 서버에서 다시 읽어 제목·받는 사람·참조·첨부를 보여 주고, 첨부를 내려받아 올린 파일과 SHA-256 을 맞댄다.
 
@@ -42,6 +48,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 _spec = importlib.util.spec_from_file_location('mail_attach', Path(__file__).resolve().with_name('mail_attach.py'))
@@ -58,8 +65,12 @@ LIMIT = 150 * 1024 * 1024                               # Graph 가 받는 첨�
 UPLOAD_HOSTS = ('outlook.office.com', 'outlook.office365.com')
 STYLE = 'font-family:&quot;Malgun Gothic&quot;,&quot;맑은 고딕&quot;,AppleGothic,sans-serif;font-size:11pt;color:rgb(0,0,0)'
 REPLY = re.compile(r'^\s*(re|회신)\s*:', re.I)
+FORWARD = re.compile(r'^\s*(fw|fwd|전달)\s*:', re.I)
 SIGNATURE = re.compile(r'<div\b[^>]*\bid=["\']?Signature["\'\s>]', re.I)
+FWD_HEAD = re.compile(r'<div\b[^>]*\bid=["\']?divRplyFwdMsg["\'\s>]', re.I)   # 원문 인용의 'x_divRplyFwdMsg' 는 걸리지 않는다
 DIV = re.compile(r'<(/?)div\b[^>]*>', re.I)
+KST = timezone(timedelta(hours=9))                      # 원문 머리의 보낸 날짜는 담당자 메일함 시각(한국)으로 적는다
+요일 = '월화수목금토일'
 MailError, NeedLogin = ma.MailError, ma.NeedLogin
 
 
@@ -245,17 +256,21 @@ def sign_gap(text: str, sign: str | None) -> str:
     return '' if 빈_서명_첫줄.match(안쪽) else f'<div class="elementToProof" style="{STYLE}"><br /></div>'
 
 
+def div_end(page: str, start: int) -> int | None:
+    """start 에서 여는 div 가 짝 맞추어 닫히는 자리."""
+    depth = 0
+    for tag in DIV.finditer(page, start):
+        depth += -1 if tag.group(1) else 1
+        if depth == 0:
+            return tag.end()
+    return None
+
+
 def signature_of(page: str) -> str | None:
     """HTML 에서 <div id="Signature">…</div> 를 짝 맞추어 꺼낸다."""
     m = SIGNATURE.search(page or '')
-    if not m:
-        return None
-    depth = 0
-    for tag in DIV.finditer(page, m.start()):
-        depth += -1 if tag.group(1) else 1
-        if depth == 0:
-            return page[m.start():tag.end()]
-    return None
+    end = div_end(page, m.start()) if m else None
+    return page[m.start():end] if end else None
 
 
 def my_signature(tok: str) -> str | None:
@@ -280,22 +295,13 @@ def address(entry: dict) -> str:
 
 def recipients(original: dict, me: str, everyone: bool) -> tuple[list[dict], list[dict]]:
     """새 Outlook 이 회신을 열 때와 같게 받는 사람·참조를 정한다. 내 주소와 겹친 주소는 뺀다."""
-    me = (me or '').lower()
     sender = (original.get('from') or {})
     to, cc = list(original.get('toRecipients') or []), list(original.get('ccRecipients') or [])
-    if address(sender).lower() == me:                   # 내가 보낸 메일에 회신하면 그 메일을 받은 사람에게 다시 간다
+    if address(sender).lower() == (me or '').lower():   # 내가 보낸 메일에 회신하면 그 메일을 받은 사람에게 다시 간다
         to, cc = to, (cc if everyone else [])
     else:
         to, cc = [sender] + (to if everyone else []), (cc if everyone else [])
-    seen, keep = {me, ''}, ([], [])
-    for target, entries in zip(keep, (to, cc)):
-        for entry in entries:
-            key = address(entry).lower()
-            if key not in seen:
-                seen.add(key)
-                target.append({'emailAddress': {k: v for k, v in (entry.get('emailAddress') or {}).items()
-                                                if k in ('name', 'address')}})
-    return keep
+    return same_people({'toRecipients': to, 'ccRecipients': cc}, me)
 
 
 def reply_subject(original: str, prefix: str = '') -> str:
@@ -307,6 +313,54 @@ def reply_subject(original: str, prefix: str = '') -> str:
 
 def plain(addresses) -> list[dict]:
     return [{'emailAddress': {'address': a.strip()}} for a in addresses or [] if a.strip()]
+
+
+def same_people(message: dict, me: str) -> tuple[list[dict], list[dict]]:
+    """그 메일의 받는 사람·참조를 이름째 그대로. 내 주소와 겹친 주소는 뺀다."""
+    seen, keep = {(me or '').lower(), ''}, ([], [])
+    for target, entries in zip(keep, (message.get('toRecipients') or [], message.get('ccRecipients') or [])):
+        for entry in entries:
+            key = address(entry).lower()
+            if key not in seen:
+                seen.add(key)
+                target.append({'emailAddress': {k: v for k, v in (entry.get('emailAddress') or {}).items()
+                                                if k in ('name', 'address')}})
+    return keep
+
+
+def forward_subject(original: str, prefix: str = '') -> str:
+    subject = (original or '').strip()
+    if not FORWARD.match(subject):
+        subject = 'Fw: ' + subject
+    return prefix + subject
+
+
+def korean_date(stamp: str) -> str:
+    """'2026-11-05T00:23:25Z' → '2026년 11월 5일 목요일 오전 9:23'(새 Outlook 전달 머리의 꼴)."""
+    t = datetime.fromisoformat(stamp.replace('Z', '+00:00')).astimezone(KST)
+    return (f"{t.year}년 {t.month}월 {t.day}일 {요일[t.weekday()]}요일 "
+            f"{'오전' if t.hour < 12 else '오후'} {t.hour % 12 or 12}:{t.minute:02d}")
+
+
+def forward_header(original: dict) -> str:
+    """새 Outlook 이 화면에서 전달할 때 넣는 원문 머리(2026. 11. 5. 보낸 편지함 사본과 같은 꼴)."""
+    who = lambda xs: '; '.join(f"{html.escape((x.get('emailAddress') or {}).get('name') or address(x))} &lt;{html.escape(address(x))}&gt;"
+                               for x in xs or [] if address(x))
+    sent = original.get('sentDateTime') or original.get('receivedDateTime')
+    rows = [('보낸 사람', who([original.get('from') or {}])), ('보낸 날짜', korean_date(sent) if sent else ''),
+            ('받는 사람', who(original.get('toRecipients'))), ('참조', who(original.get('ccRecipients'))),
+            ('제목', html.escape(original.get('subject') or ''))]
+    return ('<div id="divRplyFwdMsg">' + '<br />'.join(f'<b>{k}:</b> {v}' for k, v in rows if v)
+            + ' <div>&nbsp;</div></div>')
+
+
+def korean_head(page: str, original: dict) -> tuple[str, bool]:
+    """createForward 가 영어로 넣은 원문 머리(From:·Sent:·To:·Subject:)를 한글 머리로 바꾼다. 못 찾으면 그대로 둔다."""
+    m = FWD_HEAD.search(page or '')
+    end = div_end(page, m.start()) if m else None
+    if not end:
+        return page, False
+    return page[:m.start()] + forward_header(original) + page[end:], True
 
 
 # ── 첨부 ──
@@ -349,7 +403,7 @@ def find(tok: str, ref: str) -> dict:
     message_id, attachment_id, internet_id = ma.parse_ref(ref)
     if attachment_id:
         raise MailError('첨부 주소가 아니라 메일 주소(mail:///messages/…)를 넘기십시오.')
-    select = 'id,subject,from,toRecipients,ccRecipients'
+    select = 'id,subject,from,toRecipients,ccRecipients,sentDateTime'
     if internet_id:
         flt = "internetMessageId eq '" + internet_id.replace("'", "''") + "'"
         found = request('GET', f'/me/messages?$filter={q(flt)}&$select={select}&$top=5', tok).get('value') or []
@@ -383,6 +437,34 @@ def reply(ref: str, body: str, attach=(), everyone: bool = False, prefix: str = 
         'body': {'contentType': 'html', 'content': content},
         'toRecipients': plain(to) if to else to_list,
         'ccRecipients': plain(cc) if cc else cc_list})
+    for path in files:
+        attach_file(tok, draft['id'], path)
+    return report(tok, draft['id'], files)
+
+
+def forward(ref: str, body: str, attach=(), to=None, cc=None, same_as: str | None = None, prefix: str = '',
+            subject: str | None = None, signature: bool = True) -> int:
+    files, text = files_of(attach), read_body(body)
+    if not (to or same_as):
+        raise MailError('받는 사람(--to)이나 받는 사람을 따올 메일(--same-as)을 주십시오.')
+    tok, me = session()
+    original = find(tok, ref)
+    to_list, cc_list = same_people(find(tok, same_as), me) if same_as else ([], [])
+    to_list, cc_list = (plain(to) if to else to_list), (plain(cc) if cc else cc_list)
+    if not to_list:
+        raise MailError('받는 사람이 없습니다. --same-as 로 준 메일에 받는 사람이 있는지 보거나 --to 를 주십시오.')
+    draft = request('POST', f"/me/messages/{q(original['id'])}/createForward", tok, {})
+    sign = my_signature(tok) if signature else None
+    if signature and not sign:
+        print('알림: 보낸 편지함에서 서명을 찾지 못해 서명 없이 만들었습니다.', file=sys.stderr)
+    page, swapped = korean_head((draft.get('body') or {}).get('content') or '', original)
+    if not swapped:
+        print('알림: 원문 머리를 찾지 못해 Microsoft Graph 가 넣은 그대로 두었습니다.', file=sys.stderr)
+    content = put_on_top(page, body_html(text) + sign_gap(text, sign) + (sign or '') + '<div id="appendonsend"></div>')
+    request('PATCH', f"/me/messages/{q(draft['id'])}", tok, {
+        'subject': subject or forward_subject(original.get('subject'), prefix),
+        'body': {'contentType': 'html', 'content': content},
+        'toRecipients': to_list, 'ccRecipients': cc_list})
     for path in files:
         attach_file(tok, draft['id'], path)
     return report(tok, draft['id'], files)
@@ -452,6 +534,16 @@ def main(argv=None) -> int:
     s.add_argument('--to', action='append', help='받는 사람을 정해 바꾼다(여러 번)')
     s.add_argument('--cc', action='append', help='참조를 정해 바꾼다(여러 번)')
     s.add_argument('--no-signature', action='store_true', help='서명을 붙이지 않는다')
+    s = subs.add_parser('forward', help='받은·보낸 메일을 전달하는 초안을 만든다(원 메일의 첨부가 붙는다)')
+    s.add_argument('ref', help='전달할 메일 주소(mail:///messages/…), 메일 id, 또는 <internetMessageId>')
+    s.add_argument('--same-as', help='받는 사람·참조를 이 메일과 같게 한다(앞서 같은 사람들에게 보낸 메일의 주소)')
+    s.add_argument('--to', action='append', help='받는 사람(여러 번). --same-as 보다 앞선다')
+    s.add_argument('--cc', action='append', help='참조(여러 번). --same-as 보다 앞선다')
+    s.add_argument('--body', required=True, help='본문 글 파일(UTF-8, 서명 위에 들어간다)')
+    s.add_argument('--attach', nargs='*', default=[], help='더 붙일 파일')
+    s.add_argument('--prefix', default='', help="제목 맨 앞에 붙일 말")
+    s.add_argument('--subject', help='제목을 통째로 정한다')
+    s.add_argument('--no-signature', action='store_true', help='서명을 붙이지 않는다')
     s = subs.add_parser('new', help='새 메일 초안을 만든다')
     s.add_argument('--to', action='append', required=True)
     s.add_argument('--cc', action='append', default=[])
@@ -470,6 +562,9 @@ def main(argv=None) -> int:
         if args.command == 'reply':
             return reply(args.ref, args.body, args.attach, args.all, args.prefix, args.subject, args.to, args.cc,
                          not args.no_signature)
+        if args.command == 'forward':
+            return forward(args.ref, args.body, args.attach, args.to, args.cc, args.same_as, args.prefix, args.subject,
+                           not args.no_signature)
         if args.command == 'new':
             return new(args.to, args.cc, args.subject, args.body, args.attach, not args.no_signature)
         if args.command == 'check':

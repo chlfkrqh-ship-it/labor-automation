@@ -33,10 +33,15 @@ SENT = {'id': 'AAMkADsent=draft-test-0001', 'subject': 'Re: 준비서면 확인 
         'ccRecipients': [person('을 변호사', 'b@example.com'), person('병 변호사', 'c@example.com')]}
 RECEIVED = {'id': 'AAMkADrecv-draft-test-0002', 'subject': '자료 송부', 'from': person('정 부장', 'boss@example.com'),
             'toRecipients': [person('나', ME), person('무 과장', 'x@example.com')],
-            'ccRecipients': [person('나', ME), person('기 대리', 'y@example.com')]}
+            'ccRecipients': [person('나', ME), person('기 대리', 'y@example.com')], 'sentDateTime': '2026-11-05T23:55:20Z'}
 SIG = ('<div id="Signature" class="elementToProof"><div style="font-size:11pt"><br /></div>'
        '<div style="font-size:11pt">감사합니다.</div><div><div>홍길동 올림</div></div></div>')
 QUOTE = '<html><head><meta charset="utf-8"></head><body><hr><div id="divRplyFwdMsg">원문 인용</div></body></html>'
+FWD = ('<html><head><meta charset="utf-8"></head><body><div><br></div><hr style="display:inline-block;width:98%" tabindex="-1">'
+       '<div id="divRplyFwdMsg" dir="ltr"><font face="Calibri, sans-serif" color="#000000" style="font-size:11pt">'
+       '<b>From:</b> 정 부장 &lt;boss@example.com&gt;<br><b>Sent:</b> Friday, November 6, 2026 8:55 AM<br>'
+       '<b>To:</b> 나 &lt;me@example.com&gt;<br><b>Subject:</b> 자료 송부</font><div>&nbsp;</div></div>'
+       '<div><div id="x_divRplyFwdMsg">앞선 인용</div>원문 본문</div></body></html>')
 
 
 class Response(io.BytesIO):
@@ -90,6 +95,10 @@ class FakeGraph:
         if msg and path[3:] in (['createReplyAll'], ['createReply']) and method == 'POST':
             self.created = {'kind': path[3]}
             return self.ok({'id': 'D1', 'subject': 'RE: ' + msg['subject'], 'body': {'contentType': 'html', 'content': QUOTE}}, 201)
+        if msg and path[3:] == ['createForward'] and method == 'POST':
+            self.created = {'kind': path[3]}
+            self.attachments['F1'] = {'id': 'F1', 'name': '원문 첨부.pdf', 'data': b'%PDF-1.7 original'}   # 원 메일의 첨부가 따라온다
+            return self.ok({'id': 'D1', 'subject': 'FW: ' + msg['subject'], 'body': {'contentType': 'html', 'content': FWD}}, 201)
         assert path[2] == 'D1', path
         rest = path[3:]
         if not rest and method == 'PATCH':
@@ -242,6 +251,52 @@ class DraftTests(unittest.TestCase):
         self.assertEqual(self.emails(made['ccRecipients']), ['b@example.com'])
         self.assertIn('홍길동 올림', made['body']['content'])
         self.assertEqual(out.count('같음'), 1)
+
+    def test_forward_goes_to_the_people_of_an_earlier_mail_with_the_header_in_korean(self):
+        code, out, err = self.run_cmd(draft.forward, 'AAMkADrecv-draft-test-0002', str(self.body), [],
+                                      same_as='mail:///messages/AAMkADsent%3Ddraft-test-0001')
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.graph.created, {'kind': 'createForward'})
+        p = self.graph.patch
+        self.assertEqual(p['subject'], 'Fw: 자료 송부')
+        self.assertEqual(self.emails(p['toRecipients']), ['a@example.com'])
+        self.assertEqual(self.emails(p['ccRecipients']), ['b@example.com', 'c@example.com'])
+        self.assertEqual(p['ccRecipients'][0]['emailAddress']['name'], '을 변호사')
+        content = p['body']['content']
+        top = content.index('<body>') + len('<body>')
+        self.assertTrue(content[top:].startswith('<div class="elementToProof"'), content[:200])
+        self.assertLess(content.index('변호사님,'), content.index('홍길동 올림'))
+        self.assertLess(content.index('홍길동 올림'), content.index('<b>보낸 사람:</b>'))
+        self.assertIn('<div id="divRplyFwdMsg"><b>보낸 사람:</b> 정 부장 &lt;boss@example.com&gt;<br />'
+                      '<b>보낸 날짜:</b> 2026년 11월 6일 금요일 오전 8:55<br />'
+                      '<b>받는 사람:</b> 나 &lt;me@example.com&gt;; 무 과장 &lt;x@example.com&gt;<br />'
+                      '<b>참조:</b> 나 &lt;me@example.com&gt;; 기 대리 &lt;y@example.com&gt;<br /><b>제목:</b> 자료 송부', content)
+        self.assertNotIn('From:', content)
+        self.assertIn('<div><div id="x_divRplyFwdMsg">앞선 인용</div>원문 본문</div>', content)    # 원문 속 앞선 머리는 건드리지 않는다
+        self.assertIn('첨부  원문 첨부.pdf', out)                                                # 원 메일의 첨부가 붙어 있다
+
+    def test_forward_recipients_can_be_given_and_are_required(self):
+        code, out, err = self.run_cmd(draft.forward, 'AAMkADrecv-draft-test-0002', str(self.body), [], to=['z@example.com'],
+                                      same_as='AAMkADsent=draft-test-0001')
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.emails(self.graph.patch['toRecipients']), ['z@example.com'])          # --to 가 앞선다
+        self.assertEqual(self.emails(self.graph.patch['ccRecipients']), ['b@example.com', 'c@example.com'])
+        self.graph.seen.clear()
+        code, out, err = self.run_cmd(draft.main, ['forward', 'AAMkADrecv-draft-test-0002', '--body', str(self.body)])
+        self.assertEqual(code, 1)
+        self.assertIn('받는 사람', err)
+        self.assertEqual(self.graph.seen, [])
+
+    def test_forward_subject_and_korean_date(self):
+        self.assertEqual(draft.forward_subject('가'), 'Fw: 가')
+        self.assertEqual(draft.forward_subject('FW: 가'), 'FW: 가')
+        self.assertEqual(draft.forward_subject('전달: 가'), '전달: 가')
+        self.assertEqual(draft.forward_subject('Re: 가', '[참고] '), '[참고] Fw: Re: 가')
+        self.assertEqual(draft.korean_date('2026-11-05T00:23:25Z'), '2026년 11월 5일 목요일 오전 9:23')
+        self.assertEqual(draft.korean_date('2026-11-05T03:05:00Z'), '2026년 11월 5일 목요일 오후 12:05')
+        self.assertEqual(draft.korean_date('2026-11-05T15:30:00Z'), '2026년 11월 6일 금요일 오전 12:30')
+        page, swapped = draft.korean_head('<body><div>머리 없는 본문</div></body>', RECEIVED)
+        self.assertEqual((page, swapped), ('<body><div>머리 없는 본문</div></body>', False))
 
     def test_check_reports_a_different_file(self):
         self.run_cmd(draft.reply, 'AAMkADsent=draft-test-0001', str(self.body), [self.small])
