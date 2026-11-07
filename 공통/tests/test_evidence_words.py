@@ -134,6 +134,33 @@ class SplitDraftTest(unittest.TestCase):
             self.assertEqual(ew.인용_상태(본문, '사8', 1), '이 면 인용')
             self.assertEqual(ew.인용_상태(본문, '사7', 1), '인용 없음')
 
+    def test_split_drafts_with_own_numbering(self):
+        """서면마다 호증 번호를 따로 매긴 라운드: 같은 번호의 두 호증을 모두 찾고, 서면 인용은 그 서면의 본문으로만 본다(2026. 11. 8. `/하자보완`:
+        한 번호에 한 파일만 찾고 두 서면의 인용을 합쳐 보았다)."""
+        with tempfile.TemporaryDirectory() as d:
+            사건 = Path(d) / '이○○_심사청구'
+            출력 = 사건 / '라운드1' / '출력'
+            for n, 폴더 in (('림프종', '림프종'), ('적응장애우울증', '적응장애·우울증')):
+                (출력 / '제출' / 폴더 / '증거').mkdir(parents=True)
+                make_pdf(출력 / '제출' / 폴더 / '증거' / f'증 제2호증_{n} 진단서.pdf', [글 + f'{n} 상병 진단 시험'])
+            (출력 / '서면초안_림프종.md').write_text('진단받았습니다(증 제2호증 1면).\n', encoding='utf-8')
+            (출력 / '서면초안_적응장애우울증.md').write_text('진단받았습니다(증 제1호증).\n', encoding='utf-8')
+            본문 = ew.서면_본문들(사건)
+            self.assertEqual(ew.인용_상태(본문, '증2@림프종', 1), '이 면 인용')
+            self.assertEqual(ew.인용_상태(본문, '증2@적응장애우울증', 1), '인용 없음')    # 다른 서면의 인용이다
+            self.assertEqual(ew.인용_상태(본문, '증2', 1), '이 면 인용')                  # 서면 이름이 없는 키는 모든 서면으로 본다
+            표 = 사건 / '라운드1' / '작업' / '쟁점낱말_대조.md'
+            code, out = run(사건, '--낱말', '시험', '--no-ocr')
+            self.assertEqual(code, 0)
+            줄 = [l for l in 표.read_text(encoding='utf-8').splitlines() if l.startswith('| 증')]
+            self.assertTrue(any(l.startswith('| 증 제2호증(림프종) | 1 | 시험 |') and '| 이 면 인용 |' in l for l in 줄), 줄)
+            self.assertTrue(any(l.startswith('| 증 제2호증(적응장애우울증) | 1 | 시험 |') and '| 인용 없음 |' in l for l in 줄), 줄)
+            self.assertEqual(ew.표시_키('증 제2호증(적응장애우울증)'), '증2@적응장애우울증')
+            code, out = run(사건, '--확인')
+            self.assertEqual(code, 1)
+            self.assertIn('증 제2호증(적응장애우울증) 1면', out)
+            self.assertNotIn('표를 만든 뒤', out)                              # 찾은 호증 절의 이름 붙은 키를 읽어 들인다
+
 
 class TableTest(unittest.TestCase):
     def setUp(self):

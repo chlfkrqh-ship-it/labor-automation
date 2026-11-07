@@ -83,13 +83,24 @@ def catalogues(case_dir: Path):
     return [p for p in found if '백업' not in p.parts]
 
 
-def listed(case_dir: Path):
-    """호증목록에 등재된 호증. 'A ~ B'·'제1 내지 3호증' 같은 범위와 병기는 펼친다."""
+def listed(case_dir: Path, own: str | None = None, names=()):
+    """호증목록에 등재된 호증. 'A ~ B'·'제1 내지 3호증' 같은 범위와 병기는 펼친다.
+
+    서면을 나눈 라운드(names, `system.split_names`)는 서면마다 호증 번호를 따로 매기므로, own(이 서면의 이름)을 주면 다른 서면의
+    목록 절('## {다른 이름} 건')과 다른 서면 이름이 든 목록 파일의 줄은 뺀다. 어느 서면의 것도 아닌 절·파일(상대호증목록 등)의 줄은 넣는다.
+    2026. 11. 8. `/하자보완`: 두 서면의 목록을 합쳐 보아, 14건짜리 서면의 증 제15~27호증 인용도 '목록에 있다'로 통과시켰다."""
     result = {}
     for p in catalogues(case_dir):
         name = p.relative_to(case_dir).as_posix()
+        파일주인 = _system.name_owner(p.stem, names) if names else None
+        주인 = 파일주인
         for row in p.read_text(encoding='utf-8-sig').split('\n'):
+            if names and re.match(r'^\s*#{1,6}\s', row):
+                주인 = _system.name_owner(row, names) or 파일주인
+                continue
             if not row.strip().startswith('|'):
+                continue
+            if own and 주인 and 주인 != own:
                 continue
             # 표 첫 칸은 그 자체가 호증번호이므로 '을나1-1', '갑14' 같은 약식도 받는다.
             cell = row.strip().strip('|').split('|')[0].strip()
@@ -110,13 +121,31 @@ def recorded_cases():
     return found
 
 
-def check(draft: Path, case_dir: Path):
+def split_of(draft: Path, 서면=None) -> tuple:
+    """(이 서면의 이름, 그 라운드의 서면 이름들). 서면을 나누지 않은 라운드면 (None, []).
+    초안 md 는 파일 이름(`서면초안_{이름}.md`)으로, 병합한 docx 는 이름이 든 것으로 가린다. 서면(초안 경로나 이름)을 주면 그것을 쓴다."""
+    here = draft.resolve().parent
+    out = next((p for p in (here, *here.parents) if p.name == '출력'), here)      # 제출/{이름}/ 의 사본도 그 라운드의 출력/ 로 본다
+    names = _system.split_names(out)
+    if not names:
+        return None, []
+    if 서면:
+        own = _system.draft_name(서면) if str(서면).lower().endswith('.md') else _system.name_form(서면)
+    elif draft.suffix.lower() == '.md':
+        own = _system.draft_name(draft)
+    else:
+        own = _system.name_owner(draft.name, names)
+    return (own if own in names else None), names
+
+
+def check(draft: Path, case_dir: Path, 서면=None):
     text = body_text(draft)
     cited = {}
     for hit in EVIDENCE.finditer(text):
         for label in _system.expand_evidence(hit[0]):
             cited.setdefault(label, set()).add(normalize(hit[0]))
-    catalogue = listed(case_dir)
+    own, names = split_of(draft, 서면)
+    catalogue = listed(case_dir, own, names)
     records = recorded_cases()
     cases = sorted(case_numbers(text))
 
@@ -135,6 +164,8 @@ def check(draft: Path, case_dir: Path):
         'cases_cited': cases,
         'cases_without_record': unrecorded,
         'needs_evidence_pass': needs_evidence_pass,
+        'split': names,
+        'draft_name': own,
         'ok': not missing,
     }
 
@@ -144,6 +175,7 @@ def main():
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('draft', help='서면 초안 .md 또는 .docx')
     parser.add_argument('--case', help='사건 폴더 (생략하면 초안 경로에서 찾는다)')
+    parser.add_argument('--서면', help='서면을 나눈 라운드에서 이 docx 가 어느 서면인지(서면초안_{이름}.md 경로나 이름). 생략하면 파일 이름으로 가린다')
     parser.add_argument('--json', action='store_true')
     args = parser.parse_args()
     for stream in (sys.stdout, sys.stderr):
@@ -159,14 +191,17 @@ def main():
         if case_dir is None:
             print('사건 폴더를 찾지 못했습니다. --case 로 지정하십시오.', file=sys.stderr)
             return 2
-    result = check(draft, case_dir)
+    result = check(draft, case_dir, args.서면)
 
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result['ok'] else 1
 
     print('%s' % result['draft'])
-    print('본문 인용 호증 %d건 / 목록 등재 %d건\n' % (result['cited_count'], result['listed_count']))
+    print('본문 인용 호증 %d건 / 목록 등재 %d건%s\n' % (result['cited_count'], result['listed_count'],
+                                               f" ({result['draft_name']} 서면의 목록)" if result['draft_name'] else ''))
+    if result['split'] and not result['draft_name']:
+        print('  [참고] 서면을 나눈 라운드인데 어느 서면인지 가리지 못해 모든 서면의 목록과 맞댔습니다 — `--서면 "{서면초안_이름.md}"` 를 준다')
     if result['needs_evidence_pass']:
         print('  [위반] 호증목록이 비어 있는데 본문은 호증을 인용합니다.')
         print('         증거정리를 아직 돌리지 않았거나 결과가 증거관리/ 로 옮겨지지 않았습니다.')

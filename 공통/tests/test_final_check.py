@@ -421,6 +421,36 @@ class BriefGateTest(unittest.TestCase):
         self.assertEqual(status(fc.서면(self.case, 초안없음_허용=True, 초안=a), 'DOCX'), '해당 없음')     # 다른 서면의 병합본이다
         self.assertEqual(status(fc.서면(self.case, 초안없음_허용=True, 초안=b), 'DOCX'), '통과')
 
+    def test_split_drafts_use_their_own_submission_folder(self):
+        """서면을 나눈 라운드의 제출 묶음은 `출력/제출/{이름}/` 이다. 맨 위만 보아 서증 압축·제출본을 '해당 없음'으로 넘기지 않고, 호증 번호
+        검사에는 어느 서면인지 넘긴다(2026. 11. 8. `/하자보완`: 상병별로 나눈 심사청구의 두 묶음을 보지 않았다)."""
+        self.draft.unlink()
+        a = self.r / '출력' / '서면초안_림프종.md'
+        b = self.r / '출력' / '서면초안_적응장애우울증.md'
+        for p in (a, b):
+            p.write_text('- 다 음 -\n\n1. 가\n\n사실입니다(증 제1호증).\n', encoding='utf-8')
+        for 폴더 in ('림프종', '적응장애·우울증'):
+            d = self.r / '출력' / '제출' / 폴더
+            (d / '증거').mkdir(parents=True)
+            (d / f'(갑) 심사청구 취지 및 이유({폴더})_서증.zip').write_bytes(b'PK')
+        self.assertEqual(fc.제출_자리(self.r, a).name, '림프종')
+        self.assertEqual(fc.제출_자리(self.r, b).name, '적응장애·우울증')
+        불린 = []
+
+        def 적기(args):
+            불린.append([str(x) for x in args])
+            return fake_run(args)
+
+        with mock.patch.object(fc, 'RUN', 적기):
+            res = fc.서면(self.case, 초안없음_허용=True, 초안=b)
+        self.assertEqual(status(res, '서증 압축'), '통과')
+        압축 = next(x for x in 불린 if Path(x[0]).name == 'evidence_zip.py')
+        self.assertEqual(Path(압축[1]).name, '적응장애·우울증')
+        호증 = next(x for x in 불린 if Path(x[0]).name == 'citation_check.py')
+        self.assertEqual(호증[-2:], ['--서면', str(b)])
+        b.unlink()                                                    # 서면이 하나면 제출/ 맨 위이다
+        self.assertEqual(fc.제출_자리(self.r, a), self.r / '출력' / '제출')
+
 
 class CaseLawGateTest(unittest.TestCase):
     def setUp(self):

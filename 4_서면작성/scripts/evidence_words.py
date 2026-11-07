@@ -36,27 +36,43 @@ _spec.loader.exec_module(_ecr)
 
 
 def 호증_정렬(k: str):
-    m = re.match(r'(\D+)(\d+)(?:-(\d+))?$', k)
-    return (m.group(1), int(m.group(2)), int(m.group(3) or 0)) if m else (k, 0, 0)
+    """서면을 나눈 라운드의 키('증5@난청')는 서면 이름으로 먼저 묶는다(evidence_cite_review.exhibits_by_draft)."""
+    m = re.match(r'(\D+?)(\d+)(?:-(\d+))?(?:@(.+))?$', k)
+    return (m.group(4) or '', m.group(1), int(m.group(2)), int(m.group(3) or 0)) if m else ('', k, 0, 0)
 
 
 def 호증_표시(k: str) -> str:
-    m = re.match(r'(\D+)(\d+)(?:-(\d+))?$', k)
-    return f'{m.group(1)} 제{m.group(2)}호증' + (f'의{m.group(3)}' if m.group(3) else '') if m else k
+    """'증5' → '증 제5호증', '증5@난청' → '증 제5호증(난청)'."""
+    m = re.match(r'(\D+?)(\d+)(?:-(\d+))?(?:@(.+))?$', k)
+    if not m:
+        return k
+    return f'{m.group(1)} 제{m.group(2)}호증' + (f'의{m.group(3)}' if m.group(3) else '') + (f'({m.group(4)})' if m.group(4) else '')
 
 
 def 낱말_식(낱말: str):
     return re.compile(r'\s*'.join(re.escape(c) for c in re.sub(r'\s', '', 낱말)))
 
 
-def 서면_본문(사건: Path) -> str:
-    """모든 라운드의 서면 본문. 서면을 나눈 라운드(서면초안_{이름}.md)도 본다. 2026. 11. 3. 그 라운드의 인용을 모두 '인용 없음'으로 적었다."""
+def 서면_본문(사건: Path, 이름: str | None = None) -> str:
+    """모든 라운드의 서면 본문. 서면을 나눈 라운드(서면초안_{이름}.md)도 본다. 2026. 11. 3. 그 라운드의 인용을 모두 '인용 없음'으로 적었다.
+    이름을 주면 그 이름의 서면만 본다(서면마다 호증 번호를 따로 매긴 라운드, 2026. 11. 8.)."""
     글 = []
     for 라운드 in sorted(p for p in 사건.glob('라운드*') if p.is_dir()):
         for p in _ecr.drafts_of(라운드):
+            if 이름 is not None and _ecr._system.draft_name(p) != 이름:
+                continue
             t = p.read_text(encoding='utf-8', errors='replace').replace('\r\n', '\n')
             글.append(t.split('\n---\n')[0])
     return '\n'.join(글)
+
+
+def 서면_본문들(사건: Path) -> dict:
+    """{None: 모든 서면 본문, 서면 이름: 그 서면의 본문}. 인용_상태 가 '증5@난청' 같은 키는 그 서면의 본문에서만 찾는다."""
+    out = {None: 서면_본문(사건)}
+    for 라운드 in sorted(p for p in 사건.glob('라운드*') if p.is_dir()):
+        for n in _ecr.split_names(라운드):
+            out.setdefault(n, 서면_본문(사건, n))
+    return out
 
 
 @functools.lru_cache(maxsize=8)
@@ -68,10 +84,14 @@ def _언급(본문: str) -> dict:
     return d
 
 
-def 인용_상태(본문: str, k: str, 면: int) -> str:
+def 인용_상태(본문, k: str, 면: int) -> str:
     # 면은 호증 표시 바로 뒤의 면 표시만 그 호증의 것으로 본다(증거 인용 대조와 같은 `mentions`·`pages_after`). '사 제6호증, 사 제7호증
     # 3면'의 3면은 사 제7호증의 것이고, '5~7면, 9면, 11면'처럼 이어 적은 면은 모두 그 호증의 것이다(2026. 11. 3. 한전 9면부터를 버렸다).
     # '을 제103호증의1 내지 17', '갑 제1 내지 5호증' 처럼 묶어 적은 호증도 하나하나 인용한 것으로 본다(같은 날 '인용 없음'으로 적었다)
+    # 본문이 서면_본문들 의 dict 이면 '증5@난청' 은 그 서면(난청) 본문의 '증5' 로 본다(서면마다 번호를 따로 매긴 라운드)
+    if isinstance(본문, dict):
+        k, 이름 = _ecr.split_key(k)
+        본문 = 본문.get(이름, 본문.get(None, '')) if 이름 else 본문.get(None, '')
     언급 = _언급(본문).get(k)
     if not 언급:
         return '인용 없음'
@@ -85,8 +105,8 @@ def 표_글(s: str) -> str:
 
 
 def 표시_키(표시: str):
-    m = re.match(r'(\D+?)\s*제(\d+)호증(?:의(\d+))?$', 표시)
-    return f'{m.group(1)}{m.group(2)}' + (f'-{m.group(3)}' if m.group(3) else '') if m else None
+    m = re.match(r'(\D+?)\s*제(\d+)호증(?:의(\d+))?(?:\(([^()]+)\))?$', 표시)
+    return (f'{m.group(1)}{m.group(2)}' + (f'-{m.group(3)}' if m.group(3) else '') + (f'@{m.group(4)}' if m.group(4) else '')) if m else None
 
 
 def 표_읽기(out: Path) -> list:
@@ -107,9 +127,10 @@ def 표_읽기(out: Path) -> list:
 
 
 def 찾을_호증(사건: Path, 라운드: Path) -> dict:
-    """이 라운드에서 낱말을 찾을 호증 {호증키: [파일]}. 첫 파일을 읽는다. 작업/ 아래의 지난 판(옛 호증 번호)은 읽지 않는다."""
+    """이 라운드에서 낱말을 찾을 호증 {호증키: [파일]}. 첫 파일을 읽는다. 작업/ 아래의 지난 판(옛 호증 번호)은 읽지 않는다.
+    서면을 나눈 라운드는 서면 폴더 아래 호증을 '{호증키}@{서면 이름}' 으로 따로 찾는다(2026. 11. 8.)."""
     out = {}
-    for k, ps in _ecr.find_exhibits(사건, 라운드).items():
+    for k, ps in _ecr.exhibits_by_draft(사건, 라운드).items():
         ps = [p for p in ps if '작업' not in p.relative_to(사건).parts]
         if ps:
             out[k] = ps
@@ -194,7 +215,7 @@ def main(argv=None) -> int:
     라운드 = 사건 / f'라운드{a.라운드}' if a.라운드 else 라운드들[-1]
     out = Path(a.out) if a.out else 라운드 / '작업' / '쟁점낱말_대조.md'
     if a.확인:
-        return 확인(out, 서면_본문(사건), 사건, 라운드)
+        return 확인(out, 서면_본문들(사건), 사건, 라운드)
     캐시 = 사건 / '증거관리' / '호증글자'
     ocr_dirs = list(a.ocr_dir) + [str(p) for p in 사건.glob('라운드*/작업/증거인용검토*/ocr')] + [str(캐시 / 'ocr')]
 
@@ -202,7 +223,7 @@ def main(argv=None) -> int:
     if a.호증:
         호증들 = {k: v for k, v in 호증들.items() if any(k.startswith(x) for x in a.호증)}
     식들 = [(w, 낱말_식(w)) for w in a.낱말]
-    본문 = 서면_본문(사건)
+    본문 = 서면_본문들(사건)
     옛찾은 = 찾은_호증_읽기(out) or {}          # 앞 표가 찾은 호증의 파일 해시. 그 뒤 바뀐 호증은 표지 없는 옛 문자인식을 쓰지 않는다
     줄들, 없는면, 합계, 해시들 = [], {}, {'글자층': 0, '문자인식': 0, '글자 없음': 0}, {}
     for k in sorted(호증들, key=호증_정렬):
@@ -235,12 +256,15 @@ def main(argv=None) -> int:
         p.unlink()
 
     비pdf = []
+    나눈 = _ecr.split_names(라운드)
     for dp, dn, fn in os.walk(사건):
         parts = Path(dp).relative_to(사건).parts
         if '백업' in parts or '작업' in parts or not any(x in _ecr.EVIDENCE_DIRS for x in parts):
             continue
         for f in fn:
             k = _ecr.file_key(f)
+            owner = _ecr._system.folder_owner(Path(dp) / f, 사건, 나눈) if k and 나눈 else None
+            k = f'{k}@{owner}' if owner else k
             if k and not f.lower().endswith('.pdf') and k not in 호증들 and (not a.호증 or any(k.startswith(x) for x in a.호증)):
                 비pdf.append(unicodedata.normalize('NFC', f))
 

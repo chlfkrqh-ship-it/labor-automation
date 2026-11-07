@@ -34,6 +34,31 @@ def 시각(rec: dict) -> float | None:
         return None
 
 
+def 첫_시각(f: Path) -> str:
+    """기록에서 처음 나오는 시각(파일 차례). 원래 세션은 그 대화를 시작한 때이고, 갈라 이어 쓴 세션은 갈라 낸 때가 먼저 적힌다(옮겨 담은
+    앞 대화의 줄은 그 뒤에 원래 시각으로 들어온다). 시각이 없으면 ''."""
+    try:
+        with open(f, encoding='utf-8', errors='replace') as 기록:
+            for line in 기록:
+                if '"timestamp"' not in line:
+                    continue
+                try:
+                    t = json.loads(line).get('timestamp')
+                except ValueError:
+                    continue
+                if t:
+                    return str(t)
+    except OSError:
+        pass
+    return ''
+
+
+def 차례(파일들) -> list:
+    """원래 세션이 갈라 이어 쓴 세션보다 먼저 오게 처음 시각, 그다음 파일 시각 차례로 둔다. 옮겨 담은 줄은 뒤에 읽은 세션에서 뺀다
+    (2026. 11. 8. `/하자보완`: 11. 7. 한 사건의 결과 조회 세션을 갈라 이은 세션이 앞 대화 157줄을 옮겨 담았다)."""
+    return sorted(파일들, key=lambda p: (첫_시각(p) or '9999', p.stat().st_mtime))
+
+
 def 결과_글들(rec: dict):
     """세션 기록 한 줄의 도구 결과 글들."""
     내용 = (rec.get('message') or {}).get('content') if isinstance(rec.get('message'), dict) else None
@@ -61,10 +86,8 @@ def 오류들(글: str):
 def 모으기(폴더: Path, 시간: float) -> list:
     """[(스크립트, 줄, 함수, 오류 종류, 횟수, 세션 수, 마지막 시각)]. 많이 난 것부터."""
     끝 = time.time() - 시간 * 3600
-    묶음 = {}
-    for f in 폴더.glob('*.jsonl'):
-        if f.stat().st_mtime < 끝:
-            continue
+    묶음, 본줄 = {}, set()
+    for f in 차례(p for p in 폴더.glob('*.jsonl') if p.stat().st_mtime >= 끝):
         with open(f, encoding='utf-8', errors='replace') as 기록:
             for line in 기록:
                 if 'Traceback (most recent call last)' not in line:
@@ -76,6 +99,11 @@ def 모으기(폴더: Path, 시간: float) -> list:
                 때 = 시각(rec)
                 if 때 is None or 때 < 끝:      # 때가 없는 줄은 앞 대화를 옮긴 것이다
                     continue
+                # 갈라 이어 쓴 세션은 앞 대화의 줄을 uuid·시각 그대로 옮겨 담으므로 같은 줄은 한 번만 센다(2026. 11. 8. `/하자보완`)
+                if rec.get('uuid') in 본줄:
+                    continue
+                if rec.get('uuid'):
+                    본줄.add(rec['uuid'])
                 for 글 in 결과_글들(rec):
                     for 키 in 오류들(글):
                         x = 묶음.setdefault(키, {'횟수': 0, '세션': set(), '때': 0})

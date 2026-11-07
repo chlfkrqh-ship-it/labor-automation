@@ -274,9 +274,28 @@ def file_key(name: str):
     return None
 
 
-def find_exhibits(case_dir: Path, round_dir: Path) -> dict:
-    """호증키 → 파일 목록(같은 라운드의 원본 먼저, 제출 묶음 사본은 뒤)."""
-    found = {}
+def split_names(rnd: Path) -> list:
+    """서면을 나눈 라운드(서면초안_{이름}.md 가 둘 이상)의 서면 이름. 나누지 않았으면 빈 목록(`system.split_names`)."""
+    return _system.split_names(Path(rnd) / '출력')
+
+
+def split_key(k: str) -> tuple:
+    """'증5@난청' → ('증5', '난청'). 서면 이름이 없는 키는 (k, None)."""
+    base, _, name = str(k).partition('@')
+    return base, (name or None)
+
+
+def find_exhibits(case_dir: Path, round_dir: Path, draft=None) -> dict:
+    """호증키 → 파일 목록(같은 라운드의 원본 먼저, 제출 묶음 사본은 뒤).
+    서면을 나눈 라운드에서 draft(그 서면의 초안 경로나 이름)를 주면 그 서면의 폴더(`출력/제출/{이름}/증거` 등) 아래 파일만 그 서면의 호증으로 본다.
+    서면마다 호증 번호를 따로 매기므로 다른 서면 폴더의 같은 번호는 다른 호증이고, 어느 서면 폴더에도 들지 않은 파일 가운데 서면 폴더와 같은
+    부호('증')의 것은 앞 절차의 번호(요양급여 신청 때의 '증 제N호증' 등)이다. 그 밖의 부호(민사 기록의 갑·을)는 그대로 찾는다
+    (`system.split_names` 위 설명, 2026. 11. 8.)."""
+    names = split_names(round_dir)
+    own = None
+    if draft and names:
+        own = _system.draft_name(draft) if str(draft).lower().endswith('.md') else _system.name_form(draft)
+    cands = []
     for dp, dn, fn in os.walk(case_dir):
         parts = Path(dp).relative_to(case_dir).parts
         if '백업' in parts or not any(p in EVIDENCE_DIRS for p in parts):
@@ -290,9 +309,31 @@ def find_exhibits(case_dir: Path, round_dir: Path) -> dict:
             if not k:
                 continue
             p = Path(dp) / f
-            rank = (0 if round_dir in p.parents else 1, 1 if '제출' in parts else 0, len(str(p)))
-            found.setdefault(k, []).append((rank, p))
+            owner = _system.folder_owner(p, case_dir, names) if names else None
+            cands.append((k, p, parts, owner))
+    서면부호 = {re.match(r'\D+', k).group(0) for k, _, _, owner in cands if owner} if own else set()
+    found = {}
+    for k, p, parts, owner in cands:
+        if own and (owner != own if owner else re.match(r'\D+', k).group(0) in 서면부호):
+            continue
+        rank = (0 if round_dir in p.parents else 1, 1 if '제출' in parts else 0, len(str(p)))
+        found.setdefault(k, []).append((rank, p))
     return {k: [p for _, p in sorted(v)] for k, v in found.items()}
+
+
+def exhibits_by_draft(case_dir: Path, round_dir: Path) -> dict:
+    """호증키 → 파일 목록. 서면을 나눈 라운드는 서면 폴더 아래 파일을 '{호증키}@{서면 이름}' 으로 나눈다(같은 번호가 서면마다 다른 호증이다).
+    전 면 읽기(evidence_read.py)와 쟁점 낱말(evidence_words.py)이 두 서면의 호증을 모두 읽게 한다. 나누지 않은 라운드는 find_exhibits 와 같다."""
+    names = split_names(round_dir)
+    found = find_exhibits(case_dir, round_dir)
+    if not names:
+        return found
+    out = {}
+    for k, ps in found.items():
+        for p in ps:
+            owner = _system.folder_owner(p, case_dir, names)
+            out.setdefault(f'{k}@{owner}' if owner else k, []).append(p)
+    return out
 
 
 def lookup(exhibits: dict, key: str):
@@ -361,12 +402,12 @@ class Exhibit:
         self.hash, self.fresh = file_hash(path), fresh
         self.pages = {}
 
-    def _same_file(self, folder: Path) -> bool:
-        """그 캐시 폴더의 글이 지금 파일에서 나왔다고 볼 수 있나. 표지가 없으면 fresh 가 아닐 때만 그렇게 본다(옛 캐시)."""
+    def _same_file(self, folder: Path, strict: bool = False) -> bool:
+        """그 캐시 폴더의 글이 지금 파일에서 나왔다고 볼 수 있나. 표지가 없으면 fresh·strict 가 아닐 때만 그렇게 본다(옛 캐시)."""
         m = Path(folder) / MARK
         if m.is_file():
             return m.read_text(encoding='utf-8').strip() == self.hash
-        return not self.fresh
+        return not (self.fresh or strict)
 
     def __len__(self):
         return len(self.doc)
@@ -415,9 +456,14 @@ class Exhibit:
             cands.append(Path(self.ocr_map[self.key]))
         cands += [Path(d) / self.key for d in self.ocr_dirs]
         cands.append(self.cache)
+        # 서면을 나눈 라운드의 키('증5@난청'): 증거 인용 대조는 서면마다의 폴더에 번호만으로('증5') 쌓으므로 그것도 보되, 같은 번호의 다른 서면
+        # 호증일 수 있어 표지가 지금 파일과 같을 때만 쓴다
+        base = split_key(self.key)[0]
+        엄격 = {str(Path(d) / base) for d in self.ocr_dirs} if base != self.key else set()
+        cands += [Path(c) for c in sorted(엄격)]
         for c in cands:
             j = c / 'pages.json' if (c / 'pages.json').is_file() else c / 'ocr.json'
-            if not j.is_file() or not self._same_file(c):
+            if not j.is_file() or not self._same_file(c, str(c) in 엄격):
                 continue
             if j.name == 'pages.json':
                 for no, e in json.loads(j.read_text(encoding='utf-8')).items():
@@ -676,7 +722,7 @@ def file_changes(md: Path, items: list) -> list:
     해시(file_hash)와 맞댄다. 해시를 적지 않은 옛 대조와 파일을 찾지 못한 인용은 보지 않는다. 다시 대조하면 이 인용들의 판정은 비워진다
     (판정_옮기기). 2026. 11. 5. `/하자보완`: 관문이 호증·면·문장만 맞대어, 판정한 뒤 호증 파일을 바꾼 판도 통과시켰다."""
     rnd = round_of(md)
-    exhibits = find_exhibits(rnd.parent, rnd)
+    exhibits = find_exhibits(rnd.parent, rnd, md)
     hashes, out = {}, []
     for r in items:
         path = lookup(exhibits, r.get('key')) if r.get('file_hash') else None
@@ -725,7 +771,7 @@ def cmd_scan(args) -> int:
     (out / 'crops').mkdir(parents=True, exist_ok=True)
     cites = parse_citations(text)
     md_lines = text.split('\n')
-    exhibits = find_exhibits(case_dir, rnd)
+    exhibits = find_exhibits(case_dir, rnd, md)
     ocr_map = dict(x.split('=', 1) for x in (args.ocr_map or []))
     brief = Path(args.pdf) if args.pdf else brief_pdf_of(md)
     brief_txt = [canon(p.get_text()) for p in pymupdf.open(brief)] if brief and brief.is_file() else []
@@ -869,7 +915,9 @@ def cmd_scan(args) -> int:
 # ---------------------------------------------------------------- doc
 def crop_from_spec(spec, n, rnd: Path, out: Path, ocr_dirs, ocr_map, use_ocr, cache: dict):
     pieces, texts = [], []
-    exhibits = cache.setdefault('_exhibits', find_exhibits(rnd.parent, rnd))
+    if '_exhibits' not in cache:      # 서면을 나눈 라운드는 그 서면의 호증에서 찾는다(cmd_doc 이 '_draft' 에 초안을 둔다)
+        cache['_exhibits'] = find_exhibits(rnd.parent, rnd, cache.get('_draft'))
+    exhibits = cache['_exhibits']
     for item in spec:
         if item[0] == 'img':
             p = Path(item[1])
@@ -949,7 +997,7 @@ def cmd_doc(args) -> int:
     crops = notes.get('crops', {})
     heads = headings(md.read_text(encoding='utf-8-sig'))
     ocr_map = dict(x.split('=', 1) for x in (args.ocr_map or []))
-    cache = {}
+    cache = {'_draft': md}
 
     doc = Document()
     sec = doc.sections[0]

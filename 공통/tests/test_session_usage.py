@@ -161,6 +161,36 @@ class UsageTest(unittest.TestCase):
         self.assertEqual({k: v[0] for k, v in c['갈래'].items() if v[0]}, {'호증·자료 읽기': 501, '담당자 말·첨부': 301})      # 범위 앞 응답이 부른 도구로 가른다
         self.assertEqual(su.셈(su.읽기(f)['응답'])['합']['응답'], 3)      # 범위를 주지 않으면 종전대로 세션 전체를 센다
 
+    def test_forked_session_does_not_count_the_copied_conversation_again(self):
+        """갈라 이어 쓴 세션은 앞 대화의 줄을 uuid·시각 그대로 옮겨 담는다. 앞 세션에서 센 응답은 뒤 세션에서 세지 않는다(2026. 11. 8. `/하자보완`:
+        11. 7. 한 사건의 결과 조회 세션의 응답 28회가 두 세션에 함께 세였다). 차례는 파일 시각이 아니라 기록의 처음 시각으로 정한다."""
+        def 이름표(줄들, 앞):
+            for i, r in enumerate(줄들):
+                r['uuid'] = f'{앞}-{i}'
+            return 줄들
+        원래 = [{'type': 'queue-operation', 'timestamp': '2026-11-02T09:59:59Z'}] + 이름표(
+            [*말('조회 부탁'), *응답(1, 1000, 0, 10), *응답(2, 500, 1000, 20)], 'a')
+        이음 = 이름표([*말('로그인 완료'), *응답(3, 800, 1500, 30)], 'b')
+        for r in 이음:
+            r['timestamp'] = r['timestamp'].replace('T10:', 'T11:')
+        a = self.put('a', 원래)
+        b = self.put('b', [{'type': 'queue-operation', 'timestamp': '2026-11-02T11:00:00Z'}] + [dict(r) for r in 원래[1:]] + 이음)
+        옛 = dt.datetime(2026, 11, 1).timestamp()
+        os.utime(b, (옛, 옛))                                           # 파일 시각은 갈라 낸 세션이 더 이르다
+        buf = io.StringIO()
+        with redirect_stdout(buf), mock.patch.dict(os.environ, {'CLAUDE_CODE_SESSION_ID': 'other'}):
+            su.main(['--폴더', str(self.d)])
+        글 = buf.getvalue()
+        b절 = 글.split('## b')[1]
+        self.assertIn('앞 세션 a에서 옮겨 담은 응답 2회는 세지 않음', b절)
+        self.assertIn('첫 지시: 로그인 완료', b절)
+        self.assertIn('응답 1회 ·', b절)
+        self.assertIn('응답 2회 ·', 글.split('## a')[1].split('## b')[0])
+        합 = sum(su.셈(su.읽기(a)['응답'])['비용'].values()) + sum((su.값('claude-opus-5-5', x['쓰임']) or {}).get(k, 0)
+                                                                for x in su.읽기(b)['응답'][2:] for k in ('입력', '캐시 쓰기', '캐시 읽기', '출력'))
+        self.assertIn(f'비용 합 ${합:.2f}', 글)
+        self.assertEqual(su.차례([b, a]), [a, b])
+
     def test_mail_and_teams_connector_tools_are_their_own_branch(self):
         """2026. 11. 4. `/하자보완`: 메일·팀즈 연결의 도구 이름이 커넥터 id 로 시작해 메일반영 세션의 호출 40회가 '그 밖'으로 잡혔다."""
         for n, s in (('mcp__e78f8043-6cee-480b-9ebb-3d7500a1ebeb__read_resource', '{"uri": "teams:///chats/1/messages"}'),

@@ -123,13 +123,17 @@ def 해시(p: Path) -> str:
 
 
 def 호증_정렬(k: str):
-    m = re.match(r'(\D+)(\d+)(?:-(\d+))?$', k)
-    return (m.group(1), int(m.group(2)), int(m.group(3) or 0)) if m else (k, 0, 0)
+    """서면을 나눈 라운드의 키('증5@난청')는 서면 이름으로 먼저 묶는다(evidence_cite_review.exhibits_by_draft)."""
+    m = re.match(r'(\D+?)(\d+)(?:-(\d+))?(?:@(.+))?$', k)
+    return (m.group(4) or '', m.group(1), int(m.group(2)), int(m.group(3) or 0)) if m else ('', k, 0, 0)
 
 
 def 호증_표시(k: str) -> str:
-    m = re.match(r'(\D+)(\d+)(?:-(\d+))?$', k)
-    return f'{m.group(1)} 제{m.group(2)}호증' + (f'의{m.group(3)}' if m.group(3) else '') if m else k
+    """'증5' → '증 제5호증', '증5@난청' → '증 제5호증(난청)'."""
+    m = re.match(r'(\D+?)(\d+)(?:-(\d+))?(?:@(.+))?$', k)
+    if not m:
+        return k
+    return f'{m.group(1)} 제{m.group(2)}호증' + (f'의{m.group(3)}' if m.group(3) else '') + (f'({m.group(4)})' if m.group(4) else '')
 
 
 def PDF_면수(p: Path) -> int:
@@ -188,10 +192,13 @@ def 최근_라운드(사건: Path):
 
 
 def 서면_호증(사건: Path) -> dict:
-    """호증키 → 읽을 파일. PDF(같은 라운드 원본 먼저, 제출 사본은 뒤)를 쓰고, PDF 가 없는 호증은 원자료를 쓴다."""
+    """호증키 → 읽을 파일. PDF(같은 라운드 원본 먼저, 제출 사본은 뒤)를 쓰고, PDF 가 없는 호증은 원자료를 쓴다.
+    서면을 나눈 라운드는 서면 폴더(`출력/제출/{이름}/증거` 등) 아래 호증을 '{호증키}@{서면 이름}' 으로 따로 읽는다. 서면마다 번호를 따로 매겨
+    같은 번호가 다른 호증이다(2026. 11. 8. `/하자보완`: 한 번호에 한 파일만 두어 다른 서면의 같은 번호 호증 14건을 읽을 대상에서 뺐다)."""
     라운드 = 최근_라운드(사건)
+    names = _ecr.split_names(라운드)
     out = {}
-    for k, ps in _ecr.find_exhibits(사건, 라운드).items():
+    for k, ps in _ecr.exhibits_by_draft(사건, 라운드).items():
         ps = [p for p in ps if '작업' not in p.relative_to(사건).parts]
         if ps:
             out[k] = ps[0]
@@ -203,6 +210,8 @@ def 서면_호증(사건: Path) -> dict:
             if f.startswith('~$') or not f.lower().endswith(DOCS):
                 continue
             k = _ecr.file_key(f)
+            owner = _ecr._system.folder_owner(Path(dp) / f, 사건, names) if k and names else None
+            k = f'{k}@{owner}' if owner else k
             if k and k not in out:
                 out[k] = Path(dp) / f
     return out

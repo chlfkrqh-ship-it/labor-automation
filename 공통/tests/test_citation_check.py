@@ -176,6 +176,70 @@ class CheckTests(unittest.TestCase):
         self.assertEqual(result['cited_count'], 1)
 
 
+class SplitDraftTests(unittest.TestCase):
+    """서면을 나눈 라운드는 서면마다 호증 번호를 따로 매긴다. 다른 서면의 목록 절로 통과시키지 않는다(2026. 11. 8. `/하자보완`:
+    상병별로 나눈 심사청구의 두 목록을 합쳐 14건짜리 서면의 증 제15~27호증 인용을 통과시킬 수 있었다)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.case = Path(self.tmp.name) / '사건'
+        (self.case / '증거관리').mkdir(parents=True)
+        self.out = self.case / '라운드1' / '출력'
+        self.out.mkdir(parents=True)
+        table = '| 호증번호 | 파일명 |\n|---|---|\n'
+        (self.case / '증거관리' / '우리호증목록.md').write_text(
+            '# 우리 호증 목록\n\n## 적응장애·우울증 건\n\n' + table
+            + ''.join('| 증 제%d호증 | a%d.pdf |\n' % (n, n) for n in range(1, 6))
+            + '\n## 림프종 건\n\n' + table + ''.join('| 증 제%d호증 | b%d.pdf |\n' % (n, n) for n in range(1, 3)),
+            encoding='utf-8')
+        (self.case / '증거관리' / '상대호증목록.md').write_text(table + '| 을 제1호증 | c.pdf |\n', encoding='utf-8')
+        self.small = self.draft('서면초안_림프종.md', '청구인은 진단받았습니다(증 제2호증).\n')
+        self.big = self.draft('서면초안_적응장애우울증.md', '청구인은 근무하였습니다(증 제5호증, 을 제1호증).\n')
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def draft(self, name, text):
+        path = self.out / name
+        path.write_text(text, encoding='utf-8')
+        return path
+
+    def test_number_only_in_other_drafts_list_is_violation(self):
+        self.small.write_text('청구인은 진단받았습니다(증 제2호증).\n\n청구인은 근무하였습니다(증 제5호증).\n', encoding='utf-8')
+        result = citation_check.check(self.small, self.case)
+        self.assertEqual(result['draft_name'], '림프종')
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['not_in_list'], ['증제5호증'])
+        self.assertEqual(result['listed_count'], 3)                     # 림프종 절 2건과 어느 서면의 것도 아닌 상대 목록 1건
+        self.assertEqual(result['listed_but_uncited'], ['을제1호증', '증제1호증'])
+
+    def test_each_draft_is_checked_against_its_own_section(self):
+        result = citation_check.check(self.big, self.case)
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['draft_name'], '적응장애우울증')
+        self.assertEqual(result['listed_count'], 6)
+
+    def test_merged_docx_is_matched_by_name_or_given_draft(self):
+        path = self.out / '(갑) 심사청구 취지 및 이유(림프종)_초안.docx'
+        document = docx.Document()
+        document.add_paragraph('청구인은 근무하였습니다(증 제5호증).')
+        document.save(path)
+        self.assertEqual(citation_check.check(path, self.case)['not_in_list'], ['증제5호증'])
+        other = path.with_name('서면.docx')
+        path.rename(other)
+        unknown = citation_check.check(other, self.case)
+        self.assertIsNone(unknown['draft_name'])                          # 가리지 못하면 종전처럼 모든 목록과 맞댄다
+        self.assertTrue(unknown['ok'])
+        self.assertFalse(citation_check.check(other, self.case, self.small)['ok'])
+
+    def test_unsplit_round_keeps_whole_list(self):
+        self.big.unlink()
+        result = citation_check.check(self.small, self.case)
+        self.assertEqual(result['split'], [])
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['listed_count'], 6)                      # 서면이 하나뿐이면 절로 가르지 않는다
+
+
 class EvidenceRenameTests(unittest.TestCase):
     """이미 호증번호로 시작하는 파일의 계획을 조용히 넘기지 않는다(.claude/commands/증거정리.md 5단계)."""
 

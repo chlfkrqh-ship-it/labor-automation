@@ -138,6 +138,59 @@ def evidence_labels(text: str) -> list[str]:
     return labels
 
 
+# 서면을 나눈 라운드. 상병별로 결론이 갈릴 수 있으면 서면을 나누고(`4_서면작성/skills/노동서면작성/references/서면별-구조.md`), 절차가
+# 따로 진행되므로 서면마다 호증 번호를 1부터 따로 매긴다. 호증목록은 서면마다 '## {이름} 건' 절로, 제출 묶음은 `출력/제출/{이름}/` 로 나눈다
+# (`.claude/commands/증거정리.md` '서면을 나눈 라운드'). 같은 번호가 서면마다 다른 호증이므로 호증을 찾는 도구는 서면 이름으로 가른다.
+# 이름은 띄어쓰기·가운뎃점·밑줄·붙임표·괄호를 뺀 꼴로 맞댄다(`서면초안_소음성난청이명.md` = `제출/소음성 난청·이명/` = '## 소음성 난청·이명 건').
+# 2026. 11. 8. `/하자보완`: 상병별로 나눈 심사청구의 두 서면(호증 14건·27건)을 도구마다 한 번호로 보아, 호증 번호 검사가 두 목록을
+# 합쳐 14건짜리 서면의 증 제15~27호증 인용을 통과시켰고, 증거 인용 대조는 번호마다 경로가 짧은 쪽 파일(증 제8호증은 다른 서면의 진단서)을
+# 골랐으며, 전 면 읽기와 쟁점 낱말은 같은 번호의 다른 서면 호증 14건을 읽을 대상에서 뺐다. 관문의 서증 압축·제출본 검사는 `제출/` 맨 위만 보아
+# '해당 없음'으로 넘겼다.
+_NAME_DROP = re.compile(r'[\s·ㆍ・_\-()（）\[\]]')
+
+
+def name_form(text) -> str:
+    """서면 이름·폴더 이름·목록 절 제목을 맞대는 꼴."""
+    import unicodedata
+    return _NAME_DROP.sub('', unicodedata.normalize('NFC', str(text)))
+
+
+def draft_name(path) -> str:
+    """`서면초안_{이름}.md` 의 이름(name_form). `서면초안.md` 와 다른 파일은 ''."""
+    stem = Path(path).stem
+    return name_form(stem[len('서면초안'):]) if stem.startswith('서면초안') else ''
+
+
+def split_names(out_dir) -> list[str]:
+    """서면을 나눈 라운드의 서면 이름. `출력/` 에 `서면초안.md` 가 없고 `서면초안_{이름}.md` 가 둘 이상일 때만이다(evidence_cite_review.drafts_of)."""
+    out_dir = Path(out_dir)
+    if not out_dir.is_dir() or (out_dir / '서면초안.md').is_file():
+        return []
+    names = sorted({draft_name(p) for p in out_dir.glob('서면초안_*.md') if not re.search(r'본문|백업|\.bak', p.name)} - {''})
+    return names if len(names) > 1 else []
+
+
+def name_owner(text, names) -> str | None:
+    """글(폴더 이름·목록 절 제목·파일 이름)이 가리키는 서면 이름. 이름꼴이 그 이름을 담으면 그 서면이고, 여럿이면 긴 것이다."""
+    t = name_form(text)
+    hit = [n for n in names if len(n) >= 2 and n in t]
+    return max(hit, key=len) if hit else None
+
+
+def folder_owner(path, base, names) -> str | None:
+    """파일이 어느 서면의 폴더 아래에 있는지(base 아래 폴더 이름으로). 서면의 폴더가 아니면 None."""
+    path, base = Path(path), Path(base)
+    try:
+        parts = path.relative_to(base).parts[:-1]
+    except ValueError:
+        parts = path.parts[:-1]
+    for part in parts:
+        owner = name_owner(part, names)
+        if owner:
+            return owner
+    return None
+
+
 def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 

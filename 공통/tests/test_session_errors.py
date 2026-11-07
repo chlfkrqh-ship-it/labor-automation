@@ -47,6 +47,24 @@ class SessionErrorsTest(unittest.TestCase):
         self.assertTrue(err.startswith('FileNotFoundError'))
         self.assertNotIn('GGM', err)                           # 오류 글의 사건 이름을 옮기지 않는다
 
+    def test_rows_copied_into_a_forked_session_are_counted_once(self):
+        """갈라 이어 쓴 세션은 앞 대화의 줄을 uuid·시각 그대로 옮겨 담는다(2026. 11. 8. `/하자보완`)."""
+        import os
+        지금 = time.time()
+
+        def 이름(글, u, 때):
+            r = json.loads(줄(글, 때=때))
+            r['uuid'] = u
+            return json.dumps(r, ensure_ascii=False) + '\n'
+        갈라냄 = json.dumps({'type': 'queue-operation', 'timestamp': time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime(지금 - 30))}) + '\n'
+        a, b = self.d / 'a.jsonl', self.d / 'b.jsonl'
+        a.write_text(이름(우리, 'u1', 지금 - 60), encoding='utf-8')
+        b.write_text(갈라냄 + 이름(우리, 'u1', 지금 - 60) + 이름(우리, 'u2', 지금 - 10), encoding='utf-8')
+        os.utime(b, (지금 - 3600, 지금 - 3600))                      # 파일 시각은 갈라 낸 세션이 더 이르다
+        self.assertEqual(se.차례([b, a]), [a, b])
+        s, n, fn, err, 횟수, 세션, _ = se.모으기(self.d, 26)[0]
+        self.assertEqual((횟수, 세션), (2, 2))                       # 옮긴 줄 u1 은 원래 세션에서 한 번, b 의 새 오류 u2 는 따로
+
     def test_errors_outside_the_range_are_left_out(self):
         (self.d / 'a.jsonl').write_text(줄(우리, 때=time.time() - 3600 * 50) + 줄('Traceback (most recent call last) 깨진 글'), encoding='utf-8')
         self.assertEqual(se.모으기(self.d, 26), [])

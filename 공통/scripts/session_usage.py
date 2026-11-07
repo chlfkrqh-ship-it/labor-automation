@@ -19,6 +19,8 @@
   파일 시각을 바꾸므로, 파일 시각만으로 고르면 며칠 전 세션이 통째로 섞인다(2026. 11. 4. `/하자보완`: 10. 28.·10. 31. 에 끝난 세션 둘이 21시간
   범위에 들어와 비용 합에 $229 를 더하고, 그 하위 작업 4개가 범위 안의 일로 보였다). 범위 앞에서 이어진 세션은 범위 안의 응답만 세고,
   범위 앞 마지막 응답은 범위 안 첫 응답의 갈래와 캐시 다시 씀을 가르는 데만 쓴다. 범위 안에 응답이 없는 세션은 뺀다.
+- 갈라 이어 쓴 세션은 앞 대화의 줄을 원래 uuid·시각 그대로 옮겨 담으므로, 세션을 처음 시각 차례로 읽어 앞서 읽은 세션에 있던 줄은 뒤
+  세션에서 세지 않는다(2026. 11. 8. `/하자보완`: 한 대화의 응답 28회가 두 세션에 함께 세였다).
 
 2026. 11. 3. 담당 노무사 "하자 고칠 땐 오푸스 5.5 최대 노력으로 가야 하고", "사용량 측면에서는 어떤 결과가 있었노"(노정일 사건).
 """
@@ -36,7 +38,7 @@ if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from session_errors import 기록_폴더, 시각  # noqa: E402
+from session_errors import 기록_폴더, 시각, 차례  # noqa: E402
 
 모델 = 'claude-opus-5-5'
 노력 = 'max'
@@ -89,15 +91,25 @@ def 맨모델(m) -> str:
     return re.sub(r'\[.*\]$', '', str(m or ''))
 
 
-def 읽기(f: Path, 부터: float | None = None) -> dict:
+def 읽기(f: Path, 부터: float | None = None, 본줄: dict | None = None) -> dict:
     """세션 기록 하나를 응답 차례대로 묶는다. 부터(시각)를 주면 그 앞의 줄과 시각 없는 줄(앱이 덧붙인 mode·cost-state, 옮긴 앞 대화)은
-    세지 않는다. 그 앞의 응답은 '범위밖'으로 남겨 다음 응답의 갈래를 가르는 데만 쓴다. 첫 지시는 범위 안의 첫 지시이고, 없으면 세션의 첫 지시이다."""
+    세지 않는다. 그 앞의 응답은 '범위밖'으로 남겨 다음 응답의 갈래를 가르는 데만 쓴다. 첫 지시는 범위 안의 첫 지시이고, 없으면 세션의 첫 지시이다.
+    본줄({줄 uuid: 세션})을 주면 앞서 읽은 세션에 있던 줄(갈라 이어 쓴 세션이 옮겨 담은 앞 대화)도 같이 세지 않고 '옮김'으로 둔다.
+    옮긴 줄은 시각이 원래 대화의 시각 그대로여서 범위로는 걸러지지 않는다(2026. 11. 8. `/하자보완`: 11. 7. 한 사건의 결과 조회 세션을 갈라
+    이은 세션이 앞 대화 157줄을 옮겨 담아, 응답 28회와 메일·팀즈 글 10만 토큰이 두 세션에 함께 세였다)."""
     응답, 차례, 압축뒤 = {}, [], False
-    s = {'처음': None, '끝': None, '첫지시': '', '비용': None, '모델별': {}, '압축': 0, '그림': 0, '도구낱말': '', '말': ''}
+    s = {'처음': None, '끝': None, '첫지시': '', '비용': None, '모델별': {}, '압축': 0, '그림': 0, '도구낱말': '', '말': '',
+         '줄': set(), '옮겨온곳': set()}
     세션첫지시 = ''
     for r in 줄들(f):
         때 = r.get('timestamp')
-        안 = 부터 is None or (시각(r) or 0) >= 부터
+        u = r.get('uuid')
+        옮김 = bool(본줄 and u and u in 본줄)
+        if u:
+            s['줄'].add(u)
+        if 옮김:
+            s['옮겨온곳'].add(본줄[u])
+        안 = (부터 is None or (시각(r) or 0) >= 부터) and not 옮김
         if 때 and 안:
             s['처음'] = s['처음'] or 때
             s['끝'] = 때
@@ -125,7 +137,7 @@ def 읽기(f: Path, 부터: float | None = None) -> dict:
             k = m['id']
             if k not in 응답:
                 응답[k] = {'쓰임': {}, '도구': [], '모델': 맨모델(m.get('model')), '노력': r.get('perTurnEffort') or r.get('effort'), '압축뒤': 압축뒤,
-                         '범위밖': not 안}
+                         '범위밖': not 안, '옮김': 옮김}
                 차례.append(k)
                 압축뒤 = False
             x = 응답[k]
@@ -237,12 +249,14 @@ def 보고(f: Path, s: dict, 낱말: str, 부터: float | None = None) -> list:
     h, sub = c['합'], 하위작업(f, 부터)
     s['셈한비용'] = sum(c['비용'].values()) + sub['비용']
     센 = [x for x in s['응답'] if not x['범위밖']]
-    앞 = len(s['응답']) - len(센)
+    옮긴 = sum(1 for x in s['응답'] if x.get('옮김'))
+    앞 = len(s['응답']) - len(센) - 옮긴
     모델들 = sorted({x['모델'] for x in 센 if x['모델']})
     노력들 = sorted({str(x['노력']) for x in 센 if x['노력']})
     전체 = sum(v[0] for v in c['갈래'].values()) or 1
     out = [f"## {f.stem[:8]} · {(s['처음'] or '')[:16]} ~ {(s['끝'] or '')[:16]} (UTC) · {', '.join(모델들) or '모델 모름'} · 노력 {', '.join(노력들) or '모름'}"
-           + (f" · 범위 앞 응답 {앞}회는 세지 않음" if 앞 else ''),
+           + (f" · 범위 앞 응답 {앞}회는 세지 않음" if 앞 else '')
+           + (f" · 앞 세션 {', '.join(sorted(x[:8] for x in s.get('옮겨온곳', ())))}에서 옮겨 담은 응답 {옮긴}회는 세지 않음" if 옮긴 else ''),
            f"첫 지시: {s['첫지시']}",
            f"'{낱말}': 도구 입력 {s['도구낱말'].count(낱말)}회, 담당자 말 {s['말'].count(낱말)}회" if 낱말 else '',
            f"비용 ${s['셈한비용']:.2f}(토큰으로 셈" + (f", 하위 작업 ${sub['비용']:.2f} 포함" if sub['개수'] else '') + ')'
@@ -292,15 +306,16 @@ def main(argv=None) -> int:
     부터 = dt.datetime.now().timestamp() - a.시간 * 3600 if a.시간 else None
     지금 = os.environ.get('CLAUDE_CODE_SESSION_ID')
     본, 비용, 뺀 = 0, 0.0, []
-    for f in sorted(폴더.glob('*.jsonl'), key=lambda p: p.stat().st_mtime):
-        if 부터 is not None and f.stat().st_mtime < 부터:
-            continue
+    본줄 = {}          # 앞서 읽은 세션의 줄 uuid → 세션. 갈라 이어 쓴 세션이 옮겨 담은 앞 대화를 한 번만 센다
+    for f in 차례(f for f in 폴더.glob('*.jsonl') if 부터 is None or f.stat().st_mtime >= 부터):
         if f.stem == 지금:      # 세고 있는 이 세션은 뺀다
             뺀.append(f'{f.stem[:8]}(지금 세션)')
             continue
-        s = 읽기(f, 부터)
+        s = 읽기(f, 부터, 본줄)
+        for u in s['줄']:
+            본줄.setdefault(u, f.stem)
         if 부터 is not None and all(x['범위밖'] for x in s['응답']):      # 앱이 시각 없는 줄만 덧붙여 파일 시각이 바뀐 지난 세션
-            뺀.append(f'{f.stem[:8]}(범위 안 응답 없음)')
+            뺀.append(f'{f.stem[:8]}(범위 안 응답 없음' + (', 앞 대화를 옮겨 담기만 함' if any(x.get('옮김') for x in s['응답']) else '') + ')')
             continue
         if a.낱말 and a.낱말 not in s['도구낱말'] and a.낱말 not in s['말']:
             continue

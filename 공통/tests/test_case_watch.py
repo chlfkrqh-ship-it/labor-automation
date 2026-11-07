@@ -289,6 +289,32 @@ class CaseWatchTests(unittest.TestCase):
         차례('이 메일 영어로 번역해줘', 영어)
         self.assertIsNone(cw.on_stop(self.data, self.root, self.state, now=T0 + 14))                         # 영어를 시킨 차례
 
+    def test_recap_cut_at_a_dotted_date_is_sent_back_once(self):
+        """2026. 11. 8. `/하자보완`: 앱은 마무리 요약의 첫 마침표까지를 한 줄 요약으로 쓴다. 11. 4. '11.', 11. 7. '…없습니다(11.' 로 끊겼다."""
+        def 차례(recap):
+            self.write_transcript(
+                {'type': 'user', 'timestamp': iso(T0), 'message': {'role': 'user', 'content': '메일 반영해줘'}},
+                {'type': 'assistant', 'timestamp': iso(T0 + 6),
+                 'message': {'content': [{'type': 'tool_use', 'name': 'mcp__ccd_turn__wrap_up', 'input': {'recap': recap}}]}},
+                {'type': 'assistant', 'timestamp': iso(T0 + 7), 'message': {'content': [{'type': 'text', 'text': '메일 0건입니다.'}]}})
+
+        for 잘림 in ('메일과 팀즈 모두 새 글이 없어 덧붙인 것이 없습니다(11. 6. 20:29 이후, 토요일). 장부를 고쳤습니다.',
+                   '11. 3. 20:30 이후 메일 21건과 팀즈 147건을 확인해 여섯 사건 기록에 덧붙였습니다.',
+                   '하자 3건을 고쳐 올렸습니다(11. 8.)'):                     # 한 문장뿐이어도 '(11.' 에서 끊긴다
+            차례(잘림)
+            막음 = cw.on_stop(self.data, self.root, self.state, now=T0 + 10)
+            self.assertEqual(막음['decision'], 'block', 잘림)
+            self.assertIn('첫 문장', 막음['reason'])
+            self.assertIsNone(cw.on_stop({**self.data, 'stop_hook_active': True}, self.root, self.state, now=T0 + 11))
+        for 온전 in ('메일 21건과 팀즈 147건을 확인해 여섯 사건 기록에 덧붙였습니다. 범위는 11. 3. 20:30 이후입니다.',
+                   '메일과 팀즈 모두 새 글이 없습니다(11월 6일 20:29 이후). 장부를 고쳤습니다.',
+                   '시험 639개 통과, 실패 0. 기록을 고쳤습니다.',
+                   '하자 3건을 고쳐 2287d04 로 올렸습니다. 소요시간 36분(0.60시간).',
+                   '하자 3건을 고쳐 올렸습니다.'):
+            차례(온전)
+            self.assertIsNone(cw.on_stop(self.data, self.root, self.state, now=T0 + 12), 온전)
+        self.assertEqual(cw.요약_첫문장('하자를 고쳤습니다. 둘째 문장.'), '하자를 고쳤습니다.')
+
     def test_old_baselines_are_pruned(self):
         self.state.mkdir(parents=True)
         old = self.state / 'old-session.json'

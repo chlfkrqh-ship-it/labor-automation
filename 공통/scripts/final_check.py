@@ -595,6 +595,19 @@ def 초안_이름(초안: Path) -> str:
     return 초안.stem.replace('서면초안', '').strip('_')
 
 
+def 제출_자리(라운드: Path, 초안: Path) -> Path:
+    """제출 묶음 폴더. 서면을 나눈 라운드는 `출력/제출/{이름}/` 이다(이름은 `system.name_form` 으로 맞댄다. '소음성 난청·이명' = 서면초안_소음성난청이명).
+    2026. 11. 8. `/하자보완`: `출력/제출/` 맨 위만 보아 서면마다 나눈 묶음의 서증 압축·제출본 검사를 '해당 없음'으로 넘겼다."""
+    제출 = 라운드 / '출력' / '제출'
+    names = _system.split_names(라운드 / '출력')
+    이름 = _system.draft_name(초안) if names else ''
+    if 이름 and 제출.is_dir():
+        for d in sorted(p for p in 제출.iterdir() if p.is_dir()):
+            if _system.name_owner(d.name, names) == 이름:
+                return d
+    return 제출
+
+
 def 대조표_자리(사건: Path, 라운드: Path, 초안: Path) -> tuple:
     """(인용 대조표, 판결문 PDF 대조 보고서). 서면초안_{이름}.md 는 이름이 든 표(라운드나 사건 폴더의 작업/)를 쓴다."""
     이름 = 초안_이름(초안)
@@ -633,7 +646,7 @@ def 서면(사건: Path, 라운드번호=None, 대상=None, 초안없음_허용=
     if 초안 is None:
         후보 = 초안_목록(라운드)
         초안 = 후보[0] if 후보 else 라운드 / '출력' / '서면초안.md'
-    제출 = 라운드 / '출력' / '제출'
+    제출 = 제출_자리(라운드, 초안)
     if not 초안.is_file():
         if 초안없음_허용:       # 밤 점검: 증거만 새로 받은 사건이면 읽기 기록만 본다
             res.add('초안', '해당 없음', f'{라운드.name} 초안 없음')
@@ -646,7 +659,7 @@ def 서면(사건: Path, 라운드번호=None, 대상=None, 초안없음_허용=
     작업 = 라운드 / '작업'
     res.대상, res.대상시각 = f'{라운드.name}/출력/{초안.name}', 초안.stat().st_mtime
     res.run('문체', [S4 / 'style_check.py', 대상], '위반 0')
-    res.run('호증 번호', [S4 / 'citation_check.py', 대상], '목록에 없는 호증 0')
+    res.run('호증 번호', [S4 / 'citation_check.py', 대상, '--서면', 초안], '목록에 없는 호증 0')
     표, 보고서 = 대조표_자리(사건, 라운드, 초안)
     판례(res, 대상, 표, 라운드 / '참고자료' / '인용판결_PDF', 라운드, 보고서)
 
@@ -719,7 +732,7 @@ def 서면(사건: Path, 라운드번호=None, 대상=None, 초안없음_허용=
     이름 = 초안_이름(초안)
     docxs = [p for p in (라운드 / '출력').glob('*.docx')
              if not p.name.startswith('~$') and 병합본_이름.search(p.name) and not 부속_이름.search(p.name)
-             and (not 이름 or 이름 in re.sub(r'[\s·ㆍ]', '', p.name))]
+             and (not 이름 or _system.name_form(이름) in _system.name_form(p.name))]
     res.넘긴판 = bool(docxs) or 제출.is_dir()
     병합본 = 대상 if 대상.suffix.lower() == '.docx' else (max(docxs, key=lambda p: p.stat().st_mtime) if docxs and 초안없음_허용 else None)
     if 병합본 is None:

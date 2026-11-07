@@ -168,6 +168,79 @@ class SplitDraftTest(unittest.TestCase):
             self.assertEqual(ecr.drafts_of(rnd), [one])                 # 서면초안.md 가 있으면 그 하나이다
             self.assertEqual(ecr.review_dir(one).name, '증거인용검토')
 
+    def split_case(self, tmp):
+        """서면마다 번호를 따로 매긴 라운드: 제출/{이름}/증거 둘, 앞 절차의 '증' 번호 원자료, 민사 기록의 갑 호증."""
+        case = Path(tmp) / '사건C'
+        rnd = case / '라운드1'
+        (rnd / '출력').mkdir(parents=True)
+        for n in ('림프종', '적응장애우울증'):
+            (rnd / '출력' / f'서면초안_{n}.md').write_text('본문\n', encoding='utf-8')
+        files = {
+            rnd / '출력' / '제출' / '림프종' / '증거' / '증 제2호증_2024 진단서.pdf': 'L2',
+            rnd / '출력' / '제출' / '림프종' / '증거' / '증 제8호증_조사결과 발췌.pdf': 'L8',
+            rnd / '출력' / '제출' / '적응장애·우울증' / '증거' / '증 제2호증_2023 진단서.pdf': 'A2',
+            rnd / '출력' / '제출' / '적응장애·우울증' / '증거' / '증 제8호증_진단서.pdf': 'A8',
+            rnd / '출력' / '제출' / '적응장애·우울증' / '증거' / '증 제20호증_발췌.pdf': 'A20',
+            rnd / '우리증거' / '앞 신청 입증자료' / '증제2호증_표창.pdf': 'P2',
+            rnd / '우리증거' / '앞 신청 입증자료' / '증제20호증_문답서.pdf': 'P20',
+            rnd / '우리증거' / '민사_서증_(갑1_업무분장표)_원고.pdf': 'G1',
+        }
+        for p, t in files.items():
+            p.parent.mkdir(parents=True, exist_ok=True)
+            make_pdf(p, [[t]])
+        return case.resolve(), rnd.resolve()
+
+    def test_split_drafts_find_their_own_exhibits(self):
+        """서면마다 호증 번호를 따로 매긴 라운드에서 다른 서면의 같은 번호나 앞 절차의 번호를 고르지 않는다(2026. 11. 8. `/하자보완`:
+        상병별로 나눈 심사청구의 증거 인용 대조가 번호마다 경로가 짧은 파일을 골라 증 제8호증에 다른 서면의 진단서를, 증 제2호증에 요양급여 신청 때의
+        표창 내역을 맞댈 뻔했다)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            case, rnd = self.split_case(tmp)
+            name = lambda found, k: ecr.lookup(found, k).name if ecr.lookup(found, k) else None
+            small = ecr.find_exhibits(case, rnd, rnd / '출력' / '서면초안_림프종.md')
+            self.assertEqual(name(small, '증2'), '증 제2호증_2024 진단서.pdf')
+            self.assertEqual(name(small, '증8'), '증 제8호증_조사결과 발췌.pdf')
+            self.assertIsNone(name(small, '증20'))                       # 림프종 서면에는 없는 번호다(앞 신청의 증 제20호증이 아니다)
+            self.assertEqual(name(small, '갑1'), '민사_서증_(갑1_업무분장표)_원고.pdf')   # 다른 부호는 그대로 찾는다
+            big = ecr.find_exhibits(case, rnd, '적응장애·우울증')
+            self.assertEqual(name(big, '증8'), '증 제8호증_진단서.pdf')
+            self.assertEqual(name(big, '증20'), '증 제20호증_발췌.pdf')
+            every = ecr.exhibits_by_draft(case, rnd)
+            self.assertEqual(sorted(k for k in every if k.startswith('증')),
+                             sorted(['증2', '증20', '증2@림프종', '증8@림프종', '증2@적응장애우울증', '증8@적응장애우울증',
+                                     '증20@적응장애우울증']))
+            self.assertEqual(every['증2'][0].name, '증제2호증_표창.pdf')     # 앞 신청의 자료도 읽을 대상으로 남는다
+            self.assertEqual(ecr.split_key('증8@림프종'), ('증8', '림프종'))
+
+    def test_unsplit_round_is_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            case, rnd = self.split_case(tmp)
+            (rnd / '출력' / '서면초안.md').write_text('본문\n', encoding='utf-8')   # 서면초안.md 가 있으면 나눈 라운드가 아니다
+            self.assertEqual(ecr.split_names(rnd), [])
+            self.assertEqual(ecr.exhibits_by_draft(case, rnd), ecr.find_exhibits(case, rnd))
+            self.assertEqual(ecr.find_exhibits(case, rnd, rnd / '출력' / '서면초안_림프종.md'), ecr.find_exhibits(case, rnd))
+
+    def test_split_key_ocr_cache_needs_matching_mark(self):
+        """'증8@림프종' 은 대조 도구가 번호만으로 쌓은 캐시('증8')를 표지가 같을 때만 쓴다. 표지 없는 옛 캐시는 다른 서면의 것일 수 있다."""
+        with tempfile.TemporaryDirectory() as tmp:
+            case, rnd = self.split_case(tmp)
+            pdf = rnd / '출력' / '제출' / '림프종' / '증거' / '증 제8호증_조사결과 발췌.pdf'
+            ocr = Path(tmp) / 'ocr'
+            (ocr / '증8').mkdir(parents=True)
+            (ocr / '증8' / 'pages.json').write_text(json.dumps({'1': {'src': '문자인식', 'units': [['옛 글', [0, 0, 1, 1]]], 'png': 'p1.png'}}),
+                                                  encoding='utf-8')
+            ex = ecr.Exhibit('증8@림프종', pdf, Path(tmp) / '캐시', ocr_dirs=[ocr], use_ocr=False)
+            try:
+                self.assertEqual(ex._existing_ocr([1]), {})                  # 표지 없음 → 쓰지 않는다
+                (ocr / '증8' / ecr.MARK).write_text(ex.hash, encoding='utf-8')
+                self.assertEqual(ex._existing_ocr([1])[1]['units'][0][0], '옛 글')
+                plain = ecr.Exhibit('증8', pdf, Path(tmp) / '캐시', ocr_dirs=[ocr], use_ocr=False)
+                (ocr / '증8' / ecr.MARK).unlink()
+                self.assertIn(1, plain._existing_ocr([1]))                    # 나누지 않은 키는 종전처럼 옛 캐시를 쓴다
+                plain.close()
+            finally:
+                ex.close()
+
 
 class ExhibitTest(unittest.TestCase):
     def test_file_names(self):

@@ -21,7 +21,8 @@ prompt 는 담당자가 결과를 지적한 것으로 보이는 메시지('왜',
 매일 자정 `/하자보완` 이 그 기록을 읽고 지적이 지침·검사로 옮겨졌는지 본다(2026. 11. 2. 담당 노무사 "매일 자정에 자체 하자보완 시스템").
 
 stop 은 마지막 보고나 마무리 요약(wrap_up 의 recap·ask)이 영어이면 한국어로 다시 쓰라는 막음(decision: block)을 한 번 낸다
-(2026. 11. 7. `/하자보완`, 아래 '영어 보고'). 담당자가 영어·번역을 시킨 차례는 막지 않는다.
+(2026. 11. 7. `/하자보완`, 아래 '영어 보고'). 담당자가 영어·번역을 시킨 차례는 막지 않는다. 마무리 요약의 첫 문장이 '11. 7.' 같은
+점 찍은 날짜·번호에서 끊기면 첫 문장을 고쳐 다시 부르라고 한 번 막는다(2026. 11. 8. `/하자보완`, 아래 '잘린 요약').
 
 어떤 오류가 나도 종료 코드 0 으로 끝나 메시지를 막지 않는다. 출력은 ASCII JSON 이다(Windows 콘솔 인코딩과 무관).
 """
@@ -222,7 +223,7 @@ def on_stop(data: dict, root: Path, sdir: Path, now: float | None = None) -> dic
     save_state(sdir, sid, state)
     prune(sdir, now)
     try:
-        return 영어_보고_막기(data)
+        return 영어_보고_막기(data) or 요약_잘림_막기(data)
     except Exception:                                   # 판별하지 못하면 막지 않는다
         return None
 
@@ -250,16 +251,22 @@ def 영어인가(text: str, 최소: int = 120) -> bool:
 
 def 마지막_차례(transcript: str | None) -> tuple:
     """(담당자의 마지막 말, 그 뒤 마지막 응답 글, 그 뒤 wrap_up 의 recap·ask). 대화 기록 끝부분만 읽는다."""
+    사람, 응답, 요약, _ = _마지막_차례(transcript)
+    return 사람, 응답, 요약
+
+
+def _마지막_차례(transcript: str | None) -> tuple:
+    """(담당자의 마지막 말, 그 뒤 마지막 응답 글, 그 뒤 wrap_up 의 recap·ask, 그 recap)."""
     if not transcript:
-        return '', '', ''
+        return '', '', '', ''
     try:
         with open(transcript, 'rb') as f:
             f.seek(0, os.SEEK_END)
             f.seek(max(0, f.tell() - 보고_꼬리))
             tail = f.read()
     except OSError:
-        return '', '', ''
-    사람, 응답, 요약 = '', '', ''
+        return '', '', '', ''
+    사람, 응답, 요약, recap = '', '', '', ''
     for line in tail.splitlines():
         if b'"user"' not in line and b'"assistant"' not in line:
             continue
@@ -273,7 +280,7 @@ def 마지막_차례(transcript: str | None) -> tuple:
                 continue
             글 = c if isinstance(c, str) else '\n'.join(x.get('text', '') for x in c or [] if isinstance(x, dict) and x.get('type') == 'text')
             if 글.strip() and not 글.lstrip().startswith('<'):
-                사람, 응답, 요약 = 글, '', ''
+                사람, 응답, 요약, recap = 글, '', '', ''
         elif d.get('type') == 'assistant' and isinstance(c, list):
             for x in c:
                 if not isinstance(x, dict):
@@ -283,7 +290,40 @@ def 마지막_차례(transcript: str | None) -> tuple:
                 elif x.get('type') == 'tool_use' and str(x.get('name', '')).endswith('wrap_up'):
                     i = x.get('input') or {}
                     요약 = ' '.join(str(i.get(k) or '') for k in ('recap', 'ask'))
-    return 사람, 응답, 요약
+                    recap = str(i.get('recap') or '')
+    return 사람, 응답, 요약, recap
+
+
+# 잘린 요약. 앱은 마무리 요약(wrap_up 의 recap)의 첫 마침표(뒤에 빈칸이 오는 것)까지를 사이드바 상태와 예약 실행의 한 줄 요약으로 쓴다.
+# 첫 문장에 '11. 7.' 같은 점 찍은 날짜·번호가 있으면 그 자리에서 끊긴다. 2026. 11. 4. `mail-sync` 요약이 '11.'이었고(첫 문장을 날짜로 열었다),
+# 2026. 11. 7. 에는 `공통/운영.md` '작업 보고'의 본보기대로 날짜를 첫 문장 끝 괄호에 두었는데도 '…없습니다(11.'로 끊겼다(2026. 11. 8. `/하자보완`).
+def 요약_첫문장(recap: str) -> str:
+    m = re.search(r'[.!?](?=\s|$)', recap or '')
+    return (recap or '')[:m.end()] if m else (recap or '')
+
+
+def 잘린_요약(recap: str) -> str | None:
+    """첫 문장이 점 찍은 날짜·번호에서 끊기면 그 첫 문장. 숫자 뒤 마침표 다음에 또 숫자가 오거나, 끊긴 자리가 괄호 안이면 끊긴 것이다."""
+    첫 = 요약_첫문장(recap)
+    if not 첫 or len(첫) == len((recap or '').rstrip()):
+        return None
+    뒤 = (recap or '')[len(첫):].lstrip()
+    if (re.search(r'\d\.$', 첫) and re.match(r'\d', 뒤)) or 첫.count('(') > 첫.count(')'):
+        return 첫
+    return None
+
+
+def 요약_잘림_막기(data: dict) -> dict | None:
+    if data.get('stop_hook_active'):
+        return None
+    *_, recap = _마지막_차례(data.get('transcript_path'))
+    첫 = 잘린_요약(recap)
+    if not 첫:
+        return None
+    return {'decision': 'block',
+            'reason': f"마무리 요약(wrap_up 의 recap)의 첫 문장이 '{첫[-30:]}' 에서 끊겨 사이드바와 예약 실행 목록에 그만큼만 보입니다. "
+                      "앱은 첫 마침표까지를 한 줄 요약으로 씁니다. 첫 문장에는 '11. 7.' 같은 점 찍은 날짜·번호를 넣지 말고(날짜는 둘째 문장에 두거나 "
+                      "'11월 7일'로 쓴다) wrap_up 을 다시 부릅니다(공통/운영.md '작업 보고'). 마지막 보고 글은 그대로 둡니다."}
 
 
 def 영어_보고_막기(data: dict) -> dict | None:

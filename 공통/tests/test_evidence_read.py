@@ -1320,6 +1320,31 @@ class WholeCaseReadingTest(unittest.TestCase):
         make_pdf(case / '작업' / '검색메모.pdf', [글])                                     # 우리 작업 폴더의 다른 것은 자료가 아니다
         self.assertEqual(sorted(er.자료_목록(case, [case])), ['단체협약.pdf', '대법원 2020다5678.pdf'])
 
+    def test_split_drafts_with_own_numbering_read_every_exhibit(self):
+        """서면마다 호증 번호를 따로 매긴 라운드는 같은 번호의 두 서면 호증과 앞 절차의 같은 번호 원자료를 모두 읽는다(2026. 11. 8. `/하자보완`:
+        한 번호에 한 파일만 두어 상병별로 나눈 심사청구의 제출 호증 41건 가운데 31건이 읽을 대상에서 빠졌다)."""
+        case = self.root / '이○○_심사청구'
+        r1 = case / '라운드1'
+        (r1 / '출력').mkdir(parents=True)
+        for n in ('림프종', '적응장애우울증'):
+            (r1 / '출력' / f'서면초안_{n}.md').write_text('본문\n', encoding='utf-8')
+        for 폴더, 글자 in (('림프종', '혈액암'), ('적응장애·우울증', '우울증')):
+            (r1 / '출력' / '제출' / 폴더 / '증거').mkdir(parents=True)
+            make_pdf(r1 / '출력' / '제출' / 폴더 / '증거' / '증 제2호증_진단서.pdf', [글 + 글자])
+        (r1 / '우리증거' / '앞 신청 입증자료').mkdir(parents=True)
+        make_pdf(r1 / '우리증거' / '앞 신청 입증자료' / '증제2호증_표창.pdf', [글 + '표창'])
+        호증 = er.서면_호증(case)
+        self.assertEqual(sorted(호증), ['증2', '증2@림프종', '증2@적응장애우울증'])
+        self.assertEqual(호증['증2@적응장애우울증'].parent.parent.name, '적응장애·우울증')
+        self.assertEqual(er.호증_표시('증2@림프종'), '증 제2호증(림프종)')
+        self.assertEqual(sorted(호증, key=er.호증_정렬), ['증2', '증2@림프종', '증2@적응장애우울증'])
+        code, out = run('make', case, '--no-ocr')
+        self.assertEqual(code, 0, out)
+        self.assertTrue((case / '증거관리' / '호증읽기' / '증2@림프종.md').is_file())
+        self.assertIn('# 증 제2호증(림프종) 읽기 기록', (case / '증거관리' / '호증읽기' / '증2@림프종.md').read_text(encoding='utf-8'))
+        (r1 / '출력' / '서면초안_적응장애우울증.md').unlink()                 # 서면이 하나면 종전처럼 번호마다 하나이다
+        self.assertEqual(sorted(er.서면_호증(case)), ['증2'])
+
 
 class PlanTest(unittest.TestCase):
     """호증이 많으면 한 창에서 다 읽지 않고 나누어 읽는다(2026. 11. 3. 노정일 호증을 한 창에서 다시 읽다가 문맥이 약 82만 토큰까지 찼다)."""
