@@ -6,12 +6,14 @@
 대조표는 머리줄에 '사건 표시'와 '원문 문장' 칸이 있는 마크다운 표이다. 칸 안에는 세로줄(|)을 쓰지 않는다.
 보는 것
   1) 원문 문장이 '원문' 칸의 파일에 글자 그대로 있는가(공백·줄바꿈·따옴표 모양은 무시, 가운데 줄임 … 은 앞뒤 조각이 차례로 있는지)
-  2) 그 파일에 사건번호(문서번호)와 선고일(회시일)이 있는가
+  2) 그 파일에 사건번호(문서번호)와 선고일(회시일), 사건 표시의 법원 이름이 있는가(법원은 '서울고법'·'광주지법' 같은 줄임말과 같게 본다)
   3) 산출물에 그 사건번호와 선고일, 대조표의 본문 문장이 그대로 있는가
   4) 산출물에 나오는 사건번호 가운데 대조표에 줄이 없는 것. 본문(서면 MD 는 '---' 위, DOCX 는 전부)에 나오는 번호는 본문 인용 줄이나
      참고 줄이 있어야 하고, 하단 목록 줄(서면 대조표의 ①②③·'참고(하단 ②)')이나 뺀 줄만 있으면 불일치이다. 하단 목록의 번호는
      하단 목록 줄과 뺀 줄도 받친다(하단 메모가 그 판결을 뺀 까닭을 적는 자리이고, 뺀 줄도 1)·2)로 원문과 맞댄다)
   5) '확정' 칸에 심리불속행으로 적은 대법원 번호가 산출물에 나오면 그 곁에 '심리불속행'이 있는가
+  6) 산출물에 '{법원} {날짜} 선고 {사건번호}' 꼴로 적은 자리마다 그 법원·날짜가 대조표 사건 표시의 법원·선고일과 같은가. 같은 판결을
+     여러 번 적으면 자리마다 본다(3)은 산출물 어딘가에 그 날짜가 있는지만 본다)
 원문이 LBOX 보관함·화면에만 있어 파일이 없는 줄은 '원문' 칸에 '보관함 일치'나 '화면 확인'이라고 적혀 있으면 그렇게 세고,
 없으면 원문 미확인으로 알린다. 불일치가 하나라도 있으면 종료 코드 1, 원문 미확인만 있으면 0 이다(보고에 따로 적는다).
 번호 칸에 '참고(이 사건)'·'참고(대상 서면)'이라고 적고 원문 문장과 원문 칸을 비운 줄은 사건을 가리키기만 하는 줄이다(표지의 사건번호,
@@ -34,8 +36,47 @@ QUOTES = str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"', "「": "
 POINTER = ("이 사건", "대상 서면")      # 번호 칸에 '참고'와 함께 이 말이 든 줄은 사건을 가리키기만 한다(공통/자체검토.md 3절)
 
 
+# 사건 표시의 법원 이름. 지원은 본원 이름 뒤에 붙은 것만 보고, 뜻이 넓은 '…지원' 낱말 하나는 법원으로 읽지 않는다
+COURT = (r"(?:[가-힣]+(?:고등법원|지방법원|행정법원|가정법원|회생법원|고법|지법|행법|가법)(?:\s*[가-힣]+지원)?"
+         r"|대법원|특허법원|헌법재판소|헌재|[가-힣]*노동위원회)")
+MARK = re.compile(r"(%s)?\s*((?:19|20)\d{2})\s*\.\s*(\d{1,2})\s*\.\s*(\d{1,2})\s*\.?\s*(?:선고|자)?\s*$" % COURT)
+SHORT = (("고등법원", "고법"), ("지방법원", "지법"), ("행정법원", "행법"), ("가정법원", "가법"), ("헌법재판소", "헌재"))
+
+
 def norm(s):
     return re.sub(r"\s+", "", s.translate(QUOTES))
+
+
+def court_form(s):
+    """법원 이름을 맞대는 꼴. 공백을 빼고 줄임말로 맞춘다(법제처 본문 머리는 '서울고법 2022-05-12 2021누40722' 꼴이다)."""
+    s = norm(s)
+    for a, b in SHORT:
+        s = s.replace(a, b)
+    return s
+
+
+def same_court(a, b):
+    """두 법원 이름이 같은가. 한쪽이 다른 쪽의 끝과 같으면 같게 본다('안산지원' ↔ '수원지방법원 안산지원'). 본원과 지원은 다르다."""
+    a, b = court_form(a), court_form(b)
+    return a.endswith(b) or b.endswith(a)
+
+
+def marks(text):
+    """'{법원} {날짜} 선고 {사건번호}' 꼴로 적은 자리 [(사건번호, 법원(없으면 ''), (연, 월, 일))]. 번호 바로 앞에 날짜가 있는 자리만 본다
+    ('…, 2017두12346(병합)'처럼 앞 번호에 이어 적은 번호와 날짜 없이 적은 번호는 보지 않는다)."""
+    out = []
+    for m in CASE.finditer(text):
+        y, c, n = m.groups()
+        if c in NOT_CODE or c[0] in NOT_FIRST:
+            continue
+        b = MARK.search(text[max(0, m.start() - 60):m.start()])
+        if b:
+            out.append((y + c + n, b.group(1) or "", (int(b.group(2)), int(b.group(3)), int(b.group(4)))))
+    return out
+
+
+def mark_text(court, day):
+    return ("%s %d. %d. %d." % ((court,) + day)).strip()
 
 
 def cases(text):
@@ -203,6 +244,10 @@ def check(table_path, targets):
                 bad += 1; notes.append("불일치: 원문 파일에 %s 없음" % key)
             if day and not (day & dates(src)):
                 bad += 1; notes.append("불일치: 원문 파일에 날짜 %s 없음" % sorted(day))
+            # 2026. 11. 9. `/하자보완`: 11. 6. 판결문 PDF 를 받지 않게 된 뒤로 사건 표시의 법원은 원문과 맞대는 곳이 없었다(PDF 대조만 보았다)
+            court = next((c for n_, c, _ in marks(mark) if nums and n_ == nums[0] and c), "")
+            if court and court_form(court) not in court_form(src):
+                bad += 1; notes.append("불일치: 원문 파일에 법원 %s 없음" % court)
         # 3) 산출물
         gone = not is_body(r, table_path)      # 뺀 인용과 참고 줄(원심, 하단 목록 등)은 산출물과 맞대지 않는다
         for p, t in ([] if gone else tgt):
@@ -245,6 +290,23 @@ def check(table_path, targets):
                     lines.append("불일치: 뺀 인용의 %s 가 산출물에 남아 있다 — 지우거나, 남길 것이면 본문 인용 줄을 둔다(%s)" % (c, os.path.basename(p)))
                 else:
                     lines.append("불일치: 산출물의 %s 가 대조표에 없다(%s)" % (c, os.path.basename(p)))
+    # 6) 산출물에 적은 판결 표시를 자리마다 대조표의 사건 표시와 맞댄다. 2026. 11. 9. `/하자보완`: 3)은 산출물 어딘가에 그 날짜가 있는지만 보아
+    #    같은 판결을 두 번 적은 산출물의 둘째 자리 날짜가 틀려도 지나갔고, 법원 이름은 어디서도 맞대지 않았다. 실제 산출물 사본의 표시 자리를
+    #    하나씩 바꾸어 보니 날짜 302곳 가운데 122곳, 법원 301곳 가운데 246곳이 지나갔다(사건 표시를 잘못 옮기는 것, 루트 CLAUDE.md 판례 인용 ①)
+    표시 = {}
+    for r in rows:
+        for c, court, d in marks(r.get("사건 표시", "")):
+            표시.setdefault(c, set()).add((court, d))
+    for p, t in tgt:
+        틀림 = {}
+        for c, court, d in marks(t):
+            if c in 표시 and not any(d == d2 and (not court or not c2 or same_court(court, c2)) for c2, d2 in 표시[c]):
+                틀림[(c, court, d)] = 틀림.get((c, court, d), 0) + 1
+        for (c, court, d), k in 틀림.items():
+            bad += k
+            lines.append("불일치: 산출물의 '%s 선고 %s'%s 가 대조표의 사건 표시(%s)와 다르다 — 원문으로 맞는 쪽을 확인해 고친다(%s)"
+                         % (mark_text(court, d), c, " (%d곳)" % k if k > 1 else "",
+                            " / ".join(mark_text(c2, d2) for c2, d2 in sorted(표시[c])), os.path.basename(p)))
     return {"줄": len(rows), "불일치": bad, "원문미확인": unseen, "사건표시만": only, "내용": lines}
 
 

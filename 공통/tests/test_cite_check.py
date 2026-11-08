@@ -170,6 +170,62 @@ class CiteCheckTest(unittest.TestCase):
         res = cite_check.check(table, [self.p("산출물.md")])
         self.assertIn("산출물의 2003다8862 가 대조표에 없다", "\n".join(res["내용"]))
 
+    def test_each_place_of_a_case_mark_matches_the_table(self):
+        """2026. 11. 9. `/하자보완`: 3)은 산출물 어딘가에 그 날짜가 있는지만 보아, 같은 판결을 두 번 적은 산출물의 둘째 자리 날짜가 틀려도
+        지나갔고 법원 이름은 어디서도 맞대지 않았다(실제 산출물 사본으로 날짜 302곳 가운데 122곳, 법원 301곳 가운데 246곳이 지나감)."""
+        again = "같은 취지에서 대법원 2025. 7. 17. 선고 2021도11886 판결은 다시 들었습니다. 위 2021도11886 판결도 같다. "
+        body = TARGET.split("\n\n## 보완 메모")[0]
+        self.write("산출물.md", again + body)
+        self.assertEqual(self.run_check()["불일치"], 0, self.run_check()["내용"])
+        # 둘째 자리의 날짜가 틀림 — 다른 자리에 맞는 날짜가 있어도 잡는다
+        self.write("산출물.md", again.replace("2025. 7. 17.", "2025. 7. 7.") + body)
+        res = self.run_check()
+        self.assertEqual(res["불일치"], 1, res["내용"])
+        self.assertIn("'대법원 2025. 7. 7. 선고 2021도11886' 가 대조표의 사건 표시(대법원 2025. 7. 17.)와 다르다", "\n".join(res["내용"]))
+        # 둘째 자리의 법원이 틀림
+        self.write("산출물.md", again.replace("대법원", "서울고등법원", 1) + body)
+        res = self.run_check()
+        self.assertEqual(res["불일치"], 1, res["내용"])
+        self.assertIn("서울고등법원 2025. 7. 17. 선고 2021도11886", "\n".join(res["내용"]))
+        # 같은 꼴로 두 번 틀리면 곳 수를 센다
+        self.write("산출물.md", again.replace("2025. 7. 17.", "2025. 7. 7.") * 2 + body)
+        res = self.run_check()
+        self.assertEqual(res["불일치"], 2, res["내용"])
+        self.assertIn("(2곳)", "\n".join(res["내용"]))
+        # 날짜 없이 적은 번호, '선고된' 같은 다른 글은 표시로 보지 않는다
+        self.write("산출물.md", "2025. 7. 18. 선고된 2021도11886 판결의 취지는 위와 같다. " + body)
+        self.assertEqual(self.run_check()["불일치"], 0)
+
+    def test_court_short_forms_and_branch_courts(self):
+        """줄임말('서울고법')은 같게 보고, 본원과 지원은 다르게 본다. 법원 이름 없이 날짜만 적은 자리는 날짜만 맞댄다."""
+        src = "## [판례] 수원지법 안산지원 2025-01-09 2024가합9386 해고무효확인\n\n### 이유\n해고는 정당한 이유가 없어 무효이다.\n"
+        self.write("원문2.md", src)
+        row = ("| 2 | 수원지방법원 안산지원 2025. 1. 9. 선고 2024가합9386 판결 | 해고는 정당한 이유가 없어 무효라고 판단하였습니다 "
+               "| 해고는 정당한 이유가 없어 무효이다 | 이유 | 원고 승 | 없음 | 확정 | `원문2.md` |\n")
+        self.write("대조표.md", HEAD + ROW + row)
+        body = TARGET.split("\n\n## 보완 메모")[0]
+        tail = " 해고는 정당한 이유가 없어 무효라고 판단하였습니다(%s 2025. 1. 9. 선고 2024가합9386 판결)."
+        for court, bad in (("수원지방법원 안산지원", 0), ("수원지법 안산지원", 0), ("안산지원", 0), ("수원지방법원", 1), ("서울중앙지방법원", 1)):
+            self.write("산출물.md", body + tail % court)
+            res = self.run_check()
+            self.assertEqual(res["불일치"], bad, (court, res["내용"]))
+        self.write("산출물.md", body + " 해고는 정당한 이유가 없어 무효라고 판단하였습니다(2025. 1. 9. 선고 2024가합9386 판결).")
+        self.assertEqual(self.run_check()["불일치"], 0)
+        self.write("산출물.md", body + " 해고는 정당한 이유가 없어 무효라고 판단하였습니다(2025. 1. 8. 선고 2024가합9386 판결).")
+        self.assertEqual(self.run_check()["불일치"], 2)      # 3) 날짜 없음과 6) 그 자리의 날짜
+
+    def test_table_court_must_be_in_the_source(self):
+        """2026. 11. 9. `/하자보완`: 판결문 PDF 를 받지 않게 된 뒤(11. 6.) 사건 표시의 법원은 원문과 맞대는 곳이 없었다.
+        법제처 본문 머리는 '서울고법 2022-05-12' 꼴이어서 줄임말로 맞대어 본다."""
+        self.write("대조표.md", HEAD + ROW.replace("대법원 2025. 7. 17.", "서울고등법원 2025. 7. 17."))
+        self.write("산출물.md", TARGET.replace("대법원 2025. 7. 17.", "서울고등법원 2025. 7. 17."))
+        res = self.run_check()
+        self.assertEqual(res["불일치"], 1, res["내용"])
+        self.assertIn("원문 파일에 법원 서울고등법원 없음", "\n".join(res["내용"]))
+        self.write("원문.md", SRC.replace("대법원 2025-07-17", "서울고법 2025-07-17"))
+        res = self.run_check()
+        self.assertEqual(res["불일치"], 0, res["내용"])
+
     def test_statute_and_dates_are_not_case_numbers(self):
         self.assertEqual(cite_check.cases("근로기준법 제60조제5항, 제76조의3, 2026년10월31일, 11일분, 99두202, 2022가단23572"), {"99두202", "2022가단23572"})
 
