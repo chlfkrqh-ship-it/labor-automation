@@ -20,6 +20,9 @@
                  미확정·확인 못한 판결은 7일 안에 다시 본 날짜가 있다(미확정 줄은 '참고'로 따로 보인다)
   판결 원문      본문 인용 판결이 있으면 작업/판결원문_열람대조.md(법제처 본문·LBOX 화면 글을 열람해 맞댄 기록)의 '사람 판정' 표가
                  본문 인용 줄마다 판단 부분인지·방향·사안 비교까지 찼고, '주의'(앞 글에 주장·원심·인정사실) 줄은 비고가 있다.
+                 사안 비교는 '판시 쟁점: … / 같은 점: … / 다른 점: … / 원용 까닭: …' 네 부분이 모두 있어야 하고(같은 점·다른 점이 함께 '없음'이면
+                 견준 것이 아니다), 판결이 판단한 처분(판시 쟁점·대조표의 원문 문장·주문·결론)이 본문 명제(그 문장에 처분이 없으면 산출물 전체)의
+                 처분과 겹치지 않는데 '다른 점'에 그 차이를 적지 않았으면 막는다
                  판결문 PDF 를 받아 둔 폴더(참고자료/인용판결_PDF)가 있으면 예전대로 cite_pdf_check.py 문제 0 과 판결원문_PDF대조.md 의 표를 본다
                  (2026. 11. 6. 담당자 지시로 대조용 PDF 는 받지 않는다. 그래서 PDF 가 없는 줄·상급심은 열람 대조 기록으로 받는다)
   상급심 처리    산출물에 적은 상급심('확정' 칸의 대법원 판결. 심리불속행·문서 없음 표기가 없는 것)은 열람 대조 기록의 '상급심의 처리' 절에 번호가 있다
@@ -236,20 +239,86 @@ def 같은_자리(줄: str, 표줄: str) -> bool:
     return False
 
 
-def 사람판정_빈(table: Path, report: Path, 만=None, 빼고=frozenset()) -> list:
+# '사람 판정' 표의 '사안 비교' 칸. 판결이 판단한 쟁점, 그 판결의 사실관계가 우리 사건과 같은 점·다른 점, 그런데도 원용할 수 있는 까닭을
+# 나누어 적는다. 2026. 11. 9. 담당 노무사 "응 그렇게 보강해줘": 관문은 칸이 찼는지만 보아 '같은 징계 사건' 같은 한 줄로도 지나갔다
+# (11. 6. 최문희 검토 메모의 안산 판결은 강등에 대한 판단만 있어 원용하기 어려웠다).
+사안_머리 = re.compile(r'(판시\s*쟁점|판결이\s*판단한\s*쟁점|판단한\s*쟁점|같은\s*점|다른\s*점|원용(?:할\s*수\s*있는)?\s*(?:까닭|이유)?)\s*[:：]')
+사안_부분 = ('판시 쟁점', '같은 점', '다른 점', '원용 까닭')
+사안_빈말 = {'', '-', '—', '–', '.', '?', '같음', '동일', '동일함', '유사', '유사함', '비슷', '비슷함', '다름', '상이', '상이함', '해당 없음', '해당없음'}
+# 처분의 갈래. 판결이 판단한 처분과 우리 명제의 처분이 겹치는지 본다(앞의 것부터 맞춘다: '정리해고'를 '해고'로, '정직원'을 '정직'으로 읽지 않는다)
+처분_꼴 = (('정리해고', r'정리\s*해고|경영상\s*(?:이유에\s*의한\s*)?해고'), ('사직', r'권고\s*사직|의원\s*면직|사직'),
+          ('해고', r'해고|해임|파면|직권\s*면직'), ('강등', r'강등|강임'), ('정직', r'정직(?!원|하)|출근\s*정지'), ('감봉', r'감봉|감급'),
+          ('견책', r'견책'), ('경고', r'경고'), ('직위해제', r'직위\s*해제'), ('대기발령', r'대기\s*발령'),
+          ('전보', r'전보|배치\s*전환|전환\s*배치|전직\s*(?:처분|명령|발령)|전출|전적'), ('휴직', r'휴직'),
+          ('갱신 거절', r'갱신\s*(?:거절|거부)|갱신\s*기대'), ('본채용 거부', r'본\s*채용\s*(?:거부|거절)|시용|수습\s*(?:기간|근로|사원|평가)'))
+_처분 = re.compile('|'.join(f'(?P<g{i}>{p})' for i, (_, p) in enumerate(처분_꼴)))
+
+
+def 처분들(s: str) -> dict:
+    """글에 나오는 처분 갈래와 그 수."""
+    c = {}
+    for m in _처분.finditer(s or ''):
+        g = 처분_꼴[int(m.lastgroup[1:])][0]
+        c[g] = c.get(g, 0) + 1
+    return c
+
+
+def 주된_처분(글: str) -> set:
+    """산출물 본문(서면은 '---' 위)에서 주로 다투는 처분. 가장 많이 나온 갈래의 30% 이상, 두 번 이상 나온 갈래."""
+    c = 처분들(글.split('\n---\n')[0] if 글 else '')
+    if not c:
+        return set()
+    위 = max(c.values())
+    return {g for g, n in c.items() if n >= max(2, 위 * 0.3)}
+
+
+def 사안_나누기(칸: str) -> dict:
+    """'사안 비교' 칸을 머리말(판시 쟁점: / 같은 점: / 다른 점: / 원용 까닭:)로 나눈다. 머리말이 없는 칸은 {}."""
+    칸 = 칸.replace('<br>', ' ')
+    ms = list(사안_머리.finditer(칸))
+    out = {}
+    for i, m in enumerate(ms):
+        머리 = m.group(1)
+        이름 = '판시 쟁점' if '쟁점' in 머리 else '같은 점' if '같은' in 머리 else '다른 점' if '다른' in 머리 else '원용 까닭'
+        값 = re.sub(r'^[\s/;,·]+|[\s/;,·]+$', '', 칸[m.end():ms[i + 1].start() if i + 1 < len(ms) else len(칸)])
+        out[이름] = (out.get(이름, '') + ' ' + 값).strip()
+    return out
+
+
+def 사안_문제(칸: str, 본문: str, 판결글: str, 문서_처분: set) -> list:
+    """'사안 비교' 칸이 모자란 곳. 네 부분이 다 있는지, 같은 점·다른 점이 함께 '없음'은 아닌지, 판결이 판단한 처분(판시 쟁점·대조표의
+    원문 문장·주문·결론)이 본문 명제의 처분(그 문장에 없으면 산출물이 주로 다투는 처분)과 겹치지 않으면 '다른 점'이 그 차이를 적었는지."""
+    부분 = 사안_나누기(칸)
+    빈 = lambda s: re.sub(r'\s', '', s or '') in {re.sub(r'\s', '', x) for x in 사안_빈말}
+    없음 = lambda s: re.sub(r'[\s.]', '', s or '') in ('없음', '없다')
+    빠진 = [이름 for 이름 in 사안_부분 if 빈(부분.get(이름)) or (이름 in ('판시 쟁점', '원용 까닭') and 없음(부분.get(이름)))]
+    if 빠진:
+        return [f"사안 비교의 {'·'.join(빠진)}" + (' — 판시 쟁점: / 같은 점: / 다른 점: / 원용 까닭: 으로 나누어 적는다' if not 부분 else '')]
+    if 없음(부분['같은 점']) and 없음(부분['다른 점']):
+        return ['사안 비교의 같은 점·다른 점이 모두 없음(인정사실을 읽고 견준 것을 적는다)']
+    판결 = set(처분들(부분['판시 쟁점'] + ' ' + 판결글))
+    우리 = set(처분들(본문)) or 문서_처분
+    if 판결 and 우리 and not (판결 & 우리) and not (set(처분들(부분['다른 점'])) & (판결 | 우리)):
+        return [f"사안 비교의 다른 점 — 판결은 {'·'.join(sorted(판결))} 사안이고 본문 명제는 {'·'.join(sorted(우리))}인데 그 차이와 원용 까닭을 적지 않았다"]
+    return []
+
+
+def 사람판정_빈(table: Path, report: Path, 만=None, 빼고=frozenset(), 글: str = '') -> list:
     """판결 본문 인용 줄(cite_pdf_check 가 보는 줄)마다 '사람 판정' 표에 판단 부분인지·방향·사안 비교가 있는지,
-    'PDF 의 자리'에 '주의'(앞 글에 주장·원심·인정사실 등)가 붙은 줄은 비고가 있는지. 빠진 줄을 '줄(빠진 칸)'로 돌려준다.
+    'PDF 의 자리'에 '주의'(앞 글에 주장·원심·인정사실 등)가 붙은 줄은 비고가 있는지, 사안 비교가 네 부분을 갖추었는지(`사안_문제`,
+    글은 산출물의 글이다). 빠진 줄을 '줄(빠진 칸)'로 돌려준다.
     같은 이름의 표 줄이 없으면 같은 판결이면서 번호가 겹치는 표 줄로 본다(묶어 적은 줄). 다른 목의 판정으로 이 줄을 통과시키지 않고,
     걸리는 표 줄이 여럿이면 하나라도 비었을 때 막는다. 2026. 11. 3. 같은 판결의 표 줄 하나만 차면 그 판결의 다른 인용 줄까지 통과하였다.
     만·빼고는 (줄 이름, 사건 표시) 묶음이다. PDF 를 받아 둔 사건에서 PDF 가 없는 줄은 열람 대조 기록에서, 나머지는 PDF 대조 보고서에서 본다."""
-    want = [(r.get('번호', '').strip(), cite_check.cases(r.get('사건 표시', ''))) for r in 본문_줄(table) if '법원' in r.get('사건 표시', '')
+    want = [(r.get('번호', '').strip(), cite_check.cases(r.get('사건 표시', '')), r) for r in 본문_줄(table) if '법원' in r.get('사건 표시', '')
             and (만 is None or (r.get('번호', '').strip(), r.get('사건 표시', '')) in 만)
             and (r.get('번호', '').strip(), r.get('사건 표시', '')) not in 빼고]
     if not want:
         return []
     if not report.is_file():
-        return [f'{n}(표 없음)' for n, _ in want]
-    표줄 = []          # (줄 이름, 그 줄의 판결 번호, 빠진 칸)
+        return [f'{n}(표 없음)' for n, _, _ in want]
+    문서_처분 = 주된_처분(글)
+    표줄 = []          # (줄 이름, 그 줄의 판결 번호, 빠진 칸, 사안 비교 칸)
     for head, rs in 표들(절_글(report.read_text(encoding='utf-8'), '사람 판정')):
         def 칸(말):
             return next((i for i, h in enumerate(head) if 말 in h), None)
@@ -261,19 +330,22 @@ def 사람판정_빈(table: Path, report: Path, 만=None, 빼고=frozenset()) ->
             빠짐 = [이름 for 이름, i in 칸들.items() if i is None or not r[i].strip()]
             if i자리 is not None and '주의' in r[i자리] and (i비고 is None or not r[i비고].strip()):
                 빠짐.append('비고(주의 줄)')
-            표줄.append((r[i줄].strip(), cite_check.cases(r[i판결]) if i판결 is not None else set(), 빠짐))
+            사안칸 = r[칸들['사안 비교']] if 칸들['사안 비교'] is not None else ''
+            표줄.append((r[i줄].strip(), cite_check.cases(r[i판결]) if i판결 is not None else set(), 빠짐, 사안칸))
     이름_판결 = {}
-    for n, 번호들 in want:
+    for n, 번호들, _ in want:
         이름_판결.setdefault(n, set()).add(frozenset(번호들))
     out = []
-    for n, 번호들 in want:
+    for n, 번호들, 대조 in want:
         # 표 줄의 '판결' 칸이 비었으면 이름이 꼭 같고 그 이름으로 인용한 판결이 하나일 때만 그 줄로 본다.
         # 2026. 11. 3. 점검: 판결 칸이 빈 표 줄 하나가 번호가 겹치는 다른 판결의 인용 줄까지 통과시켰다
         def 같은판결(x, 느슨):
             return bool(x[1] & 번호들) if x[1] and 번호들 else 느슨
         후보 = ([x for x in 표줄 if x[0] == n and 같은판결(x, len(이름_판결[n]) == 1)]
               or [x for x in 표줄 if 같은판결(x, False) and 같은_자리(n, x[0])])
-        빠짐 = max((x[2] for x in 후보), key=len) if 후보 else ['줄 없음']
+        판결글 = ' '.join(대조.get(h, '') for h in ('원문 문장', '주문·결론'))
+        빠짐 = max((x[2] + ([] if '사안 비교' in x[2] else 사안_문제(x[3], 대조.get('본문 문장', ''), 판결글, 문서_처분))
+                   for x in 후보), key=len) if 후보 else ['줄 없음']
         if 빠짐:
             out.append(f"{n}({', '.join(빠짐)})")
     return out
@@ -480,7 +552,7 @@ def 판례(res: 결과, 대상: Path, table: Path, pdfdir: Path, 폴더: Path, r
             res.add('판결 원문 대조', '막힘', f'판결 원문 열람 대조 기록이 없다 — 법제처 본문·LBOX 화면 글로 맞대고 {열람} 의 사람 판정 표를 채운다'
                                           '(`공통/자체검토.md` 4-1절 4.)')
             return
-        빈 = 사람판정_빈(table, 열람)
+        빈 = 사람판정_빈(table, 열람, 글=text)
         res.add('판결 판단 부분·방향·사안 비교', '막힘' if 빈 else '통과',
                 (f"'사람 판정' 표에서 빈 줄: {', '.join(빈[:12])} ({열람})") if 빈 else f'{len(본문줄)}줄 판정(원문 열람 대조 {열람.name})')
         빠짐, 본 = 상급심_빠짐(table, text, 열람)
@@ -515,7 +587,7 @@ def 판례(res: 결과, 대상: Path, table: Path, pdfdir: Path, 폴더: Path, r
                                                    f"원문 열람 대조 {열람.name} 으로 봄")
                 code = 0
     if code == 0:
-        빈 = 사람판정_빈(table, report, 빼고=PDF없는줄) + (사람판정_빈(table, 열람, 만=PDF없는줄) if PDF없는줄 else [])
+        빈 = 사람판정_빈(table, report, 빼고=PDF없는줄, 글=text) + (사람판정_빈(table, 열람, 만=PDF없는줄, 글=text) if PDF없는줄 else [])
         res.add('판결 판단 부분·방향·사안 비교', '막힘' if 빈 else '통과',
                 (f"'사람 판정' 표에서 빈 줄: {', '.join(빈[:12])} ({report}{', ' + 열람.name if PDF없는줄 else ''})") if 빈 else f'{len(본문줄)}줄 판정')
 
@@ -1052,8 +1124,9 @@ def 최종판_검사(docx: Path) -> tuple:
     추적 = len(re.findall(r'<w:(?:ins|del|moveFrom|moveTo)\b', 본문))
     if 추적:
         문제.append(f'변경 추적 {추적}곳')
-    if re.search(r'<w:comment\b', 메모):
-        문제.append(f"메모 {len(re.findall(r'<w:comment\b', 메모))}개")
+    메모수 = len(re.findall(r'<w:comment\b', 메모))      # f-string 안에 역슬래시를 두면 파이썬 3.11 에서 문법 오류이다
+    if 메모수:
+        문제.append(f'메모 {메모수}개')
     for 칸, 이름 in (('dc:creator', '작성자'), ('cp:lastModifiedBy', '마지막으로 수정한 사람')):
         m = re.search(rf'<{칸}>(.*?)</{칸}>', core, re.S)
         값 = html.unescape(m.group(1)).strip() if m else ''
