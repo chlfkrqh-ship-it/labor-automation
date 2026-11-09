@@ -30,8 +30,12 @@ docx_merge.py — 서면초안.md 를 서면_프레임.docx 의 "다음" 이후�
      - 들여쓴 "을나 제N호증  이름" 줄 → 입증방법 항목('(가)번호매기기_내용')
      - '입 증 방 법' 줄 뒤에 아무 줄도 없으면(새로 내는 호증이 없는 서면) 입증방법 제목을 넣지 않고,
        본문 끝(결론) 뒤에 빈 문단 두 개를 둔 다음 프레임의 제출일·대리인 블록을 잇는다(새 면으로 넘기지 않는다.
-       2026. 10. 19. 한전 태양광 준비서면(3) 담당자 지시, 서면별-구조.md '입증방법 표기'). 그 블록(표)과 '귀중' 줄은
-       한 면에 묶어, 면 끝에서 제출일 줄만 남거나 '귀중' 줄만 다음 면으로 넘어가지 않게 한다.
+       2026. 10. 19. 한전 태양광 준비서면(3) 담당자 지시, 서면별-구조.md '입증방법 표기').
+     - 제출일·대리인 블록(표)과 '귀중' 줄은 입증방법이 있든 없든 한 면에 묶어, 면 끝에서 제출일 줄만 남거나 대리인 줄·
+       '귀중' 줄만 다음 면으로 넘어가지 않게 한다(행마다 cantSplit, 표 안 문단과 '귀중' 앞 문단에 keepNext). 빈 줄·간격은
+       줄이지 않으므로 표가 면 끝에 걸리면 블록 전체가 다음 면으로 간다. 표지의 표·'귀중'은 건드리지 않는다.
+       입증방법이 길어 표가 갈린 일(2026. 10. 20. 김경민 10줄, 10. 21. 박준선 15줄, 11. 9. 이승민 15줄)마다 사건 빌드에
+       따로 붙이던 묶기를 2026. 11. 9. 여기로 옮겼다(입증방법이 있는 서면은 그전까지 묶지 않았다).
      - 그 밖의 줄 → 본문 문단(원문자는 본문 한글 글꼴, 가운뎃점 낱말은 noProof)
      - 요소 사이에는 빈 문단 하나
      - 발췌 그림: 캡션 바로 뒤(빈 줄 없이), 폭 15cm, keepNext·keepLines(문서변환.md 나. 증거 이미지).
@@ -516,19 +520,22 @@ def merge(frame, md, out):
         # '귀중' 앞 빈 문단(p_end)이 두 번째 빈 줄이 된다.
         for _ in range(2 if anchor is not p_end._p else 1):
             anchor.addprevious(copy.deepcopy(blank_tpl))
-        if anchor.tag == qn('w:tbl'):
-            # 본문 바로 뒤에 오므로 면 끝에서 제출일 줄만 남거나 '귀중' 줄만 다음 면으로 넘어가지 않게
-            # 표와 그 뒤 '귀중' 앞까지의 문단을 한 덩어리로 묶는다
-            gwi = paras[i_gwi]._p
-            tail, node = [], anchor.getnext()
-            while node is not None and node is not gwi:
-                if node.tag == qn('w:p'):
-                    tail.append(node)
-                node = node.getnext()
-            _keep_table_together(anchor, tail if node is gwi else ())
         print("입증방법: 새로 내는 호증이 없어 제목을 넣지 않고, 결론 뒤 빈 줄 두 개 다음에 제출일·대리인 블록을 이었습니다")
     elif anchor is not p_end._p:
         anchor.addprevious(copy.deepcopy(blank_tpl))
+    if anchor.tag == qn('w:tbl'):
+        # 면 끝에서 제출일 줄만 남거나 대리인 줄·'귀중' 줄만 다음 면으로 넘어가지 않게 표와 그 뒤 '귀중' 앞까지의
+        # 문단을 한 덩어리로 묶는다. 입증방법이 있어도 같다(입증방법이 길면 표가 두 면으로 갈렸다. 맨 위 '처리 순서' 1.).
+        # anchor 는 '다음' 뒤의 표이므로 표지의 표·'귀중'은 건드리지 않는다. 빈 줄·간격은 줄이지 않는다.
+        gwi = paras[i_gwi]._p
+        tail, node = [], anchor.getnext()
+        while node is not None and node is not gwi:
+            if node.tag == qn('w:p'):
+                tail.append(node)
+            node = node.getnext()
+        _keep_table_together(anchor, tail if node is gwi else ())
+        print("서명 블록: 제출일·대리인 표(%d행)%s 한 면에 묶었습니다" % (
+            len(anchor.findall(qn('w:tr'))), "와 '귀중' 줄을" if node is gwi else "를"))
 
     # 후처리까지 임시 파일에서 마친 뒤에만 출력 자리로 옮긴다. 도중에 멈추면 기존 출력(사람이 고친 판일 수
     # 있다)을 반쯤 처리된 파일로 바꾸거나 보관본으로 밀어내지 않는다.

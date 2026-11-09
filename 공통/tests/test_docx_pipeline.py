@@ -105,6 +105,16 @@ def captions_and_pictures(path):
     return found
 
 
+def closing_block(doc):
+    """(제출일·대리인 표, 그 표와 '귀중' 사이 문단들, '귀중' 문단). 마지막 '귀중' 앞의 마지막 표를 그 블록으로 본다
+    (사건 빌드의 서명블록 묶기가 표를 찾던 방법과 같다)."""
+    kids = [e for e in doc.element.body.iterchildren() if e.tag in (qn('w:p'), qn('w:tbl'))]
+    text = lambda e: ''.join(t.text or '' for t in e.iter(qn('w:t'))).strip()
+    i_gwi = max(i for i, e in enumerate(kids) if e.tag == qn('w:p') and text(e).endswith('귀중'))
+    i_tbl = max(i for i, e in enumerate(kids[:i_gwi]) if e.tag == qn('w:tbl'))
+    return kids[i_tbl], [e for e in kids[i_tbl + 1:i_gwi] if e.tag == qn('w:p')], kids[i_gwi]
+
+
 def run(func, *args, **kwargs):
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
@@ -137,6 +147,19 @@ class CaseDir(unittest.TestCase):
 
     def backups(self):
         return sorted(p for p in self.outdir.iterdir() if '.bak_merge_' in p.name)
+
+    def assertKeptTogether(self, tbl, tail):
+        """표가 두 면으로 갈라지지 않고(행마다 cantSplit), 표 안 모든 문단(마지막 행 포함)과 '귀중' 앞 문단이
+        다음과 붙어(keepNext) '귀중' 줄까지 한 면에 있다."""
+        trs = tbl.findall(qn('w:tr'))
+        self.assertTrue(trs)
+        for tr in trs:
+            trpr = tr.find(qn('w:trPr'))
+            self.assertTrue(trpr is not None and trpr.find(qn('w:cantSplit')) is not None)
+        self.assertTrue(tail)       # 프레임의 '귀중' 앞 빈 문단(docx_merge 가 요구한다)
+        for p in [p for tr in trs for p in tr.iter(qn('w:p'))] + list(tail):
+            ppr = p.find(qn('w:pPr'))
+            self.assertTrue(ppr is not None and ppr.find(qn('w:keepNext')) is not None)
 
 
 class HeadingTests(CaseDir):
@@ -525,20 +548,9 @@ class SafetyTests(CaseDir):
             blanks += 1
             nxt = nxt.getnext()
         self.assertEqual(blanks, 2)
-        self.assertIsNotNone(nxt)
-        if nxt.tag == qn('w:tbl'):      # 제출일·대리인 표는 두 면으로 갈라지지 않게 묶는다
-            trs = nxt.findall(qn('w:tr'))
-            self.assertTrue(all(tr.find(qn('w:trPr')) is not None and tr.find(qn('w:trPr')).find(qn('w:cantSplit')) is not None
-                                for tr in trs))
-            for tr in trs:          # '귀중' 줄까지 한 면에 두므로 마지막 행도 다음과 붙인다
-                for p in tr.iter(qn('w:p')):
-                    self.assertIsNotNone(p.find(qn('w:pPr')).find(qn('w:keepNext')))
-            node = nxt.getnext()
-            while node is not None and not ''.join(t.text or '' for t in node.iter(qn('w:t'))).strip().endswith('귀중'):
-                if node.tag == qn('w:p'):
-                    self.assertIsNotNone(node.find(qn('w:pPr')).find(qn('w:keepNext')))
-                node = node.getnext()
-            self.assertIsNotNone(node)
+        tbl, tail, _ = closing_block(d)
+        self.assertIs(nxt, tbl)         # 결론 뒤 빈 줄 두 개 다음이 제출일·대리인 표
+        self.assertKeptTogether(tbl, tail)
 
     def test_frame_without_evidence_title_stops(self):
         make_frame(self.frame)
@@ -579,6 +591,54 @@ class SafetyTests(CaseDir):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue((self.outdir / '최종서면.docx').exists())
         self.assertIn('호환용', result.stdout)
+
+
+class ClosingBlockTests(CaseDir):
+    """끝의 제출일·대리인 표와 '귀중' 줄은 입증방법이 있든 없든 한 면에 묶고, 표지의 표·'귀중'은 그대로 둔다
+    (입증방법이 15줄이 되자 Word 가 서명 표를 두 면으로 가른 일, 2026. 11. 9. 이승민 심사청구)."""
+
+    BODY = '1. 이 사건의 경위\n\n피고는 원고를 징계하였습니다.\n\n2. 결론\n\n원고의 청구는 기각되어야 합니다.\n'
+    ITEMS = ''.join('    을나 제%d호증  회의록\n' % n for n in range(1, 16))
+    BOTTOM = '\n---\n① [확인 필요 사항]\n- 없음\n'
+    DRAFT = BODY + '\n입 증 방 법\n\n' + ITEMS + BOTTOM
+    NO_EV = BODY + '\n입 증 방 법\n' + BOTTOM
+
+    def test_closing_block_kept_together_with_new_evidence(self):
+        code, log = self.merge(self.DRAFT)
+        self.assertEqual(code, 0, log)
+        self.assertIn("'귀중' 줄을 한 면에 묶었습니다", log)
+        d = docx.Document(str(self.out))
+        tbl, tail, _ = closing_block(d)
+        items = [p for p in d.paragraphs if p.style.name == '(가)번호매기기_내용' and p.text.strip()]
+        self.assertEqual(len(items), 15)
+        self.assertIs(items[-1]._p.getnext().getnext(), tbl)     # 입증방법 끝 줄, 빈 줄 하나, 제출일·대리인 표
+        self.assertKeptTogether(tbl, tail)
+
+    def test_cover_table_and_court_line_are_untouched(self):
+        def cover(path):
+            kids = list(docx.Document(str(path)).element.body.iterchildren())
+            text = lambda e: ''.join(t.text or '' for t in e.iter(qn('w:t'))).replace(' ', '')
+            i = next(i for i, e in enumerate(kids) if text(e) == '다음')
+            self.assertTrue(any(e.tag == qn('w:tbl') for e in kids[:i]))
+            self.assertTrue(any(text(e).endswith('귀중') for e in kids[:i]))   # 표지의 서명 표와 '귀중' 줄
+            return [etree.tostring(e) for e in kids[:i]]
+        for draft in (self.DRAFT, self.NO_EV):
+            with self.subTest(입증방법=draft is self.DRAFT):
+                code, log = self.merge(draft)
+                self.assertEqual(code, 0, log)
+                self.assertEqual(cover(self.out), cover(self.frame))
+
+    def test_binding_again_changes_nothing(self):
+        """병합 뒤에 사건 빌드의 서명블록 묶기를 이어 돌려도(이미 묶인 표를 다시 묶어도) 문서가 그대로다."""
+        for draft in (self.DRAFT, self.NO_EV):
+            with self.subTest(입증방법=draft is self.DRAFT):
+                code, log = self.merge(draft)
+                self.assertEqual(code, 0, log)
+                d = docx.Document(str(self.out))
+                before = etree.tostring(d.element.body)
+                tbl, tail, _ = closing_block(d)
+                docx_merge._keep_table_together(tbl, tail)
+                self.assertEqual(etree.tostring(d.element.body), before)
 
 
 class DraftBoundaryTests(CaseDir):
