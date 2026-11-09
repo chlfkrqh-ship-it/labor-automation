@@ -228,6 +228,21 @@ class DraftTests(unittest.TestCase):
         self.assertIn('<br />', page)
         self.assertIn('Malgun Gothic', page)
 
+    def test_double_star_marks_bold_and_the_rest_stays_escaped(self):
+        """'**…**' 는 굵게 넣고 별표는 지운다. 굵게 안팎의 글은 이스케이프하고, 짝이 없는 '**' 는 글자로 남긴다
+        (2026. 11. 9. 김천에너지서비스 배당 회신 — 담당자가 항목 제목을 Outlook 에서 굵게 고쳐 보냄)."""
+        page = draft.body_html('**1. 검토 요지**\n\n앞 **가운데 & <글>** 뒤\n별표 ** 하나')
+        self.assertIn('<b>1. 검토 요지</b>', page)
+        self.assertIn('앞 <b>가운데 &amp; &lt;글&gt;</b> 뒤', page)
+        self.assertIn('별표 ** 하나', page)
+        self.assertNotIn('**1.', page)
+        self.assertEqual(page.count('<div class="elementToProof"'), 4)
+
+    def test_runs_of_spaces_survive_html(self):
+        """HTML 은 이어진 빈칸을 하나로 줄이므로 '- 아  래 -' 의 두 칸이 그대로 보이게 &nbsp; 를 넣는다(2026. 11. 9.)."""
+        self.assertIn('- 아&nbsp; 래 -', draft.body_html('- 아  래 -'))
+        self.assertIn('한 칸 그대로', draft.body_html('한 칸 그대로'))
+
     def test_one_blank_line_between_body_and_signature(self):
         """서명이 빈 줄로 시작하지 않으면 본문 끝에 빈 줄 하나를 넣는다(2026. 11. 5. 삼양인터내셔날 내부 회신에서 '감사합니다.'가 본문에 붙었다)."""
         빈 = '<br /></div>'

@@ -16,7 +16,8 @@
   보내라고 한 때이고, 초안 만들기도 담당자가 시킨 때에만 한다(CLAUDE.md 'Microsoft 365 연결은 읽기만 한다').
 - 로그인은 mail_attach.py 와 같은 공용 앱(Microsoft Graph Command Line Tools)·같은 보관함(%LOCALAPPDATA%\\노동사건자동화\\메일\\)을
   쓰되 권한은 따로 동의받는다. mail_attach.py 는 그대로 읽기 전용이다.
-- 본문은 UTF-8 글 파일이고 줄마다 맑은 고딕 11pt 줄로 넣는다(빈 줄은 빈 줄로). 서명은 보낸 편지함의 최근 메일에서
+- 본문은 UTF-8 글 파일이고 줄마다 맑은 고딕 11pt 줄로 넣는다(빈 줄은 빈 줄로). 줄 안에서 '**…**' 로 감싼 글은 굵게 넣는다
+  (예: '**1. 검토 요지**'. 2026. 11. 9. 담당자가 항목 제목을 Outlook 에서 굵게 고쳐 보낸 뒤 넣었다). 서명은 보낸 편지함의 최근 메일에서
   <div id="Signature"> 를 그대로 가져와 그 아래에 붙인다(새 Outlook 이 화면에서 넣는 서명과 같은 모양). --no-signature 로 뺀다.
 - 회신은 원 메일에 createReply·createReplyAll 로 만들어 대화가 이어진다. 받는 사람은 새 Outlook 과 같게 정한다: 내가 보낸 메일에
   회신하면 그 메일의 받는 사람(전체 회신이면 참조도), 남의 메일이면 보낸 사람(전체 회신이면 받는 사람·참조도). 내 주소는 뺀다.
@@ -233,10 +234,27 @@ def http_error(exc: urllib.error.HTTPError) -> MailError:
 
 # ── 본문·서명·받는 사람·제목 ──
 
+굵게 = re.compile(r'\*\*(.+?)\*\*')
+
+
+def line_html(line: str) -> str:
+    """한 줄의 글. '**…**' 로 감싼 곳은 굵게(<b>) 넣고 별표는 지운다. 나머지 글은 그대로 이스케이프한다.
+    짝이 없는 '**' 는 글자로 남는다. 2026. 11. 9. 김천에너지서비스 배당 회신에서 담당자가 초안의 항목 제목(1.~3.)을
+    Outlook 에서 굵게 고쳐 보낸 뒤 "도구 고쳐 줘"."""
+    out, last = [], 0
+    for m in 굵게.finditer(line):
+        out.append(html.escape(line[last:m.start()]))
+        out.append('<b>' + html.escape(m.group(1)) + '</b>')
+        last = m.end()
+    out.append(html.escape(line[last:]))
+    # 이어진 빈칸은 HTML 에서 하나로 줄어드므로 마지막 하나만 남기고 &nbsp; 로 둔다('- 아  래 -'. Outlook 도 이렇게 적는다)
+    return re.sub(r' {2,}', lambda m: '&nbsp;' * (len(m.group()) - 1) + ' ', ''.join(out))
+
+
 def body_html(text: str) -> str:
-    """글 파일의 줄을 새 Outlook 이 쓰는 꼴(맑은 고딕 11pt 한 줄씩)로 바꾼다."""
+    """글 파일의 줄을 새 Outlook 이 쓰는 꼴(맑은 고딕 11pt 한 줄씩)로 바꾼다. '**…**' 는 굵게(line_html)."""
     lines = text.replace('\r\n', '\n').strip('\n').split('\n')
-    return ''.join(f'<div class="elementToProof" style="{STYLE}">{html.escape(line) if line.strip() else "<br />"}</div>'
+    return ''.join(f'<div class="elementToProof" style="{STYLE}">{line_html(line) if line.strip() else "<br />"}</div>'
                    for line in lines)
 
 
