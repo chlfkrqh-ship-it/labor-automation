@@ -22,6 +22,8 @@
 - 회신은 원 메일에 createReply·createReplyAll 로 만들어 대화가 이어진다. 받는 사람은 새 Outlook 과 같게 정한다: 내가 보낸 메일에
   회신하면 그 메일의 받는 사람(전체 회신이면 참조도), 남의 메일이면 보낸 사람(전체 회신이면 받는 사람·참조도). 내 주소는 뺀다.
   제목은 --subject 가 없으면 '{--prefix}{원 제목}' 이고, 원 제목이 Re:·RE:·회신: 으로 시작하지 않으면 'Re: ' 를 붙인다.
+  원문 머리는 아래 전달과 같이 새 Outlook 의 한글 꼴로 바꾼다. Microsoft Graph 는 영어 머리(From:·Sent:)에 보낸 시각을 세계
+  표준시로 넣어, 2026. 11. 9. 에이치앤드씨 회신 초안에 아홉 시간 이른 시각이 들어갔다(담당 노무사 "도구도 고쳐").
 - 전달은 원 메일에 createForward 로 만들어 원 메일의 첨부가 그대로 붙는다. 받는 사람은 --to·--cc 로 주거나, --same-as 로 준
   메일(예: 앞서 같은 사람들에게 보낸 메일)의 받는 사람·참조를 그대로 쓴다(내 주소는 뺀다). 원문 머리(보낸 사람·보낸 날짜·받는 사람·
   참조·제목)는 새 Outlook 이 화면에서 전달할 때와 같은 한글 꼴로 바꾸고, 제목은 원 제목 앞에 'Fw: ' 를 붙인다. 2026. 11. 6. OES
@@ -361,7 +363,8 @@ def korean_date(stamp: str) -> str:
 
 
 def forward_header(original: dict) -> str:
-    """새 Outlook 이 화면에서 전달할 때 넣는 원문 머리(2026. 11. 5. 보낸 편지함 사본과 같은 꼴)."""
+    """새 Outlook 이 화면에서 전달할 때 넣는 원문 머리(2026. 11. 5. 보낸 편지함 사본과 같은 꼴). 화면에서 회신할 때도 같은 꼴이다
+    (2026. 10. 26. 보낸 편지함의 회신 사본: 보낸 사람·보낸 날짜·받는 사람·제목, 원 메일에 참조가 있으면 참조)."""
     who = lambda xs: '; '.join(f"{html.escape((x.get('emailAddress') or {}).get('name') or address(x))} &lt;{html.escape(address(x))}&gt;"
                                for x in xs or [] if address(x))
     sent = original.get('sentDateTime') or original.get('receivedDateTime')
@@ -373,7 +376,8 @@ def forward_header(original: dict) -> str:
 
 
 def korean_head(page: str, original: dict) -> tuple[str, bool]:
-    """createForward 가 영어로 넣은 원문 머리(From:·Sent:·To:·Subject:)를 한글 머리로 바꾼다. 못 찾으면 그대로 둔다."""
+    """createReply·createReplyAll·createForward 가 영어로 넣은 원문 머리(From:·Sent:·To:·Subject:, 보낸 시각은 세계 표준시)를
+    한글 머리로 바꾼다. 못 찾으면 그대로 둔다."""
     m = FWD_HEAD.search(page or '')
     end = div_end(page, m.start()) if m else None
     if not end:
@@ -448,8 +452,10 @@ def reply(ref: str, body: str, attach=(), everyone: bool = False, prefix: str = 
     sign = my_signature(tok) if signature else None
     if signature and not sign:
         print('알림: 보낸 편지함에서 서명을 찾지 못해 서명 없이 만들었습니다.', file=sys.stderr)
-    content = put_on_top((draft.get('body') or {}).get('content') or '',
-                         body_html(text) + sign_gap(text, sign) + (sign or '') + '<div id="appendonsend"></div>')
+    page, swapped = korean_head((draft.get('body') or {}).get('content') or '', original)
+    if not swapped:
+        print('알림: 원문 머리를 찾지 못해 Microsoft Graph 가 넣은 그대로 두었습니다.', file=sys.stderr)
+    content = put_on_top(page, body_html(text) + sign_gap(text, sign) + (sign or '') + '<div id="appendonsend"></div>')
     request('PATCH', f"/me/messages/{q(draft['id'])}", tok, {
         'subject': subject or reply_subject(original.get('subject'), prefix),
         'body': {'contentType': 'html', 'content': content},

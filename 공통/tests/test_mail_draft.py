@@ -36,7 +36,10 @@ RECEIVED = {'id': 'AAMkADrecv-draft-test-0002', 'subject': '자료 송부', 'fro
             'ccRecipients': [person('나', ME), person('기 대리', 'y@example.com')], 'sentDateTime': '2026-11-05T23:55:20Z'}
 SIG = ('<div id="Signature" class="elementToProof"><div style="font-size:11pt"><br /></div>'
        '<div style="font-size:11pt">감사합니다.</div><div><div>홍길동 올림</div></div></div>')
-QUOTE = '<html><head><meta charset="utf-8"></head><body><hr><div id="divRplyFwdMsg">원문 인용</div></body></html>'
+QUOTE = ('<html><head><meta charset="utf-8"></head><body><hr style="display:inline-block;width:98%" />'      # createReply 가 주는 꼴
+         '<div id="divRplyFwdMsg"><b>From:</b> 정 부장 &lt;boss@example.com&gt;<br /><b>Sent:</b> Thursday, 05 November 2026 23:55:20<br />'
+         '<b>To:</b> 나 &lt;me@example.com&gt;<br /><b>Subject:</b> 자료 송부 <div> </div></div>'
+         '<div><div id="x_divRplyFwdMsg">앞선 인용</div>원문 인용</div></body></html>')
 FWD = ('<html><head><meta charset="utf-8"></head><body><div><br></div><hr style="display:inline-block;width:98%" tabindex="-1">'
        '<div id="divRplyFwdMsg" dir="ltr"><font face="Calibri, sans-serif" color="#000000" style="font-size:11pt">'
        '<b>From:</b> 정 부장 &lt;boss@example.com&gt;<br><b>Sent:</b> Friday, November 6, 2026 8:55 AM<br>'
@@ -191,6 +194,28 @@ class DraftTests(unittest.TestCase):
         code, out, err = self.run_cmd(draft.reply, 'AAMkADrecv-draft-test-0002', str(self.body), [], everyone=False)
         self.assertEqual((code, self.graph.created), (0, {'kind': 'createReply'}))
         self.assertEqual(self.graph.patch['subject'], 'Re: 자료 송부')
+
+    def test_reply_header_is_put_in_korean_with_korean_time(self):
+        """createReply 가 넣는 영어 머리(From:·Sent:, 보낸 시각은 세계 표준시)를 화면에서 회신할 때의 한글 머리로 바꾼다
+        (2026. 11. 9. 의뢰인 회신 초안에 아홉 시간 이른 시각이 들어감)."""
+        code, out, err = self.run_cmd(draft.reply, 'AAMkADrecv-draft-test-0002', str(self.body), [], everyone=False)
+        self.assertEqual(code, 0, out + err)
+        self.assertNotIn('원문 머리를 찾지 못해', err)
+        content = self.graph.patch['body']['content']
+        self.assertIn('<div id="divRplyFwdMsg"><b>보낸 사람:</b> 정 부장 &lt;boss@example.com&gt;<br />'
+                      '<b>보낸 날짜:</b> 2026년 11월 6일 금요일 오전 8:55<br />'
+                      '<b>받는 사람:</b> 나 &lt;me@example.com&gt;; 무 과장 &lt;x@example.com&gt;<br />'
+                      '<b>참조:</b> 나 &lt;me@example.com&gt;; 기 대리 &lt;y@example.com&gt;<br /><b>제목:</b> 자료 송부', content)
+        self.assertNotIn('From:', content)
+        self.assertNotIn('Sent:', content)
+        self.assertLess(content.index('홍길동 올림'), content.index('<b>보낸 사람:</b>'))
+        self.assertLess(content.index('<b>보낸 사람:</b>'), content.index('원문 인용'))
+        self.assertIn('<div><div id="x_divRplyFwdMsg">앞선 인용</div>원문 인용</div>', content)    # 원문 속 앞선 머리는 건드리지 않는다
+        with mock.patch.dict(globals(), {'QUOTE': '<html><body><hr><div>머리 없는 인용</div></body></html>'}):
+            code, out, err = self.run_cmd(draft.reply, 'AAMkADrecv-draft-test-0002', str(self.body), [])
+        self.assertEqual(code, 0, err)
+        self.assertIn('원문 머리를 찾지 못해', err)
+        self.assertIn('머리 없는 인용', self.graph.patch['body']['content'])
 
     def test_recipients_and_subject_can_be_given(self):
         code, out, err = self.run_cmd(draft.reply, 'AAMkADsent=draft-test-0001', str(self.body), [], everyone=True, subject='제목 통째로',
