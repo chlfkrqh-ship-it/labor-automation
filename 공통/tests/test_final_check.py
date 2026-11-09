@@ -56,6 +56,14 @@ def make_docx(path: Path, 문단들, 각주들=()):
             z.writestr('word/footnotes.xml', ''.join(f'<w:footnote><w:p><w:r><w:t>{x}</w:t></w:r></w:p></w:footnote>' for x in 각주들))
 
 
+def make_opinion_docx(path: Path, 문단들):
+    """review_text.py 가 읽는 검토의견서 docx(이름공간을 갖춘 본문). 관문의 문체 검사가 docx 의 글을 본다."""
+    본 = ''.join(f'<w:p><w:r><w:t>{x}</w:t></w:r></w:p>' for x in 문단들)
+    with zipfile.ZipFile(path, 'w') as z:
+        z.writestr('word/document.xml', '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                                        f'<w:body>{본}</w:body></w:document>')
+
+
 def fake_run(args):
     name = Path(str(args[0])).name
     if name in ('style_check.py', 'citation_check.py', 'cite_pdf_check.py', 'evidence_zip.py', 'cite_check.py', 'qna_check.py'):
@@ -791,6 +799,46 @@ class CaseLawGateTest(unittest.TestCase):
             대상.write_text('서울고등법원 2020누1 판결, 서울고등법원 2021누2 판결\n', encoding='utf-8')     # 상급심을 적지 않은 글
             self.assertNotIn('상급심 처리', [n for n, _, _ in 돌림().줄])
 
+    def test_viewing_record_disposition_must_match_the_finality_cell(self):
+        """2026. 11. 10. `/하자보완`: 상급심 절에 번호가 있는지만 보아, 기록에는 심리불속행 기각이라고 적고 '확정' 칸·산출물은 '판결로 확정'인
+        줄이 지나갔다(PDF 대조는 판결문 글과 칸의 표기를 맞대었다). 칸이 심리불속행인데 기록이 '심리불속행 기각이 아님'이라고 적은 줄도 막는다.
+        한 줄에 다른 상급심의 처리를 함께 적었으면 그 번호의 몫만 본다."""
+        폴더 = self.d / '자문2'
+        (폴더 / '작업').mkdir(parents=True)
+        table = 폴더 / '작업' / '인용대조표.md'
+        table.write_text('| 번호 | 사건 표시 | 원문 문장 | 확정 |\n|---|---|---|---|\n'
+                         '| 1 | 서울고등법원 2021. 1. 1. 선고 2020누1 판결 | 가 | 대법원 2021두9 판결로 확정 |\n'
+                         '| 2 | 서울고등법원 2022. 1. 1. 선고 2021누2 판결 | 나 | 대법원 2022두8 심리불속행 기각으로 확정 |\n', encoding='utf-8')
+        대상 = 폴더 / '회신초안.md'
+        대상.write_text('서울고등법원 2020누1 판결(대법원 2021두9 판결로 확정), 서울고등법원 2021누2 판결(대법원 2022두8 심리불속행 기각으로 확정)\n',
+                      encoding='utf-8')
+        판정 = ('# 판결 원문 열람 대조\n\n## 사람 판정\n\n| 줄 | 판결 | 원문의 자리 | 판단 부분인지 | 방향 | 사안 비교 | 비고 |\n|---|---|---|---|---|---|---|\n'
+              '| 1 | 2020누1 | 이유 2. | 판단 | 같음 | 판시 쟁점: 징계양정의 재량 / 같은 점: 사무직의 비위 / 다른 점: 없음 / 원용 까닭: 양정 판단 기준 | |\n'
+              '| 2 | 2021누2 | 이유 3. | 판단 | 같음 | 판시 쟁점: 징계양정의 재량 / 같은 점: 사무직의 비위 / 다른 점: 없음 / 원용 까닭: 양정 판단 기준 | |\n'
+              '\n## 상급심의 처리\n\n')
+        열람 = 폴더 / '작업' / '판결원문_열람대조.md'
+
+        def 돌림(상급):
+            열람.write_text(판정 + 상급, encoding='utf-8')
+            res = fc.결과()
+            fc.판례(res, 대상, table, 폴더 / '작업' / '인용판결_PDF', 폴더)
+            return status(res, '상급심 처리'), next(m for n, _, m in res.줄 if n == '상급심 처리')
+        with mock.patch.object(fc, 'RUN', lambda args: (0, 'ok')):
+            self.assertEqual(돌림('- 대법원 2021두9: 상고이유를 판단해 상고기각(심리불속행 기각이 아님).\n'
+                                 '- 대법원 2022두8: 판결문 화면, 특례법 제5조에 따른 심리불속행 기각.\n')[0], '통과')
+            상태, 말 = 돌림('- 대법원 2021두9: 판결문 화면, 특례법 제5조에 따른 심리불속행 기각.\n')
+            self.assertEqual(상태, '막힘')
+            self.assertIn("1 대법원 2021두9(열람 기록은 심리불속행 기각인데 '확정' 칸에 심리불속행이 없다)", 말)
+            상태, 말 = 돌림('- 대법원 2021두9: 상고이유를 판단(심리불속행 기각이 아님).\n- 대법원 2022두8: 상고이유를 판단해 기각, 심리불속행이 아니다.\n')
+            self.assertEqual(상태, '막힘')
+            self.assertIn("2 대법원 2022두8(열람 기록은 심리불속행 기각이 아니라고 적었는데 '확정' 칸은 심리불속행)", 말)
+            self.assertNotIn('2021두9', 말)
+            self.assertEqual(돌림('- 대법원 2021두9: 상고이유를 판단해 상고기각. 같은 날 대법원 2022두8 은 심리불속행 기각.\n')[0], '통과')
+            for 말 in ('심리불속행 기각이 아닌 판결', '심리불속행 사유가 아니라고 보고 상고이유를 판단', '심리불속행으로 기각하지 않고 판단'):
+                self.assertEqual(돌림(f'- 대법원 2021두9: {말}.\n')[0], '통과', 말)       # 부정으로 적은 꼴
+            self.assertEqual(돌림('| 줄 | 산출물의 표기 | 확인한 것 |\n|---|---|---|\n| 1 | 대법원 2021두9 판결로 확정 | 2021두9 화면 글(상고이유 판단) |\n')[0],
+                             '통과')                                       # 처리를 어느 쪽으로도 적지 않은 줄은 번호만 본다(종전대로)
+
     def test_pdf_folder_case_takes_the_viewing_record_for_rows_without_pdf(self):
         """2026. 11. 7. `/하자보완`: 판결문 PDF 를 받아 둔 사건(PDF 폴더 있음)에서 고친 판에 더한 판결·상급심은 11. 6. 지시로 PDF 를 받지 않는데,
         관문이 PDF 를 더 받으라고 막았다(이승민 심사청구 상급심 2건). 문제가 모두 'PDF 없음'이고 그 줄·상급심을 열람 대조 기록이 다루면 지나간다.
@@ -845,6 +893,49 @@ class CaseLawGateTest(unittest.TestCase):
         table.write_text(table.read_text(encoding='utf-8').replace('가나다라마바사 판단이다', '없는 문장입니다'), encoding='utf-8')
         res = 돌림()                                           # PDF 로 맞댄 줄의 다른 문제는 열람 기록으로 갈음하지 않는다
         self.assertEqual(status(res, '판결문 PDF'), '막힘')
+
+    def test_supreme_court_only_in_brief_bottom_notes_is_not_asked_for(self):
+        """2026. 11. 10. `/하자보완`: 서면 초안 MD 의 하단 세 목록('---' 아래)은 담당자에게 남기는 메모이고 docx 에 들어가지 않는다.
+        11. 9. 이승민 적응장애·우울증 서면이 하단 ② 에만 적은 상급심 둘의 판결문을 밤 관문(대상 MD)은 요구해 막고, 사건 세션의
+        관문(대상 docx)은 막힘 0 이어서 같은 판의 결과가 대상에 따라 갈렸다. 상급심은 본문에 적었을 때 보고(PDF 대조·열람 대조 모두),
+        서면 초안이 아닌 글(회신초안 등)의 '---' 아래는 그대로 본다."""
+        폴더 = self.d / '라운드1'
+        (폴더 / '작업').mkdir(parents=True)
+        pdfdir = 폴더 / '참고자료' / '인용판결_PDF'
+        pdfdir.mkdir(parents=True)
+        make_pdf(pdfdir / '서울고등법원 2020누1 판결.pdf', ['서울고등법원 2021. 1. 1. 선고 2020누1 판결\n가나다라마바사 판단이다.'])
+        table = 폴더 / '작업' / '인용대조표.md'
+        table.write_text('| 번호 | 사건 표시 | 원문 문장 | 확정 |\n|---|---|---|---|\n'
+                         '| 1 | 서울고등법원 2021. 1. 1. 선고 2020누1 판결 | 가나다라마바사 판단이다 | 대법원 2021두9 판결로 확정 |\n', encoding='utf-8')
+        (폴더 / '작업' / '판결원문_PDF대조.md').write_text(
+            '# 대조\n\n## 사람 판정\n\n| 줄 | 판결 | PDF 의 자리 | 판단 부분인지 | 방향 | 사안 비교 | 비고 |\n|---|---|---|---|---|---|---|\n'
+            '| 1 | 2020누1 | 본문 · 이유 | 판단 | 같음 | 판시 쟁점: 징계양정의 재량 / 같은 점: 사무직의 비위 / 다른 점: 없음 / 원용 까닭: 양정 판단 기준 | |\n',
+            encoding='utf-8')
+        본문 = '서울고등법원 2021. 1. 1. 선고 2020누1 판결은 가나다라마바사 판단이다라고 보았습니다.\n'
+        하단 = '\n---\n\n② 1. 그 판결은 대법원 2021두9 판결로 확정되었다.\n'
+
+        def 돌림(대상, pdf=pdfdir):
+            res = fc.결과()
+            with mock.patch.object(fc, '검색_완결', lambda *a: None):
+                fc.판례(res, 대상, table, pdf, 폴더)
+            return res
+        초안 = 폴더 / '서면초안_림프종.md'
+        초안.write_text(본문 + 하단, encoding='utf-8')
+        self.assertEqual(status(돌림(초안), '판결문 PDF'), '통과')                     # 하단 메모에만 적은 상급심은 열지 않는다
+        회신 = 폴더 / '회신초안.md'
+        회신.write_text(본문 + 하단, encoding='utf-8')
+        self.assertEqual(status(돌림(회신), '판결문 PDF'), '막힘')                     # 서면 초안이 아닌 글은 '---' 아래도 산출물이다
+        초안.write_text(본문.replace('보았습니다.', '보았습니다(대법원 2021두9 판결로 확정).') + 하단, encoding='utf-8')
+        self.assertEqual(status(돌림(초안), '판결문 PDF'), '막힘')                     # 본문에 적으면 판결문을 본다
+        # PDF 폴더가 없는 사건(열람 대조 기록)도 같다
+        (폴더 / '작업' / '판결원문_열람대조.md').write_text(
+            '# 판결 원문 열람 대조\n\n## 사람 판정\n\n| 줄 | 판결 | 원문의 자리 | 판단 부분인지 | 방향 | 사안 비교 | 비고 |\n|---|---|---|---|---|---|---|\n'
+            '| 1 | 2020누1 | 이유 3. | 판단 | 같음 | 판시 쟁점: 징계양정의 재량 / 같은 점: 사무직의 비위 / 다른 점: 없음 / 원용 까닭: 양정 판단 기준 | |\n',
+            encoding='utf-8')
+        없는폴더 = 폴더 / '참고자료' / '없음'
+        self.assertEqual(status(돌림(초안, 없는폴더), '상급심 처리'), '막힘')
+        초안.write_text(본문 + 하단, encoding='utf-8')
+        self.assertNotIn('상급심 처리', [n for n, _, _ in 돌림(초안, 없는폴더).줄])
 
     def test_pointer_or_one_grouped_sentence_is_not_the_handling_of_each_row(self):
         """2026. 11. 3. '수확 목록'이라는 말이 사건상태의 파일 안내에 한 번만 있어도 기록에 없는 줄 전부를 가린 것으로 보았고,
@@ -1120,7 +1211,8 @@ class OpinionGateTest(unittest.TestCase):
         self.case = Path(self.tmp.name) / '1_검토의견' / '사건' / 'HPS_근로시간면제'
         self.case.mkdir(parents=True)
         make_pdf(self.case / 'HPS 단체협약.pdf', [글 + '제1조', 글 + '제2조'])
-        (self.case / '(HPS) 근로시간면제 관련 검토_초안.docx').write_bytes(b'PK')
+        self.docx = self.case / '(HPS) 근로시간면제 관련 검토_초안.docx'      # 원고(회신초안)로 만든 검토의견서. 관문은 docx 를 본다
+        make_opinion_docx(self.docx, ['1. 검토 요지', '다툴 실익이 충분합니다. 단체협약에 적혀 있습니다.'])
         self.reply = self.case / 'HPS_근로시간면제-회신초안.md'
         self.reply.write_text('1. 검토 요지\n\n다툴 실익이 충분합니다. 단체협약에 적혀 있습니다.\n', encoding='utf-8')
         os.utime(self.reply, (time.time() + 10, time.time() + 10))
@@ -1144,7 +1236,9 @@ class OpinionGateTest(unittest.TestCase):
         self.assertEqual(recs, ['HPS 단체협약.pdf.md'])          # 우리가 만든 검토의견서는 자료로 세지 않는다
 
     def test_memo_and_other_words_are_not_style_hits(self):
-        """보완 메모는 의뢰인에게 가는 글이 아니고, '목적은 바람직' 같은 말은 '적다'가 아니다(2026. 11. 2. 첫 밤 점검)."""
+        """보완 메모는 의뢰인에게 가는 글이 아니고, '목적은 바람직' 같은 말은 '적다'가 아니다(2026. 11. 2. 첫 밤 점검).
+        메일 회신만 낸 사건이다(검토의견서 docx 가 있으면 관문은 docx 를 본다)."""
+        self.docx.unlink()
         self.reply.write_text('1. 검토 요지\n\n개정의 목적은 바람직해 보입니다.\n\n## 보완 메모\n\n`작업/검색기록.md` 에 적었다.\n', encoding='utf-8')
         os.utime(self.reply, (time.time() + 10, time.time() + 10))
         self.assertEqual(status(fc.검토의견(self.case), '문체(낙관 표현·적다)'), '통과')
@@ -1183,6 +1277,7 @@ class OpinionGateTest(unittest.TestCase):
     def test_other_manuscript_is_seen_at_night_with_its_own_table(self):
         """검토의견서·회신초안이 있으면 다른 원고(`-추가질의 회신초안.md`)가 더 새것이어도 기본 대상은 바뀌지 않는다(회신 둘이 대조표
         하나를 쓰는 옛 사건을 잘못 막지 않게). 밤 점검은 그날 고친 다른 원고를 그 이름의 대조표가 있으면 따로 보고, 없으면 참고로 적는다."""
+        기본 = fc.검토의견(self.case).대상           # 다른 원고를 만들기 전의 기본 대상(검토의견서 docx)
         추가 = self.case / 'HPS_근로시간면제-추가질의 회신초안.md'
         추가.write_text('1. 추가 질의\n\n대법원 판결이 있습니다.\n', encoding='utf-8')
         os.utime(추가, (time.time() + 30, time.time() + 30))
@@ -1191,14 +1286,14 @@ class OpinionGateTest(unittest.TestCase):
         with mock.patch.object(fc, '판례', lambda res, 대상, table, *a, **k: 본.append((대상.name, table.name))):
             결과들 = fc.돌리기(self.case, 밤=True, 끝=time.time() - 60)
             self.assertEqual([표제 for 표제, _ in 결과들], [''])
-            self.assertEqual(결과들[0][1].대상, self.reply.name)
+            self.assertEqual(결과들[0][1].대상, 기본)
             self.assertEqual(status(결과들[0][1], '다른 원고'), '참고')
             self.assertIn('인용대조표_추가질의 회신초안.md', next(m for n, s, m in 결과들[0][1].줄 if n == '다른 원고'))
             (self.case / '작업' / '인용대조표_추가질의 회신초안.md').write_text('| 본문 문장 |\n', encoding='utf-8')
             본.clear()
             결과들 = fc.돌리기(self.case, 밤=True, 끝=time.time() - 60)
             self.assertEqual([표제 for 표제, _ in 결과들], ['', 추가.name])
-            self.assertEqual(본, [(self.reply.name, '인용대조표.md'), (추가.name, '인용대조표_추가질의 회신초안.md')])
+            self.assertEqual(본, [(기본, '인용대조표.md'), (추가.name, '인용대조표_추가질의 회신초안.md')])
             self.assertNotIn('다른 원고', [n for n, _, _ in 결과들[0][1].줄])
             결과들 = fc.돌리기(self.case, 밤=True, 끝=time.time() + 3600)      # 범위 밖에 고친 원고는 보지 않는다
             self.assertEqual([표제 for 표제, _ in 결과들], [''])
@@ -1216,6 +1311,40 @@ class OpinionGateTest(unittest.TestCase):
         (self.case / '작업' / '인용대조표_1차.md').write_text('| 본문 문장 |\n', encoding='utf-8')
         res, 본 = self.표_자리()
         self.assertEqual(본, [(깨끗.name, '인용대조표.md')])
+
+    def test_docx_is_the_target_even_if_the_manuscript_was_touched_later(self):
+        """2026. 11. 10. `/하자보완`: 원고 md 는 검토의견서 docx 를 만든 글이고 메일 초안을 덧붙이느라 docx 뒤에 고쳐진다. 수정 시각으로
+        md 를 고르면 빌드가 각주로 옮긴 문장을 md 본문에서 찾지 못해 막았다(11. 9. HPS TBM 일지 검토 각주 8·9, 10. 22. 이승민 휴직 검토 각주 4.
+        사건 세션은 `--대상 docx` 로 막힘 0). docx 가 있으면 docx 를 보고, 같은 판의 `_최종` 사본이 더 새것이면 그것을 본다."""
+        self.assertGreater(self.reply.stat().st_mtime, self.docx.stat().st_mtime)
+        res, 본 = self.표_자리()
+        self.assertEqual(res.대상, self.docx.name)
+        self.assertEqual(본, [(self.docx.name, '인용대조표.md')])
+        self.assertEqual(status(fc.검토의견(self.case), '문체(낙관 표현·적다)'), '막힘')     # 문체도 docx 의 글로 본다
+        최종 = self.case / '(HPS) 근로시간면제 관련 검토_최종.docx'
+        최종.write_bytes(self.docx.read_bytes())
+        os.utime(최종, (time.time() + 20, time.time() + 20))
+        self.assertEqual(self.표_자리()[0].대상, 최종.name)
+        self.docx.unlink()
+        최종.unlink()
+        self.assertEqual(self.표_자리()[0].대상, self.reply.name)                          # 메일 회신만 낸 사건은 회신초안을 본다
+
+    def test_two_opinion_documents_compare_revisions_only_within_a_document(self):
+        """2026. 11. 10. `/하자보완`: 한 사건 폴더에 검토의견서가 둘이면 판 이름은 같은 문서 안에서만 견준다. 제이인츠바이오 해고 가능성 검토는
+        10. 8. 문서의 `_7차 수정안` 이 10. 12. 에 만든 다른 문서의 `_1차 수정안` 보다 판 이름이 높아 대상이 되어 대조표(뒤 문서의 것)와
+        51건 어긋났다. 검토의견서에 딸린 `_별지(…)` docx 는 더 새것이어도 대상이 아니다."""
+        앞 = self.case / '(HPS) 타임오프 한도 관련 검토_7차 수정안.docx'
+        앞.write_bytes(b'PK')
+        os.utime(앞, (time.time() - 100, time.time() - 100))
+        뒤 = self.case / '(HPS) 근로시간면제 관련 검토_1차 수정안.docx'
+        뒤.write_bytes(b'PK')
+        os.utime(뒤, (time.time() + 20, time.time() + 20))
+        별지 = self.case / '(HPS) 근로시간면제 관련 검토_별지(직원 회신 문안).docx'
+        별지.write_bytes(b'PK')
+        os.utime(별지, (time.time() + 60, time.time() + 60))
+        self.assertEqual(self.표_자리()[0].대상, 뒤.name)
+        os.utime(앞, (time.time() + 90, time.time() + 90))                                # 앞 문서를 다시 고쳤으면 그 문서를 본다
+        self.assertEqual(self.표_자리()[0].대상, 앞.name)
 
     def test_no_output_still_blocks_outside_night_check(self):
         for p in list(self.case.iterdir()):

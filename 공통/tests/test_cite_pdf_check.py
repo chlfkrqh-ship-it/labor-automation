@@ -28,7 +28,7 @@ class UpperCourtTest(unittest.TestCase):
     def tearDown(self):
         self.dir.cleanup()
 
-    def run_check(self, cell, upper=None, target=None):
+    def run_check(self, cell, upper=None, target=None, name="산출물.md"):
         if upper:
             self.pdf["대법원 2016다253914 판결.pdf"] = upper
         for n in self.pdf:
@@ -38,7 +38,7 @@ class UpperCourtTest(unittest.TestCase):
             f.write(HEAD + ROW % cell)
         targets = None
         if target is not None:
-            t = os.path.join(self.dir.name, "산출물.md")
+            t = os.path.join(self.dir.name, name)
             with open(t, "w", encoding="utf-8") as f:
                 f.write(target)
             targets = [t]
@@ -81,6 +81,17 @@ class UpperCourtTest(unittest.TestCase):
         """서면처럼 상급심을 본문에 적지 않은 글은 PDF 를 더 받지 않아도 된다."""
         self.assertEqual(self.run_check("대법원 2016다253914 상고기각으로 확정", target="서울고등법원 2015나2070783 판결")["문제"], 0)
         self.assertEqual(self.run_check("대법원 2016다253914 상고기각으로 확정", target="(대법원 2016다253914 판결로 확정)")["문제"], 1)
+
+    def test_brief_draft_reads_only_the_body_above_the_rule(self):
+        """서면 초안 MD 는 docx 와 같게 '---' 위 본문만 본다. 하단 세 목록에만 적은 상급심은 판결문을 더 열지 않는다(2026. 11. 10.
+        `/하자보완`: 이승민 적응장애·우울증 서면이 밤 관문(대상 MD)에서 막히고 사건 세션의 관문(대상 docx)에서 지나갔다).
+        서면 초안이 아닌 글의 '---' 아래는 그대로 본다."""
+        cell = "대법원 2016다253914 상고기각으로 확정"
+        아래 = "서울고등법원 2015나2070783 판결\n\n---\n\n② 1. 그 판결은 대법원 2016다253914 판결로 확정\n"
+        self.assertEqual(self.run_check(cell, target=아래, name="서면초안_림프종.md")["문제"], 0)
+        self.assertEqual(self.run_check(cell, target=아래, name="서면초안.md")["문제"], 0)
+        self.assertEqual(self.run_check(cell, target="(대법원 2016다253914 판결로 확정)\n\n---\n\n① 메모\n", name="서면초안.md")["문제"], 1)
+        self.assertEqual(self.run_check(cell, target=아래, name="HPS_근로시간면제-회신초안.md")["문제"], 1)
 
     def test_shimri_regex_variants(self):
         norm = cite_pdf_check.norm

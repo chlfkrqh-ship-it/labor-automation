@@ -12,7 +12,8 @@ PDF 는 lbox-검색 9항 lboxPdfZip 으로 받은 판결문이고, 파일 이름
      떨어진 대목을 '"…" / "…"' 처럼 따옴표로 따로 묶어 적었으면 덩이마다 따로 찾는다)
   4) '확정' 칸에 적은 대법원 상급심의 처리. 그 판결문 PDF 가 있으면 심리불속행 기각인지 판결문으로 보아 칸의 표기와 맞대고,
      없으면 칸에 '심리불속행'이나 '문서 없음'이 적혀 있을 때만 넘어간다. LBOX 판결란의 '상고기각' 표시는 심리불속행 기각을 포함한다.
-     --target 을 주면 산출물에 번호가 나오는 상급심만 본다(서면처럼 상급심을 본문에 적지 않는 글은 PDF 를 더 받지 않아도 된다)
+     --target 을 주면 산출물에 번호가 나오는 상급심만 본다(서면처럼 상급심을 본문에 적지 않는 글은 PDF 를 더 받지 않아도 된다.
+     서면 초안 MD 는 docx 와 같게 '---' 위 본문만 보고, 하단 세 목록에만 적은 상급심은 보지 않는다 — cite_check.upper_text)
      2026. 11. 6. 대조용 PDF 를 받지 않게 된 뒤로는 PDF 가 없는 줄·상급심을 final_check.py 가 판결원문_열람대조.md 로 받는다(check() 의 '없음')
 찾은 자리마다 판시사항·판결요지 안인지, 가장 가까운 항목 머리(판단·주장·인정사실 등), 앞뒤 글, 앞 글에 든 '주장'·'원심' 같은
 낱말을 보고서에 적는다. 그 문장이 판단 부분인지와 판결의 결론이 우리 주장과 같은 방향인지는 작성 세션이 PDF 를 직접 읽고
@@ -26,7 +27,7 @@ import sys
 import pymupdf as fitz
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from cite_check import QUOTES, cases, dates, is_body, norm, pieces, read_target, table_rows, upper_courts  # noqa: E402
+from cite_check import QUOTES, cases, dates, is_body, norm, pieces, read_target, table_rows, upper_courts, upper_text  # noqa: E402
 
 PAGE_NO = re.compile(r"(?m)^\s*-\s*\d{1,3}\s*-\s*$")      # 면 아래의 '- 3 -' 는 문장 사이에 끼어 찾기를 막는다
 SHIMRI = re.compile(r"제5조(?:제1항)?에(?:의하여|따라)(?:이)?상고를(?:모두)?기각")      # 공백을 뺀 글에서 찾는다(상고심절차에 관한 특례법 제5조에 따른 기각)
@@ -99,7 +100,7 @@ def check(table, pdfdir, targets=None):
         if n.lower().endswith(".pdf"):
             for c in cases(n):
                 files.setdefault(c, os.path.join(pdfdir, n))
-    tgt = None if targets is None else [norm(read_target(p)) for p in targets]
+    tgt = None if targets is None else [norm(upper_text(p, read_target(p))) for p in targets]      # 서면 초안은 '---' 위 본문만
     used, bad, lines, body, cache, skel = set(), 0, [], [], {}, []
     absent = []      # PDF 가 없는 본문 인용 줄과 상급심. final_check.py 는 이것을 판결원문_열람대조.md 로 받는다(2026. 11. 6. 열람 대조)
     for r in rows:

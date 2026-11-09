@@ -175,6 +175,16 @@ def body_and_bottom(path, text):
     return text, ""
 
 
+def upper_text(path, text):
+    """상급심의 처리를 볼 산출물의 글. 서면 초안 MD(`서면초안*.md`)는 '---' 위 본문만 본다. 아래 하단 세 목록은 담당자에게 남기는 메모여서
+    docx 에 들어가지 않고, 상급심을 본문에 적지 않는 서면은 상급심을 더 열지 않는다(`공통/자체검토.md` 3절). 2026. 11. 10. `/하자보완`:
+    11. 9. 이승민 적응장애·우울증 서면은 하단 ② 에만 상급심 둘을 적었는데, 밤 관문(대상 MD)은 그 판결문 PDF 를 요구해 막고 사건 세션의
+    관문(대상 docx)은 막힘 0 이어서 같은 판의 결과가 대상에 따라 갈렸다."""
+    if os.path.basename(path).startswith("서면초안") and path.lower().endswith(".md"):
+        return body_and_bottom(path, text)[0]
+    return text
+
+
 def source_files(cell, table_path):
     """'원문' 칸에 적힌 파일의 자리. 칸의 경로는 표 폴더·라운드·사건 폴더·저장소 루트 가운데 어디를 기준으로 적어도 찾는다.
     2026. 11. 3. 사건 폴더 기준으로 적은 줄을 찾지 못해 인용 대조가 원문 미확인으로 넘어가고, final_check.py 는 따로 찾다가 있는 파일을 없다고 막았다."""
