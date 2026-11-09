@@ -1345,6 +1345,79 @@ class WholeCaseReadingTest(unittest.TestCase):
         (r1 / '출력' / '서면초안_적응장애우울증.md').unlink()                 # 서면이 하나면 종전처럼 번호마다 하나이다
         self.assertEqual(sorted(er.서면_호증(case)), ['증2'])
 
+    def test_each_split_brief_sees_its_own_share(self):
+        """서면을 나눈 라운드에서 `--서면` 을 주면 그 서면의 호증, 번호에 서면 이름이 없는 공통 호증, 그 서면이 가리키거나 어느 서면도
+        가리키지 않는 자료만 본다. 다른 서면의 호증·자료와 우리 산출물 사본은 뺀다(2026. 11. 9. 이승민 심사청구: 림프종 서면 관문의 전 면 읽기
+        막힘 119건 가운데 85건이 적응장애·우울증 서면의 호증 27건, 그 서면만 인용한 논문·판결, 강 변호사에게 보낸 우리 서면 사본이었다)."""
+        case = self.root / '이○○_심사청구'
+        r1 = case / '라운드1'
+        출력 = r1 / '출력'
+        출력.mkdir(parents=True)
+        (출력 / '서면초안_림프종.md').write_text(
+            '- 다 음 -\n\n면역 저하를 다룬 Di Rosso ME 외(2018) 논문과 대법원 2018. 1. 1. 선고 2018두2222 판결이 있습니다.\n', encoding='utf-8')
+        (출력 / '서면초안_적응장애우울증.md').write_text(
+            "- 다 음 -\n\n괴롭힘을 다룬 Kivimäki M 외(2003)·O'Donnell ML 외(2019) 논문과 대법원 2019두1111 판결, 대법원 2018두2222 판결이 있습니다.\n",
+            encoding='utf-8')
+        (출력 / '(이○○) 향후 일정 관련.docx').write_bytes(b'PK out')
+        (case / '작업').mkdir()
+        (case / '작업' / '판결원문_PDF대조_림프종.md').write_text(      # 그 서면이 인용하지 않은 PDF 의 목록은 그 서면의 것이 아니다
+            '# 판결문 PDF 원본 대조\n\n## 대조표 본문 줄이 가리키지 않는 PDF\n\n- `대법원 2019두1111 판결.pdf`\n\n## 사람 판정\n', encoding='utf-8')
+        (case / '작업' / '인용대조표_심사청구_적응장애우울증.md').write_text(
+            '| 번호 | 원문 |\n|---|---|\n| 3. | `라운드1/참고자료/의학논문/PMC6678970.txt` |\n', encoding='utf-8')
+        for 폴더 in ('림프종', '적응장애·우울증'):
+            (출력 / '제출' / 폴더 / '증거').mkdir(parents=True)
+            make_pdf(출력 / '제출' / 폴더 / '증거' / '증 제1호증_진단서.pdf', [글 + 폴더])
+        (r1 / '우리증거' / '앞 신청 입증자료').mkdir(parents=True)
+        make_pdf(r1 / '우리증거' / '앞 신청 입증자료' / '증제2호증_표창.pdf', [글 + '표창'])
+        (r1 / '상대증거' / '적응장애·우울증').mkdir(parents=True)
+        make_pdf(r1 / '상대증거' / '공단 답변서.pdf', [글 + '답변'])
+        make_pdf(r1 / '상대증거' / '적응장애·우울증' / '공단 의견서.pdf', [글 + '의견'])
+        for 폴더, 이름들 in (('인용판결_PDF', ('대법원 2018두2222 판결.pdf', '대법원 2019두1111 판결.pdf')),
+                          ('의학논문/원문', ('Di Rosso 2018.pdf', 'Kivimaki 2003_PMC1740404.pdf', 'ODonnell 2019_PMC6678970.pdf')),
+                          ('적응장애·우울증', ('공단 지침.pdf',))):
+            (r1 / '참고자료' / 폴더).mkdir(parents=True)
+            for n in 이름들:
+                make_pdf(r1 / '참고자료' / 폴더 / n, [글 + n])
+        for n in ('PMC1740404.txt', 'PMC6678970.txt', 'PMC4522058.txt'):
+            (r1 / '참고자료' / '의학논문' / n).write_text(f'# 논문 {n}\n\n{글}', encoding='utf-8')
+        (r1 / '참고자료' / '강 변호사 송부본').mkdir()
+        (r1 / '참고자료' / '강 변호사 송부본' / '(이○○) 심사청구 취지 및 이유(림프종)_초안.docx').write_bytes(b'PK copy 1')
+        (r1 / '참고자료' / '강 변호사 송부본' / '(이○○) 향후 일정 관련.docx').write_bytes(b'PK copy 2')      # 출력/ 에 같은 이름이 있다
+
+        호증 = er.서면_호증(case)
+        자료 = er.서면_자료(case, 호증)
+        참고 = lambda *ns: {f'라운드1 참고 {n}' for n in ns}
+        볼것, 말 = er.서면_몫(case, '림프종', 호증, 자료)
+        self.assertEqual(set(볼것), {'증1@림프종', '증2', '라운드1 상대 공단 답변서.pdf'}
+                         | 참고('대법원 2018두2222 판결.pdf', 'Di Rosso 2018.pdf', 'PMC4522058.txt'))
+        self.assertTrue(말.startswith("범위: 서면 '림프종' 몫 — 이 서면의 호증 1건, 번호에 서면 이름이 없는 호증 1건, 자료 4건"), 말)
+        self.assertIn('공통으로 보는 참고자료 1건: 라운드1 참고 PMC4522058.txt', 말)
+        self.assertIn('다른 서면의 호증 1건, 다른 서면만 가리키는 자료 7건, 우리 산출물 사본 2건', 말)
+        볼것, _ = er.서면_몫(case, '적응장애우울증', 호증, 자료)
+        self.assertEqual(set(볼것), {'증1@적응장애우울증', '증2', '라운드1 상대 공단 답변서.pdf', '라운드1 상대 공단 의견서.pdf'}
+                         | 참고('대법원 2018두2222 판결.pdf', '대법원 2019두1111 판결.pdf', 'Kivimaki 2003_PMC1740404.pdf',
+                               'ODonnell 2019_PMC6678970.pdf', 'PMC1740404.txt', 'PMC6678970.txt', 'PMC4522058.txt', '공단 지침.pdf'))
+
+        code, out = run('check', case, '--서면', '림프종')
+        self.assertEqual(code, 1)
+        첫, 둘 = out.splitlines()[:2]
+        self.assertTrue(첫.startswith("전 면 읽기 기록: 서면 '림프종' 몫의 호증(자료) 6건 가운데 6건이 덜 되었다"), 첫)
+        self.assertTrue(둘.startswith('범위: '), 둘)
+        self.assertNotIn('증 제1호증(적응장애우울증)', out)
+        self.assertNotIn('Kivimaki', out)
+        code, out = run('check', case, '--서면', '서면초안_적응장애우울증.md')      # 초안 이름으로도 준다
+        self.assertIn('증 제1호증(적응장애우울증)', out)
+        self.assertNotIn('증 제1호증(림프종)', out)
+        self.assertEqual(run('check', case, '--서면', '난청')[0], 1)
+        code, out = run('make', case, '--no-ocr', '--서면', '림프종')               # 다른 명령도 같은 범위로 좁힌다
+        self.assertEqual(code, 0, out)
+        self.assertTrue((case / '증거관리' / '호증읽기' / '증1@림프종.md').is_file())
+        self.assertFalse((case / '증거관리' / '호증읽기' / '증1@적응장애우울증.md').exists())
+        (출력 / '서면초안_적응장애우울증.md').unlink()                        # 나누지 않은 라운드는 --서면 없이 모두 본다
+        code, out = run('check', case, '--서면', '림프종')
+        self.assertIn('서면을 나누지 않은 사건이라', out)
+        self.assertIn('Kivimaki', out)
+
 
 class PlanTest(unittest.TestCase):
     """호증이 많으면 한 창에서 다 읽지 않고 나누어 읽는다(2026. 11. 3. 노정일 호증을 한 창에서 다시 읽다가 문맥이 약 82만 토큰까지 찼다)."""

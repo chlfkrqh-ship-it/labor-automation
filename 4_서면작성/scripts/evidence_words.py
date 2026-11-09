@@ -3,6 +3,7 @@
     python -B 4_서면작성/scripts/evidence_words.py "<사건 폴더>" --낱말 {쟁점 낱말들} [--라운드 N] [--호증 사 노]
            [--out "<라운드N>/작업/쟁점낱말_대조.md"] [--ocr-dir <폴더> ...] [--no-ocr] [--글 사6 ...]
     python -B 4_서면작성/scripts/evidence_words.py "<사건 폴더>" --확인      # '판단'이 빈 줄이 있으면 종료 코드 1(`/서면` 8-1단계)
+    python -B 4_서면작성/scripts/evidence_words.py "<사건 폴더>" --확인 --서면 {이름}   # 서면을 나눈 라운드는 그 서면의 몫만(관문이 준다)
 
 호증 전부를 면마다 글자층(없거나 깨지면 Windows 문자인식, `ocr_win.ps1`)으로 읽어 낱말이 든 면을 표로 낸다. 낱말 글자 사이의 띄어쓰기는 무시한다.
 문자인식은 글자를 잘못 읽으므로 낱말은 짧게 쓰고 앞뒤 일부도 함께 넣는다.
@@ -12,6 +13,8 @@
 문자인식 결과는 `증거관리/호증글자/` 에 쌓아 다시 쓰고, 그림은 남기지 않는다. `라운드*/작업/증거인용검토*/ocr` 의 결과도 읽는다.
 표 끝 '찾은 호증(파일 해시)' 절에 낱말을 찾은 호증과 그 파일의 해시를 적는다. `--확인` 은 표를 만든 뒤 들어오거나 파일이 바뀐 호증이
 있으면 막는다(같은 낱말로 다시 돌리면 같은 면의 판단은 이어받는다). 그 절이 없는 옛 표는 머리의 '읽은 호증 N건'과 지금 호증 수만 맞댄다.
+서면을 나눈 라운드의 표는 라운드에 하나이므로, `--확인 --서면 {이름}` 은 그 서면의 호증('증 제N호증({이름})')과 번호에 서면 이름이 없는
+호증의 줄만 본다. 다른 서면 호증의 줄과 그 뒤 들어온 다른 서면의 호증은 그 서면의 관문이 본다(2026. 11. 9. 이승민 심사청구).
 
 2026. 11. 2. GGM 정직 3월: 사 제6호증(38면, 글자층 없음) 3면의 쟁점 문구를 답변서(1)·(2)에 쓰지 못한 일로 만들었다.
 2026. 11. 5. `/하자보완`: `--확인` 이 표의 줄만 보아, 표를 만든 뒤 들어오거나 바뀐 호증은 낱말로 찾지 않았는데도 통과시켰다.
@@ -152,13 +155,20 @@ def 찾은_호증_읽기(out: Path):
     return d
 
 
-def 찾지_않은_호증(out: Path, 사건: Path, 라운드: Path) -> list:
-    """표를 만든 뒤 들어오거나 파일이 바뀌어 낱말로 찾지 않은 호증을 말로. 없으면 빈 목록."""
-    지금 = {k: _ecr.file_hash(ps[0]) for k, ps in 찾을_호증(사건, 라운드).items()}
+def 몫인가(k: str, 서면: str | None) -> bool:
+    """서면을 나눈 라운드에서 그 서면이 볼 호증인가. 그 서면의 호증('증5@난청')과 번호에 서면 이름이 없는 호증(앞 절차의 원자료, 민사 기록 등
+    공통 자료)이다. 서면을 주지 않으면 모두 본다."""
+    return not 서면 or _ecr.split_key(k)[1] in (None, 서면)
+
+
+def 찾지_않은_호증(out: Path, 사건: Path, 라운드: Path, 서면: str | None = None) -> list:
+    """표를 만든 뒤 들어오거나 파일이 바뀌어 낱말로 찾지 않은 호증을 말로. 없으면 빈 목록. 서면을 주면 그 서면이 볼 호증만 본다(`몫인가`)."""
+    전체 = {k: _ecr.file_hash(ps[0]) for k, ps in 찾을_호증(사건, 라운드).items()}
+    지금 = {k: h for k, h in 전체.items() if 몫인가(k, 서면)}
     적은 = 찾은_호증_읽기(out)
-    if 적은 is None:          # 옛 표: 수만 맞댄다
+    if 적은 is None:          # 옛 표: 수만 맞댄다(옛 표의 수는 라운드의 모든 호증이다)
         m = re.search(r'읽은 호증 (\d+)건', out.read_text(encoding='utf-8'))
-        return [f'표를 만든 뒤 호증이 늘었다(표 {m.group(1)}건, 지금 {len(지금)}건)'] if m and int(m.group(1)) < len(지금) else []
+        return [f'표를 만든 뒤 호증이 늘었다(표 {m.group(1)}건, 지금 {len(전체)}건)'] if m and int(m.group(1)) < len(전체) else []
     차례 = sorted(지금, key=호증_정렬)
     새 = [호증_표시(k) for k in 차례 if k not in 적은]
     고침 = [호증_표시(k) for k in 차례 if k in 적은 and 적은[k] != 지금[k]]
@@ -166,28 +176,38 @@ def 찾지_않은_호증(out: Path, 사건: Path, 라운드: Path) -> list:
     return ([말('표를 만든 뒤 들어온 호증', 새)] if 새 else []) + ([말('표를 만든 뒤 파일이 바뀐 호증', 고침)] if 고침 else [])
 
 
-def 확인(out: Path, 본문: str, 사건: Path | None = None, 라운드: Path | None = None) -> int:
+def 확인(out: Path, 본문: str, 사건: Path | None = None, 라운드: Path | None = None, 서면: str | None = None) -> int:
     """`/서면` 8-1단계: 표가 있고, 서면이 그 면을 인용하지 않은 줄마다 '판단'이 적혔는지 본다. 서면 인용은 지금 초안으로 다시 본다.
-    사건·라운드를 주면 표를 만든 뒤 들어오거나 바뀐 호증이 없는지도 본다."""
+    사건·라운드를 주면 표를 만든 뒤 들어오거나 바뀐 호증이 없는지도 본다. 서면을 나눈 라운드에서 서면을 주면 그 서면이 볼 호증의 줄만
+    본다(`몫인가`. 표는 라운드에 하나이다)."""
     if not out.is_file():
         print(f'쟁점 낱말 대조표가 없습니다: {out} (`/서면` 6-1단계를 먼저 한다)')
         return 1
-    줄들, 빈 = 표_읽기(out), []
+    줄들, 빈, 뺀 = 표_읽기(out), [], 0
     for 표시, no, w, ctx, st, src, 판단 in 줄들:
         k = 표시_키(표시)
+        if k and not 몫인가(k, 서면):
+            뺀 += 1
+            continue
         지금 = 인용_상태(본문, k, no) if k else st
         if 지금 != '이 면 인용' and not 판단:
             빈.append(f'{표시} {no}면({w}, {지금}): {ctx[:80]}')
-    안찾음 = 찾지_않은_호증(out, 사건, 라운드) if 사건 is not None and 라운드 is not None else []
+    범위 = (f"범위: 서면 '{서면}' 몫(그 서면의 호증과 번호에 서면 이름이 없는 호증)의 줄 {len(줄들) - 뺀}개를 보았다"
+            + (f" — 다른 서면 호증의 줄 {뺀}개는 그 서면의 관문이 본다" if 뺀 else '')) if 서면 else ''
+    안찾음 = 찾지_않은_호증(out, 사건, 라운드, 서면) if 사건 is not None and 라운드 is not None else []
     if 안찾음:
         print(f"낱말로 찾지 않은 호증이 있다 — {'; '.join(안찾음)} — 같은 낱말로 다시 돌린다(같은 면의 '판단'은 이어받는다)({out})")
     if 빈:
         print(f"'판단' 칸이 빈 줄 {len(빈)}개 — 원본 그림으로 읽고 적는다({out})")
-        for s in 빈:
-            print('  - ' + s)
+    if 범위 and (빈 or 안찾음):
+        print(범위)
+    for s in 빈:
+        print('  - ' + s)
     if 빈 or 안찾음:
         return 1
     print(f"쟁점 낱말 대조표 {len(줄들)}줄, '판단'이 빈 줄 없음 → {out}")
+    if 범위:
+        print(범위)
     return 0
 
 
@@ -203,9 +223,12 @@ def main(argv=None) -> int:
     ap.add_argument('--글', nargs='*', default=[], help='이 호증키(사6 등)의 면별 글을 화면에 보여 준다. 낱말 없이 쓰면 표를 쓰지 않는다')
     ap.add_argument('--확인', action='store_true',
                     help="호증을 다시 읽지 않고, 서면이 인용하지 않은 줄의 '판단' 칸이 다 찼는지 본다(빈 줄이 있으면 종료 코드 1)")
+    ap.add_argument('--서면', help='서면을 나눈 라운드에서 이 서면(이름이나 서면초안_{이름}.md)이 볼 줄만 확인한다. --확인 과 함께 쓴다')
     a = ap.parse_args(argv)
     if not (a.낱말 or a.글 or a.확인):
         ap.error('--낱말, --글, --확인 가운데 하나는 준다')
+    if a.서면 and not a.확인:
+        ap.error('--서면 은 --확인 과 함께 쓴다(표는 라운드에 하나로 만든다)')
 
     사건 = Path(a.case)
     라운드들 = sorted((p for p in 사건.glob('라운드*') if p.is_dir()), key=lambda p: int(re.sub(r'\D', '', p.name) or 0))
@@ -215,7 +238,17 @@ def main(argv=None) -> int:
     라운드 = 사건 / f'라운드{a.라운드}' if a.라운드 else 라운드들[-1]
     out = Path(a.out) if a.out else 라운드 / '작업' / '쟁점낱말_대조.md'
     if a.확인:
-        return 확인(out, 서면_본문들(사건), 사건, 라운드)
+        서면 = None
+        if a.서면:
+            names = _ecr.split_names(라운드)
+            서면 = _ecr._system.draft_name(a.서면) if str(a.서면).lower().endswith('.md') else _ecr._system.name_form(a.서면)
+            if not names:
+                print(f'참고: {라운드.name} 은 서면을 나누지 않은 라운드라 --서면 없이 모든 줄을 본다')
+                서면 = None
+            elif 서면 not in names:
+                print(f"서면을 나눈 라운드의 서면 이름이 아니다: {a.서면} (있는 이름: {', '.join(names)})")
+                return 1
+        return 확인(out, 서면_본문들(사건), 사건, 라운드, 서면)
     캐시 = 사건 / '증거관리' / '호증글자'
     ocr_dirs = list(a.ocr_dir) + [str(p) for p in 사건.glob('라운드*/작업/증거인용검토*/ocr')] + [str(캐시 / 'ocr')]
 

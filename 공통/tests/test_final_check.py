@@ -451,6 +451,103 @@ class BriefGateTest(unittest.TestCase):
         b.unlink()                                                    # 서면이 하나면 제출/ 맨 위이다
         self.assertEqual(fc.제출_자리(self.r, a), self.r / '출력' / '제출')
 
+    def 나눈_초안(self):
+        """상병별로 나눈 두 서면의 초안. (림프종, 적응장애우울증)."""
+        self.draft.unlink()
+        a = self.r / '출력' / '서면초안_림프종.md'
+        b = self.r / '출력' / '서면초안_적응장애우울증.md'
+        a.write_text('- 다 음 -\n\n1. 가\n\n혈액암 진단을 받았습니다.\n', encoding='utf-8')
+        b.write_text('- 다 음 -\n\n1. 가\n\n우울증 진단을 받았습니다.\n', encoding='utf-8')
+        return a, b
+
+    def test_split_docx_target_pairs_with_its_own_draft(self):
+        """서면을 나눈 라운드의 docx 대상은 그 서면의 초안과 짝짓는다. 2026. 11. 9. 이승민 심사청구: 적응장애·우울증 docx 를 대상으로 주자
+        초안 목록의 첫째(림프종)와 짝지어 호증 번호·판례 대조·DOCX·제출본을 림프종 서면의 것과 맞대었다."""
+        a, b = self.나눈_초안()
+        docx = self.r / '출력' / '(이승민) 심사청구 취지 및 이유(적응장애·우울증)_초안.docx'
+        make_docx(docx, ['다 음', '가', '우울증 진단을 받았습니다.', '2026. 11.   .'])
+        later(docx)
+        불린 = []
+
+        def 적기(args):
+            불린.append([str(x) for x in args])
+            return fake_run(args)
+
+        with mock.patch.object(fc, 'RUN', 적기):
+            res = fc.서면(self.case, 대상=docx)
+        self.assertEqual(res.대상, f'라운드1/출력/{b.name} ← {docx.name}')
+        self.assertEqual(next(x for x in 불린 if Path(x[0]).name == 'citation_check.py')[-2:], ['--서면', str(b)])
+        self.assertEqual(next(x for x in 불린 if Path(x[0]).name == 'evidence_read.py')[-2:], ['--서면', '적응장애우울증'])
+        self.assertEqual(next(x for x in 불린 if Path(x[0]).name == 'evidence_words.py')[-2:], ['--서면', '적응장애우울증'])
+        self.assertEqual(status(res, 'DOCX'), '통과')
+        # 이름이 없는 제출본 사본은 제출/{이름}/ 자리로 가린다
+        사본 = self.r / '출력' / '제출' / '림프종' / '(이승민) 심사청구 취지 및 이유_제출본.docx'
+        사본.parent.mkdir(parents=True)
+        사본.write_bytes(b'PK')
+        self.assertEqual(fc.짝_초안(self.r, 사본), (a, ''))
+        # 가리지 못하면 첫 초안과 짝짓지 않고 막는다
+        모름 = self.r / '출력' / '(이승민) 심사청구 취지 및 이유_초안.docx'
+        make_docx(모름, ['우울증 진단을 받았습니다.'])
+        res = fc.서면(self.case, 대상=모름)
+        self.assertEqual(status(res, '초안'), '막힘')
+        self.assertIn('어느 서면의 것인지', next(m for n, _, m in res.줄 if n == '초안'))
+        self.assertNotIn('문체', [n for n, _, _ in res.줄])
+        b.unlink()                                                    # 나누지 않은 라운드는 예전처럼 하나뿐인 초안과 짝짓는다
+        self.assertEqual(fc.짝_초안(self.r, 모름), (None, ''))
+
+    def 기록_채우기(self, k: str):
+        """호증 하나의 전 면 읽기 기록을 채운다(면마다 확인표, 읽은 방식, 쟁점 문구, 실측 줄). 재는 일은 test_evidence_read 가 본다."""
+        자 = er.자리(self.case, False)
+        rec, 글파일 = 자.기록_파일(k), 자.글_파일(k)
+        t = rec.read_text(encoding='utf-8').replace('읽은 방식: \n', '읽은 방식: 글자층 전 면\n').replace('면)\n\n- \n', '면)\n\n- 1면 "진단"\n', 1)
+        for n, 표 in re.findall(r'\[(\d+)면 끝 · 확인표 ([A-Z0-9]{4})\]', 글파일.read_text(encoding='utf-8')):
+            t = t.replace(f'- {n}면: \n', f'- {n}면: 진단 내용 확인표 {표}\n')
+        rec.write_text(t, encoding='utf-8')
+        er.실측_적기(rec, f'실측: 시험 · 글 {er.해시(글파일)}')
+
+    def test_split_round_reading_gate_sees_only_its_own_share(self):
+        """서면을 나눈 라운드의 전 면 읽기는 그 서면의 호증과 공통 자료만 막는다. 2026. 11. 9. 이승민 심사청구: 림프종 서면 관문의 막힘
+        119건 가운데 85건이 적응장애·우울증 서면의 호증 27건과 그 서면만 인용한 참고자료, 우리 서면 사본이었다."""
+        a, b = self.나눈_초안()
+        (self.r / '우리증거' / '사 제6호증 문자.pdf').unlink()
+        (self.r / '상대증거' / '신청이유서(2).pdf').unlink()
+        for 폴더, 글자 in (('림프종', '혈액암'), ('적응장애·우울증', '우울증')):
+            (self.r / '출력' / '제출' / 폴더 / '증거').mkdir(parents=True)
+            make_pdf(self.r / '출력' / '제출' / 폴더 / '증거' / '증 제1호증_진단서.pdf', [글 + 글자 + ' 진단'])
+        (self.r / '참고자료' / '강 변호사 송부본').mkdir(parents=True)
+        make_docx(self.r / '참고자료' / '강 변호사 송부본' / '(이승민) 심사청구 취지 및 이유(림프종)_초안.docx', ['혈액암 진단을 받았습니다.'])  # 우리 서면 사본
+        with redirect_stdout(io.StringIO()):
+            er.main(['make', str(self.case), '--no-ocr'])
+        self.기록_채우기('증1@림프종')
+        res = fc.서면(self.case, 초안없음_허용=True, 초안=a)
+        self.assertEqual(status(res, '증거 파악(전 면 읽기)'), '통과', res.줄)
+        말 = next(m for n, _, m in res.줄 if n == '증거 파악(전 면 읽기)')
+        self.assertIn("범위: 서면 '림프종' 몫", 말)
+        self.assertIn('다른 서면의 호증 1건', 말)
+        self.assertIn('우리 산출물 사본 1건', 말)
+        res = fc.서면(self.case, 초안없음_허용=True, 초안=b)
+        self.assertEqual(status(res, '증거 파악(전 면 읽기)'), '막힘')
+        self.assertIn('증 제1호증(적응장애우울증)', next(m for n, _, m in res.줄 if n == '증거 파악(전 면 읽기)'))
+        self.기록_채우기('증1@적응장애우울증')
+        self.assertEqual(status(fc.서면(self.case, 초안없음_허용=True, 초안=b), '증거 파악(전 면 읽기)'), '통과')
+
+    def test_split_docx_target_finds_other_briefs_admissions_in_their_drafts(self):
+        """의뢰인 인정 표는 라운드에 하나이다. docx 를 볼 때 다른 서면의 인정 문장은 그 서면의 초안에서 찾는다(docx 하나만 보아 막지 않는다)."""
+        a, b = self.나눈_초안()
+        (self.r / '작업' / '의뢰인주장_대조.md').write_text(
+            '| 문서·위치 | 주장·사실(원문) | 넣을 목차 | 반영 |\n|---|---|---|---|\n| 문답서 1 | 진단 | 1항 | 넣음 |\n\n'
+            '## 2. 의뢰인의 인정\n\n| 문서·위치 | 인정한 말 | 본문 문장 |\n|---|---|---|\n'
+            '| 문답서 2 | 혈액암 | 림프종 1항 "혈액암 진단을 받았습니다" |\n| 문답서 3 | 우울증 | 적응장애 1항 "우울증 진단을 받았습니다" |\n',
+            encoding='utf-8')
+        docx = self.r / '출력' / '(이승민) 심사청구 취지 및 이유(적응장애·우울증)_초안.docx'
+        make_docx(docx, ['다 음', '가', '우울증 진단을 받았습니다.'])
+        later(docx)
+        self.assertEqual(status(fc.서면(self.case, 대상=docx), '의뢰인 주장'), '통과')
+        a.write_text(a.read_text(encoding='utf-8').replace('혈액암 진단을', '혈액암 판정을'), encoding='utf-8')
+        res = fc.서면(self.case, 대상=docx)
+        self.assertEqual(status(res, '의뢰인 주장'), '막힘')
+        self.assertIn("'혈액암 진단을 받았습니다…'", next(m for n, _, m in res.줄 if n == '의뢰인 주장'))
+
 
 class CaseLawGateTest(unittest.TestCase):
     def setUp(self):

@@ -10,7 +10,7 @@ import io
 from pathlib import Path
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 
 import pymupdf
 
@@ -160,6 +160,32 @@ class SplitDraftTest(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertIn('증 제2호증(적응장애우울증) 1면', out)
             self.assertNotIn('표를 만든 뒤', out)                              # 찾은 호증 절의 이름 붙은 키를 읽어 들인다
+
+    def test_check_of_one_split_brief_skips_the_other_briefs_rows(self):
+        """서면을 나눈 라운드의 쟁점 낱말 표는 라운드에 하나이다. `--확인 --서면` 은 그 서면의 호증과 번호에 서면 이름이 없는 호증의 줄만 막고,
+        다른 서면 호증의 빈 판단과 표를 만든 뒤 들어온 다른 서면의 호증은 그 서면의 관문에 둔다(2026. 11. 9. 이승민 심사청구)."""
+        with tempfile.TemporaryDirectory() as d:
+            사건 = Path(d) / '이○○_심사청구'
+            출력 = 사건 / '라운드1' / '출력'
+            for n, 폴더 in (('림프종', '림프종'), ('적응장애우울증', '적응장애·우울증')):
+                (출력 / '제출' / 폴더 / '증거').mkdir(parents=True)
+                make_pdf(출력 / '제출' / 폴더 / '증거' / f'증 제2호증_{n} 진단서.pdf', [글 + f'{n} 상병 진단 시험'])
+            (출력 / '서면초안_림프종.md').write_text('진단받았습니다(증 제2호증 1면).\n', encoding='utf-8')
+            (출력 / '서면초안_적응장애우울증.md').write_text('진단받았습니다(증 제1호증).\n', encoding='utf-8')
+            self.assertEqual(run(사건, '--낱말', '시험', '--no-ocr')[0], 0)
+            code, out = run(사건, '--확인', '--서면', '림프종')
+            self.assertEqual(code, 0, out)
+            self.assertIn("범위: 서면 '림프종' 몫(그 서면의 호증과 번호에 서면 이름이 없는 호증)의 줄 1개를 보았다 — 다른 서면 호증의 줄 1개", out)
+            code, out = run(사건, '--확인', '--서면', '서면초안_적응장애우울증.md')     # 초안 이름으로도 준다
+            self.assertEqual(code, 1)
+            self.assertIn('증 제2호증(적응장애우울증) 1면', out)
+            make_pdf(출력 / '제출' / '적응장애·우울증' / '증거' / '증 제3호증_의무기록.pdf', [글 + '의무기록'])   # 표를 만든 뒤 들어왔다
+            self.assertEqual(run(사건, '--확인', '--서면', '림프종')[0], 0)
+            code, out = run(사건, '--확인')
+            self.assertIn('표를 만든 뒤 들어온 호증 1건: 증 제3호증(적응장애우울증)', out)
+            self.assertEqual(run(사건, '--확인', '--서면', '난청')[0], 1)
+            with self.assertRaises(SystemExit), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                ew.main([str(사건), '--낱말', '시험', '--서면', '림프종'])       # 표는 라운드에 하나로 만든다
 
 
 class TableTest(unittest.TestCase):

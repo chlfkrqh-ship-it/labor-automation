@@ -2,7 +2,7 @@
 
     python -B 4_서면작성/scripts/evidence_read.py make  "<사건 폴더>" [--호증 사6 노 ...] [--no-ocr] [--no-text]
     python -B 4_서면작성/scripts/evidence_read.py make  "<사건 폴더>" --다시 사6        # 파일이 바뀐 호증의 기록을 새로 짠다
-    python -B 4_서면작성/scripts/evidence_read.py check "<사건 폴더>" [--호증 ...]
+    python -B 4_서면작성/scripts/evidence_read.py check "<사건 폴더>" [--호증 ...] [--서면 {이름}]   # 서면을 나눈 라운드는 그 서면의 몫만
     python -B 4_서면작성/scripts/evidence_read.py 그림  "<사건 폴더>" --호증 을105-8 [--면 3 7] [--전부]   # 그림으로 볼 면을 확인표와 함께 연다
     python -B 4_서면작성/scripts/evidence_read.py 실측  "<사건 폴더>" [--호증 ...] [--보기]   # 세션 기록으로 실제 읽은 줄을 재어 기록에 적는다
     python -B 4_서면작성/scripts/evidence_read.py 계획  "<사건 폴더>" [--창 200000]        # 아직 읽지 않은 호증의 양을 어림해 창을 나눈다
@@ -23,6 +23,8 @@ check 모든 호증(자료)에 기록이 있는지, 기록한 뒤 파일이 바�
       '쟁점에 닿는 문구'가 적혔는지, 그림으로 볼 면(끼운 그림이 있는 면 포함)을 그림으로 읽었는지, 면마다 확인표가 맞는지,
       다 읽지 않았다는 표현(모음 그림, '…중심으로 읽음')이 없는지, '실측:' 줄이 있고 그 뒤 면별 글이 바뀌지 않았는지(소리·영상과
       열리지 않는 그림 말고 모두) 본다. 하나라도 어긋나면 종료 코드 1 이다.
+      서면을 나눈 라운드(상병별로 나눈 심사청구 등)에서 `--서면 {이름}` 을 주면 그 서면의 몫과 공통 자료만 본다(`서면_몫`. 관문
+      `final_check.py` 가 서면마다 준다). 다른 서면의 호증·자료는 그 서면의 관문이 본다. 다른 명령도 같은 범위로 좁힌다.
 그림  그림으로 볼 면(스캔한 표, 사진, 문자인식이 깨진 면, 글자층 면에 끼운 표·발췌 그림)과 그림 호증, 압축·문서·메일 안의 그림을
       원본에 가까운 크기로 그려 아래 띠에 확인표를 적어 시스템 임시 폴더에 둔다(OneDrive 에 쌓지 않는다). 작성 세션은 그 그림을 한 장씩 열어 읽는다.
 실측  이 PC 세션 기록에서 면별 글을 찍은 도구 결과의 줄과 한 장씩 연 그림을 모아 호증마다 잰다. 줄의 98%, 면(압축·엑셀·문서는 단위)마다 90%
@@ -291,6 +293,139 @@ def 자료_목록(사건: Path, 폴더들: list) -> dict:
                 k = nfc(f'{p.parent.name}_{p.name}')
             out[k] = p
     return out
+
+
+# ---------------------------------------------------------------- 서면을 나눈 라운드의 몫
+# 상병별로 나눈 심사청구처럼 서면마다 절차가 따로 가는 라운드에서 한 서면의 관문(`final_check.py`)은 그 서면의 몫과 공통 자료만 본다
+# (`check --서면 {이름}`). 2026. 11. 9. 이승민 심사청구: 림프종 서면 관문의 전 면 읽기 막힘 119건 가운데 85건이 적응장애·우울증 서면의
+# 호증 27건, 그 서면만 인용한 논문·판결, 강 변호사에게 보낸 우리 서면 사본이었다(담당 노무사 "우리랑 유관한 거라면 해결하고 아니면 풀어벌지 뭐").
+_논문번호 = re.compile(r'(?<![a-z0-9])pmc\d{4,9}(?!\d)')
+_라틴_범위 = (chr(0xC0), chr(0x24F))      # 발음 기호가 붙은 라틴 글자(À~ɏ)
+_라틴말 = re.compile("[A-Za-z%s-%s'’]+" % _라틴_범위)      # 라틴 글자와 이름 속 따옴표(O'Donnell)
+_이름_아닌_말 = frozenset(('pubmed', 'pdf', 'txt', 'docx', 'hwp', 'hwpx', 'json', 'abstract', 'full', 'text', 'fulltext', 'final', 'draft',
+                       'copy', 'scan', 'page', 'pages', 'part', 'appendix', 'supplement', 'suppl', 'table', 'figure', 'translation',
+                       'original', 'korean', 'english', 'review', 'article', 'paper', 'report', 'study', 'data', 'file'))
+우리_판_꼴 = re.compile(우리_이름꼴 + r'.*(?:_초안|_Rev_\d+|_최종|_\d+차 수정안(?:\(클린\))?|_제출본)\.(?:docx|pdf|hwpx?)$')
+
+
+def 라틴꼴(s: str) -> str:
+    """라틴 글자를 맞대는 꼴. 발음 기호를 떼고(Kivimäki = kivimaki) 따옴표를 빼고(O'Donnell = odonnell) 작은 글자로 한다. 한글은 그대로 둔다."""
+    s = ''.join(''.join(x for x in unicodedata.normalize('NFKD', c) if not unicodedata.combining(x)) if _라틴_범위[0] <= c <= _라틴_범위[1] else c
+                for c in s)
+    return re.sub("['’‘`]", '', s).lower()
+
+
+def 자료_표지(p: Path) -> set:
+    """파일 이름이 가리키는 것: ('사건', 사건번호), ('논문', 'pmc…'), ('저자', 라틴 글자 이름 4자 이상). 연도·번호 앞에 이어 쓴 이름은
+    붙여서도 본다('Di Rosso 2018' → dirosso, 'Kim ST 2026_PMC…' → kimst)."""
+    stem = nfc(p.stem)
+    out = {('사건', re.sub(r'\s', '', m.group(0))) for m in re.finditer(_ecr._system.CASE_NUMBER, stem)}
+    out |= {('논문', m.group(0)) for m in _논문번호.finditer(라틴꼴(stem))}
+    for 토막 in re.split(r'[_()\[\]【】]', stem):
+        for w in [re.split(r'\d', 토막)[0]] + _라틴말.findall(토막):
+            w = re.sub('[^a-z]', '', 라틴꼴(w))
+            if len(w) >= 4 and w not in _이름_아닌_말 and not w.startswith('pmc'):
+                out.add(('저자', w))
+    return out
+
+
+def 서면_글(사건: Path, 라운드: Path, 이름: str, names: list) -> dict:
+    """그 서면이 무엇을 가리키는지 볼 글. 초안 전체(본문·각주·하단 목록)와 이름에 그 서면이 든 인용 대조표·판결 원문 대조 기록
+    (라운드·사건의 작업/ 맨 위. `final_check.py` 가 그 서면의 것으로 보는 표)이다. PDF 대조 보고서의 '대조표 본문 줄이 가리키지 않는 PDF'
+    절은 그 서면이 인용하지 않은 파일의 목록이므로 뺀다(`cite_pdf_check.py`)."""
+    조각 = [p.read_text(encoding='utf-8', errors='replace') for p in _ecr.drafts_of(라운드) if _ecr._system.draft_name(p) == 이름]
+    for d in (라운드 / '작업', 사건 / '작업'):
+        if d.is_dir():
+            조각 += [p.read_text(encoding='utf-8', errors='replace') for p in sorted(d.glob('*.md'))
+                   if re.match('(?:인용대조표|판결원문_)', nfc(p.name)) and _ecr._system.name_owner(p.stem, names) == 이름]
+    t = re.sub(r'(?ms)^##[^\n]*가리키지 않는[^\n]*\n.*?(?=^## |\Z)', '', nfc('\n'.join(조각)))
+    return {'글': t, '빈칸없음': re.sub(r'\s', '', t), '라틴': 라틴꼴(t)}
+
+
+def 가리키나(p: Path, 사건: Path, 표지: set, 글: dict) -> bool:
+    """서면의 글이 이 자료를 가리키는가. 경로·파일 이름이 있거나, 파일 이름의 사건번호·논문 번호·저자 이름이 나온다.
+    저자 이름은 낱말 머리에서 찾고 글자 사이 빈칸 하나는 넘는다('Di Rosso' = dirosso)."""
+    if nfc(p.relative_to(사건).as_posix()) in 글['글'] or nfc(p.name) in 글['글']:
+        return True
+    for 갈래, v in 표지:
+        if 갈래 == '사건' and v in 글['빈칸없음']:
+            return True
+        if 갈래 == '논문' and re.search(rf'(?<![a-z0-9]){v}(?!\d)', 글['라틴']):
+            return True
+        if 갈래 == '저자' and re.search('(?<![a-z])' + r'\s?'.join(v), 글['라틴']):
+            return True
+    return False
+
+
+def 우리_사본(p: Path, 사건: Path, 출력_이름: dict) -> bool:
+    """참고자료에 둔 우리 산출물의 사본인가. 이름이 우리 꼴 '({약칭}) …'(`우리_이름꼴`)이고, 서면 판 이름(_초안·_Rev_N·_최종·_n차 수정안·
+    _제출본)이거나 그 라운드 출력/ 에 같은 이름의 파일이 있는 것이다(강 변호사 송부본 등). 해시가 같다는 것만으로는 보지 않는다. 출력/ 의
+    제출 묶음·심문회의 자료에는 상대방 서면과 의뢰인 자료의 사본도 있다(2026. 11. 9. 서면 사건 전체를 재 보니 이케아 상대방 재심답변서,
+    GGM 상대 증거 영상, 황도윤 의뢰인 소명서가 해시로 걸렸다). 출력_이름은 라운드마다 출력/ 파일 이름을 담아 두는 그릇이다."""
+    name = nfc(p.name)
+    if not re.match(우리_이름꼴, name):
+        return False
+    if 우리_판_꼴.search(name):
+        return True
+    라운드 = 사건 / p.relative_to(사건).parts[0]
+    if 라운드 not in 출력_이름:
+        d = 라운드 / '출력'
+        출력_이름[라운드] = {nfc(x.name) for x in d.rglob('*') if x.is_file()} if d.is_dir() else set()
+    return name in 출력_이름[라운드]
+
+
+def 서면_몫(사건: Path, 이름: str, 호증: dict, 자료: dict) -> tuple:
+    """서면을 나눈 라운드에서 한 서면의 관문이 볼 것. (볼 것 {키: 파일}, '범위:' 로 시작하는 한 줄 말).
+    - 호증: 그 서면의 것('{호증키}@{이름}')과 번호에 서면 이름이 없는 것(앞 절차의 원자료, 민사 기록의 갑·을 등 공통 자료)을 본다.
+    - 상대방 서면·노동위원회 기록: 다른 서면의 폴더(`상대증거/{다른 이름}/` 등) 아래 것만 빼고 공통으로 본다.
+    - 참고자료: 그 서면의 폴더 아래 있거나, 그 서면의 글(`서면_글`)이 경로·파일 이름이나 파일 이름의 사건번호·논문 번호(PMC)·저자 이름을
+      가리키면 그 서면의 것이다. 같은 논문 번호를 단 파일은 한데 묶는다('PMC….txt' 와 '저자 연도_PMC….pdf'). 여러 서면이 가리키면 모두의
+      것이고, 어느 서면도 가리키지 않으면 공통으로 남긴다(누군가는 읽어야 한다). 우리 산출물의 사본(`우리_사본`)은 뺀다."""
+    라운드 = 최근_라운드(사건)
+    names = _ecr.split_names(라운드)
+    글들 = {n: 서면_글(사건, 라운드, n, names) for n in names}
+    볼것, 공통 = {}, []
+    뺌 = {'다른 서면의 호증': [], '다른 서면만 가리키는 자료': [], '우리 산출물 사본': []}
+    for k, p in 호증.items():
+        if _ecr.split_key(k)[1] in (None, 이름):
+            볼것[k] = p
+        else:
+            뺌['다른 서면의 호증'].append(k)
+    참고 = {k: p for k, p in 자료.items() if p.relative_to(사건).parts[1:2] == ('참고자료',)}
+    표지들 = {k: 자료_표지(p) for k, p in 참고.items()}
+    같은번호 = {}
+    for k, t in 표지들.items():
+        for 갈래, v in t:
+            if 갈래 == '논문':
+                같은번호.setdefault(v, []).append(k)
+    출력_이름 = {}
+    for k, p in 자료.items():
+        주인들 = {_ecr._system.folder_owner(p, 사건, names)} - {None}
+        if k in 참고:
+            if 우리_사본(p, 사건, 출력_이름):
+                뺌['우리 산출물 사본'].append(k)
+                continue
+            표지 = set(표지들[k])
+            for 갈래, v in 표지들[k]:
+                if 갈래 == '논문':
+                    for k2 in 같은번호[v]:
+                        표지 |= 표지들[k2]
+            주인들 |= {n for n in names if 가리키나(p, 사건, 표지, 글들[n])}
+        if 주인들 and 이름 not in 주인들:
+            뺌['다른 서면만 가리키는 자료'].append(k)
+            continue
+        볼것[k] = p
+        if k in 참고 and not 주인들:
+            공통.append(k)
+    호증수 = sum(1 for k in 볼것 if k in 호증)
+    이서면 = sum(1 for k in 볼것 if k in 호증 and _ecr.split_key(k)[1] == 이름)
+    말 = (f"범위: 서면 '{이름}' 몫 — 이 서면의 호증 {이서면}건, 번호에 서면 이름이 없는 호증 {호증수 - 이서면}건, 자료 {len(볼것) - 호증수}건을 본다"
+          + (f"(어느 서면도 가리키지 않아 공통으로 보는 참고자료 {len(공통)}건: {', '.join(sorted(공통)[:6])}{' 외' if len(공통) > 6 else ''}. "
+             "서면 몫으로 가르려면 `참고자료/{이름}/` 에 두거나 그 서면의 대조표 '원문' 칸에 경로를 적거나 파일 이름에 사건번호·저자·PMC 번호를 넣는다)"
+             if 공통 else '')
+          + ('. 뺀 것: ' + ', '.join(f'{까닭} {len(v)}건' for 까닭, v in 뺌.items() if v) + '(다른 서면의 것은 그 서면의 관문이 본다)'
+             if any(뺌.values()) else ''))
+    return 볼것, 말
 
 
 class 자리:
@@ -1494,16 +1629,23 @@ def cmd_계획(a) -> int:
 
 # ---------------------------------------------------------------- 명령
 def 대상(a) -> tuple:
+    """(자리, 볼 것, 전체). 서면을 나눈 라운드에서 `--서면` 을 주면 볼 것을 그 서면의 몫으로 좁히고 그 범위를 a.범위 에 적는다.
+    전체(번호를 다시 매겨 기록을 옮기거나 지금 호증에 없는 기록을 가릴 때 쓴다)는 좁히지 않는다."""
     사건 = Path(a.case)
     자 = 자리(사건, bool(a.자료))
+    a.범위 = ''
     if a.자료:
         전체 = 자료_목록(사건, a.자료)
+        목록 = dict(전체)
     else:
-        전체 = 서면_호증(사건)
-        전체.update(서면_자료(사건, 전체))      # 상대방 서면·참고자료(인용 판결문)·노동위원회 기록도 같은 관문으로 읽는다
-    목록 = dict(전체)
+        호증 = 서면_호증(사건)
+        자료 = 서면_자료(사건, 호증)      # 상대방 서면·참고자료(인용 판결문)·노동위원회 기록도 같은 관문으로 읽는다
+        전체 = {**호증, **자료}
+        목록 = dict(전체)
+        if getattr(a, '서면', None):
+            목록, a.범위 = 서면_몫(사건, a.서면, 호증, 자료)
     if a.호증:
-        목록 = {k: v for k, v in 전체.items()
+        목록 = {k: v for k, v in 목록.items()
                 if any(k == x or (not re.search(r'\d', x) and k.startswith(x)) for x in a.호증)}
     return 자, 목록, 전체
 
@@ -1742,6 +1884,8 @@ def cmd_check(a) -> int:
     자, 목록, 전체 = 대상(a)
     if not 목록:
         print('읽을 호증(자료)이 없습니다:', a.case)
+        if a.범위:
+            print(a.범위)
         return 2
     나쁨 = {}
     for k in sorted(목록, key=호증_정렬):
@@ -1749,8 +1893,11 @@ def cmd_check(a) -> int:
         if ps:
             나쁨[k] = ps
     옛것 = sorted(f.stem for f in 자.기록.glob('*.md') if f.stem not in {자.이름(k) for k in 전체}) if 자.기록.is_dir() else []
+    몫 = f"서면 '{a.서면}' 몫의 " if a.범위 else ''
     if 나쁨:
-        print(f'전 면 읽기 기록: 호증(자료) {len(목록)}건 가운데 {len(나쁨)}건이 덜 되었다 → {자.기록}')
+        print(f'전 면 읽기 기록: {몫}호증(자료) {len(목록)}건 가운데 {len(나쁨)}건이 덜 되었다 → {자.기록}')
+        if a.범위:
+            print(a.범위)
         for k, ps in 나쁨.items():
             print(f'- {자.제목(k)} ({nfc(목록[k].name)})')
             for s in ps:
@@ -1759,7 +1906,9 @@ def cmd_check(a) -> int:
         print(f'참고: 지금 호증에 없는 기록 {s}.md (번호를 다시 매겼으면 make 가 옮긴다)')
     if 나쁨:
         return 1
-    print(f'전 면 읽기 기록: 호증(자료) {len(목록)}건 모두 채워졌고 실측을 마쳤다 → {자.기록}')
+    print(f'전 면 읽기 기록: {몫}호증(자료) {len(목록)}건 모두 채워졌고 실측을 마쳤다 → {자.기록}')
+    if a.범위:
+        print(a.범위)
     return 0
 
 
@@ -1771,6 +1920,7 @@ def main(argv=None) -> int:
         s.add_argument('case')
         s.add_argument('--자료', nargs='+', help='호증 번호 없는 자료 폴더(검토의견의 첨부 등)')
         s.add_argument('--호증', nargs='+', help='이 호증키(사6)나 머리글자(사 노)만')
+        s.add_argument('--서면', help='서면을 나눈 라운드에서 이 서면(이름이나 서면초안_{이름}.md)의 몫과 공통 자료만')
         if name == 'make':
             s.add_argument('--다시', nargs='+', help='파일이 바뀐 이 호증키의 기록을 새로 짠다(앞선 기록은 끝에 옮겨 둔다)')
             s.add_argument('--글다시', nargs='*', help='면별 글만 지금 판으로 다시 낸다(호증키를 안 주면 모두). 읽은 뒤에 다시 내면 실측을 다시 해야 한다')
@@ -1787,6 +1937,18 @@ def main(argv=None) -> int:
             s.add_argument('--창', type=int, help=f'한 창에서 읽을 양의 상한(토큰, 기본 {창_기본:,})')
     a = ap.parse_args(argv)
     _끼운_캐시.clear()      # 한 번 돌 때만 쓴다(같은 프로세스에서 파일을 바꾸어 다시 돌리는 시험)
+    if a.서면:
+        if a.자료:
+            ap.error('--서면 은 서면 사건(호증)에만 쓴다')
+        names = _ecr.split_names(최근_라운드(Path(a.case)))
+        이름 = _ecr._system.draft_name(a.서면) if str(a.서면).lower().endswith('.md') else _ecr._system.name_form(a.서면)
+        if not names:
+            print(f'참고: 서면을 나누지 않은 사건이라 --서면 없이 모두 본다({a.case})')
+            이름 = None
+        elif 이름 not in names:
+            print(f"서면을 나눈 라운드의 서면 이름이 아니다: {a.서면} (있는 이름: {', '.join(names)})")
+            return 1
+        a.서면 = 이름
     return {'make': cmd_make, 'check': cmd_check, '그림': cmd_그림, '실측': cmd_실측, '계획': cmd_계획}[a.cmd](a)
 
 
