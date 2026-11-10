@@ -623,7 +623,10 @@ def build_markdown(data, data_name):
 
 def core_props(xml):
     now = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-    xml = re.sub(r'(<cp:lastModifiedBy>).*?(</cp:lastModifiedBy>)', r'\g<1>Claude\g<2>', xml)
+    # 작성자·마지막으로 수정한 사람은 '법무법인 평안'으로 둔다(`1_검토의견/CLAUDE.md` 7절, 관문의 `_최종` 검사).
+    # 2026. 11. 10.까지는 양식의 작성자('법무법인 평안 강민석 변호사')를 그대로 두고 마지막으로 수정한 사람을 'Claude'로 적었다.
+    xml = re.sub(r'(<dc:creator>).*?(</dc:creator>)', r'\g<1>법무법인 평안\g<2>', xml)
+    xml = re.sub(r'(<cp:lastModifiedBy>).*?(</cp:lastModifiedBy>)', r'\g<1>법무법인 평안\g<2>', xml)
     xml = re.sub(r'(<cp:revision>).*?(</cp:revision>)', r'\g<1>1\g<2>', xml)
     xml = re.sub(r'<cp:lastPrinted>.*?</cp:lastPrinted>', '', xml)
     xml = re.sub(r'(<dcterms:created[^>]*>).*?(</dcterms:created>)', r'\g<1>%s\g<2>' % now, xml)

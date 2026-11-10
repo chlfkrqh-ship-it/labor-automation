@@ -1160,6 +1160,17 @@ class BriefCaseOtherOutputTest(unittest.TestCase):
         self.assertIn('인용대조표_보강검색.md', out['다른 산출물(찾지 못함)'].줄[0][2])       # 산출물을 찾지 못한 표는 참고로 알린다
         self.assertEqual(out['다른 산출물(찾지 못함)'].줄[0][1], '참고')
 
+    def test_docx_is_chosen_over_its_newer_text_copy(self):
+        """2026. 11. 10.: research_docx.py 가 docx 다음에 같은 이름의 글사본(md)을 써서 md 가 늘 더 새것이라, 가장 새것만 고르면
+        `--대상 {docx}` 가 짝을 찾지 못해 막혔다(최문희 미팅 자료)."""
+        docx = self.작업 / '(리서치) 홍길동 미팅 관련.docx'
+        docx.write_bytes(b'')
+        os.utime(docx, (time.time() - 60, time.time() - 60))
+        (self.작업 / '(리서치) 홍길동 미팅 관련.md').write_text('서울2026부해645\n', encoding='utf-8')
+        (self.작업 / '인용대조표_미팅자료.md').write_text('# 인용 대조표 — (리서치) 홍길동 미팅 관련.docx (2026. 11. 10.)\n', encoding='utf-8')
+        짝 = {표.name: (p.name if p else None) for 표, p, _ in fc.서면_다른_대조표(self.case)}
+        self.assertEqual(짝['인용대조표_미팅자료.md'], '(리서치) 홍길동 미팅 관련.docx')
+
     def test_brief_draft_target_still_goes_to_the_brief_check(self):
         초안 = self.case / '라운드1' / '출력' / '서면초안.md'
         초안.write_text('본문\n', encoding='utf-8')

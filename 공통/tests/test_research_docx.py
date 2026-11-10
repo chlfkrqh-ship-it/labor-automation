@@ -56,6 +56,15 @@ class BuildDocumentTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             research_docx.grid({'열': [1000, 1000], '머리': ['가', '나'], '행': [['1', '2']]})
 
+    def test_core_props_name_the_firm(self):
+        """2026. 11. 10.: 양식의 작성자('법무법인 평안 강민석 변호사')가 남고 마지막으로 수정한 사람이 'Claude'로 적혔다."""
+        xml = ('<cp:coreProperties><dc:creator>법무법인 평안 강민석 변호사</dc:creator>'
+               '<cp:lastModifiedBy>Claude</cp:lastModifiedBy><cp:revision>5</cp:revision></cp:coreProperties>')
+        out = research_docx.core_props(xml)
+        self.assertIn('<dc:creator>법무법인 평안</dc:creator>', out)
+        self.assertIn('<cp:lastModifiedBy>법무법인 평안</cp:lastModifiedBy>', out)
+        self.assertNotIn('Claude', out)
+
 
 class TargetsTests(unittest.TestCase):
     """내용 파일 위치에 따라 docx 와 빌드기록을 어디에 쓰는지."""

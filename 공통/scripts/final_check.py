@@ -985,7 +985,9 @@ def 다른_산출물_찾기(사건: Path, 라운드: Path | None, 표: Path) -> 
             k = _열쇠(p.stem)
             if len(k) >= 4 and ((꼬리 and 꼬리 in k) or (제목 and k in 제목)):
                 후보.append(p)
-    return max(후보, key=lambda p: p.stat().st_mtime) if 후보 else None
+    # docx 가 있으면 docx 를 고른다. research_docx.py 는 docx 를 쓴 뒤 같은 이름의 글사본(md)을 써서 md 가 늘 더 새것이므로,
+    # 가장 새것만 고르면 `--대상 {docx}` 가 짝을 찾지 못해 막혔다(2026. 11. 10. 최문희 미팅 자료). 검토의견의 'docx 가 있으면 docx' 와 같은 방향이다.
+    return max(후보, key=lambda p: (p.suffix.lower() == '.docx', p.stat().st_mtime)) if 후보 else None
 
 
 def 서면_다른_대조표(사건: Path) -> list:
