@@ -101,6 +101,36 @@ class ReceiveTests(unittest.TestCase):
         text = (self.pc / '판례기록.md').read_bytes().decode('utf-8')
         self.assertEqual(text, '첫 줄(클라우드)\r\n둘째\r\n셋째\r\n넷째\r\n끝 줄\r\n더한 줄(PC)\r\n')   # 줄끝은 이 PC 것 그대로
 
+    def test_onedrive_conflict_copy_same_as_a_commit_is_removed_and_a_different_one_is_kept(self):
+        """2026. 11. 10. 19:11 집 PC 에서 시작 훅이 원격 고침을 받는 사이 OneDrive 가 회사 PC 판을 내려받아 '{이름}-{PC}.md' 사본 4개를
+        남겼고, 본 파일은 다음 받기까지 옛 판이었다. 사본이 시스템 파일 시험을 깨고 add -A 에 담길 뻔했다."""
+        write(self.pc, '지침/a-DESKTOP-3A29QR6.md', '2\n')            # 원격 판과 같은 사본(본 파일은 아직 옛 판 '1')
+        write(self.pc, 'c-DESKTOP-JIDKPO1.md', '1\n')                 # 옛 커밋 판과 같은 사본
+        write(self.pc, 'd-DESKTOP-3A29QR6-2.md', 'pc only\n')         # 어느 커밋 판과도 다른 사본(이 PC 고침이 남았을 수 있다)
+        write(self.pc, 'x-DESKTOP-3A29QR6.md', 'x\n')                 # 본 파일이 없는 새 파일은 사본이 아니다
+        write(self.pc, '지침/a-draft.md', '2\n')                       # 소문자 꼬리는 컴퓨터 이름이 아니다
+        r = self.run_receive()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse((self.pc / '지침/a-DESKTOP-3A29QR6.md').exists())
+        self.assertFalse((self.pc / 'c-DESKTOP-JIDKPO1.md').exists())
+        self.assertIn('지움  지침/a-DESKTOP-3A29QR6.md  (OneDrive 충돌 사본 — 본 파일 지침/a.md 의 커밋 판과 같다)', r.stdout)
+        self.assertIn('지운 OneDrive 충돌 사본 2개', r.stdout)
+        self.assertEqual(self.read('d-DESKTOP-3A29QR6-2.md'), 'pc only\n')      # 다른 사본은 지우지 않고 알린다
+        self.assertIn('사본  d-DESKTOP-3A29QR6-2.md  (본 파일 d.md)', r.stdout)
+        self.assertTrue((self.pc / 'x-DESKTOP-3A29QR6.md').exists())
+        self.assertTrue((self.pc / '지침/a-draft.md').exists())
+        self.assertNotIn('x-DESKTOP-3A29QR6.md', r.stdout.split('이 PC의 변경')[0])
+        self.assertEqual(self.read('지침/a.md'), '2\n')                          # 본 파일은 원격 판으로 받는다
+
+    def test_auto_reports_conflict_copies_even_when_nothing_else_changed(self):
+        appdata = self.move_repo_to_appdata()
+        self.run_auto(appdata)
+        write(self.pc, 'e-DESKTOP-3A29QR6.md', 'new\n')
+        r = self.run_auto(appdata)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn('지움  e-DESKTOP-3A29QR6.md', r.stdout)                    # 받은 것이 없어도 조용히 넘기지 않는다
+        self.assertFalse((self.pc / 'e-DESKTOP-3A29QR6.md').exists())
+
     def move_repo_to_appdata(self):
         appdata = Path(self.tmp.name) / 'appdata'
         (appdata / 'labor-automation').mkdir(parents=True)

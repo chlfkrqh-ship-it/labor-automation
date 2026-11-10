@@ -18,6 +18,8 @@ scan
     `lboxLines` 출력이 남은 세션 결과 파일(tool-results 의 .txt, 세션 기록 .jsonl)을 줄 수 있다. 사건명과 스니펫에서 찾는다.
   - 낱말은 공백과 가운뎃점을 무시하고 찾는다('유지보수'로 '유지·보수'도 걸린다). '발전+정비'처럼 + 로 이으면 둘 다 든 줄만
     걸린다. '정비'·'위탁'처럼 다른 분야 제목(도시정비, 민간위탁)에도 흔한 낱말은 홀로 쓰지 말고 + 로 묶는다.
+  - 좁은 검색어(목록에 걸린 줄이 3줄 이하인 검색어, NARROW)의 줄은 낱말에 걸리지 않아도 함께 뽑는다('걸린 낱말' 칸에 '좁은 검색어 …').
+    규정 문언 그대로 같은 꼭 맞춘 검색어의 결과를 목록에서 버리면 그 까닭이 줄마다 남아야 한다(2026. 11. 11.).
   - 기록: 폴더의 .md·.docx(원고·서면초안·대조표·검색기록·사건상태·제출본 등. 이름이 '법제처'로 시작하는 수확 폴더·파일과
     지침발췌·인용판결_PDF·전환작업·빌드 아래는 뺀다)에 그 줄의 사건번호·문서번호가 있는지.
   - 본문: 법제처 줄은 '법제처'로 시작하는 수확 폴더 안 .md(법제처_본문_*.md, 따로 받은 본문/) 머리에 그 번호가 있는지.
@@ -136,6 +138,19 @@ def load_lawgo(case):
     return files, rows
 
 
+# 좁은 검색어: 받아 둔 목록에 걸린 줄이 이만큼 이하인 검색어. 규정 문언 그대로 같은 꼭 맞춘 검색어여서 줄마다 가린다.
+# 2026. 11. 11. `/하자보완`: 최문희 강등 사건 11. 6. 첫 검색에서 규정 문언 그대로 넣은 검색어(3줄)에 걸린, 쟁점에 불리한 확정 판결을
+# 스니펫에 그 판단이 있는데도 목록에서 버렸다. 낱말에 걸리지 않아 다시 훑기와 관문을 지났고, 담당 노무사 "케이스가 없다는게 뭔가
+# 좀 이상해서"로 11. 10. 세 번째 검색에서야 찾았다. 그때 사건 보고서 27개를 같은 낱말로 다시 훑으니 처리를 적을 줄이 286줄(보고서마다
+# 10줄 안팎) 늘었다.
+NARROW = 3
+
+
+def queries(q):
+    """목록 줄의 '출처'(LBOX 는 그 줄을 건 검색어들을 ' / ' 로 잇는다, 법제처는 '검색어')."""
+    return [x.strip() for x in (q or "").split(" / ") if x.strip()]
+
+
 NUMBER = re.compile(r"\d{2,4}[가-힣]{1,4}\d+|[가-힣]+과-\d+")
 
 
@@ -209,6 +224,8 @@ def record_text(case):
         dirs, base = rel.split("/")[:-1], os.path.basename(f)
         if any(seg in SKIP_DIRS or harvest_dir(seg) for seg in dirs) or base.startswith(("수확목록_재확인", "법제처_", "~$")):
             continue
+        if not os.path.isfile(f):      # 이름이 .md 로 끝나는 폴더(2026. 11. 10. comwel.py --out '…_심급.md')를 열면 Windows 가 '권한 없음'을 낸다
+            continue
         parts.append(docx_text(f) if f.endswith(".docx") else open(f, encoding="utf-8", errors="replace").read())
     return sq("\n".join(parts))
 
@@ -217,7 +234,7 @@ def body_heads(case):
     heads = []
     for f in glob.glob(os.path.join(case, "**", "*.md"), recursive=True):
         rel = os.path.relpath(f, case).replace("\\", "/")
-        if not any(harvest_dir(seg) for seg in rel.split("/")[:-1]):
+        if not any(harvest_dir(seg) for seg in rel.split("/")[:-1]) or not os.path.isfile(f):
             continue
         for ln in open(f, encoding="utf-8", errors="replace"):
             if ln.startswith("## "):
@@ -240,18 +257,24 @@ def scan(a):
         lbox += load_lbox_file(f)
     for r in lbox:                                 # 주소 그대로 저장된 id('%EA%B5%AD…')는 번호를 찾을 수 없으므로 글자로 푼다
         r["id"] = unquote(r["id"])
-    seen, rows = set(), []
+    seen, rows, 검색어들, 줄_검색어 = set(), [], {}, {}
     for r in law + lbox:                           # 같은 줄이 여러 수확·파일에 있으면 하나로
         key = (r["src"].split("-")[0], sq(r["id"]) or sq(r["title"]))
+        for q in queries(r.get("q")):
+            검색어들.setdefault((key[0], q), set()).add(key[1])
+            줄_검색어.setdefault(key, []).append(q)
         if key in seen:
             continue
         seen.add(key)
         rows.append(r)
+    좁은 = {sq_ for sq_, ids in 검색어들.items() if len(ids) <= NARROW}      # (출처, 검색어). 같은 글의 검색어도 법제처와 LBOX 는 따로 센다
     recs, heads = record_text(case), body_heads(case)
     hits = []
     for r in rows:
         hay = sq(r["title"] + " " + r.get("extra", ""))
         got = [w for w in words if all(sq(p) in hay for p in w.split("+") if sq(p))]   # '발전+정비'는 둘 다 든 줄
+        key = (r["src"].split("-")[0], sq(r["id"]) or sq(r["title"]))
+        got += ["좁은 검색어 " + q for q in dict.fromkeys(줄_검색어.get(key, [])) if (key[0], q) in 좁은]
         if not got:
             continue
         k = number_key(r)
@@ -267,6 +290,7 @@ def scan(a):
         r["처리"] = cell(done.get(row_key(r), ""))
     out = ["# 수확 목록 제목 다시 훑기 — %s" % os.path.basename(case), "",
            "낱말: %s" % ", ".join(words),
+           "좁은 검색어(목록에 걸린 줄이 %d줄 이하인 검색어) %d개 — 그 줄은 낱말과 관계없이 함께 가린다" % (NARROW, len(좁은)),
            "법제처 목록 %d개 파일 · %d줄 / LBOX 목록 %d개 파일 · %d줄(같은 줄 합친 뒤 %d줄)" % (len(files), len(law), len(lbox_files), len(lbox), len(rows)),
            "걸린 줄 %d건 — 기록에 있음 %d건, 없음 %d건(그 가운데 법제처 본문을 받은 것 %d건), 번호가 없어 가리지 못한 것 %d건"
            % (len(hits), len(hits) - len(miss), sum(1 for r in miss if r["기록"] == "없음"),

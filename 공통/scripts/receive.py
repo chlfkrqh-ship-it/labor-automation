@@ -14,6 +14,8 @@ fetch 뒤 HEAD 를 origin/main 으로 옮기고(reset --mixed, 파일은 그대�
 - 새 파일: 원격 이력에 있던 파일이고 내용이 예전 커밋 판과 같으면 원격에서 지운 것이므로 지운다.
 - 어느 커밋과도 다른 내용은 이 PC에서 고친 것이므로 건드리지 않는다. 그 파일을 원격도 고쳤으면 두 고침을 합치고
   (git merge-file, 고친 곳이 겹치지 않을 때), 겹치면 '충돌'로 알리고 그대로 둔다.
+- OneDrive 충돌 사본('{이름}-{컴퓨터 이름}.{확장자}', 본 파일은 추적하는 시스템 파일): 본 파일의 어느 커밋 판과 같으면 지우고
+  (잃는 것이 없다), 다르면 '사본'으로 알리고 그대로 둔다. 이 스크립트가 파일을 받는 사이 OneDrive 가 다른 PC 판을 내려받으면 생긴다.
 
 이 PC에서 만들고 원격에 올리지 못한 커밋(push 가 거절되어 남은 것)이 있으면 HEAD 를 origin/main 이 아니라 그 커밋을
 origin/main 위에 차례로 다시 쌓은 끝으로 옮긴다(git pull --rebase 와 같다. merge-tree·commit-tree 로 만들어 작업본·색인은
@@ -88,6 +90,26 @@ def blobs_in_history(git: Git, path: str, rev: str) -> set[str]:
             _, _, old, new, *_ = line[1:].split(None, 4)
             found |= {old, new}
     return found - {ZERO}
+
+
+PC_NAME = re.compile(r'[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*')      # 컴퓨터 이름(DESKTOP-3A29QR6). OneDrive 가 '-2' 같은 번호를 더 붙이기도 한다
+
+
+def onedrive_copy_of(git: Git, rev: str, path: str) -> str | None:
+    """OneDrive 충돌 사본이면 그 본 파일(rev 에 있는 시스템 파일)의 경로. 아니면 None.
+
+    OneDrive 는 같은 파일이 이 PC와 클라우드에서 함께 바뀌면 합치지 않고 이 PC 판을 '{이름}-{컴퓨터 이름}.{확장자}' 로 남긴다
+    (README.md). 2026. 11. 10. 19:11 집 PC 에서 새 작업의 시작 훅이 원격의 판례기록 고침 4개를 받는 사이 OneDrive 도 회사 PC 판을
+    내려받아 '대법원_2009다102452-DESKTOP-3A29QR6.md' 같은 사본 4개가 남았고, 본 파일은 19:56 다음 받기까지 옛 판이었다.
+    """
+    folder, _, name = path.rpartition('/')
+    stem, dot, ext = name.rpartition('.') if '.' in name else (name, '', '')
+    for i, ch in enumerate(stem):
+        if ch == '-' and i and PC_NAME.fullmatch(stem[i + 1:]):
+            base = (folder + '/' if folder else '') + stem[:i] + dot + ext
+            if git('cat-file', '-e', f'{rev}:{base}', check=False).returncode == 0:
+                return base
+    return None
 
 
 def merge_both(git: Git, root: Path, path: str, old: str, new: str) -> bool:
@@ -234,7 +256,7 @@ def receive(root: Path, auto: bool = False) -> int:
     git('reset', '-q', '--mixed', target)
     unstaged = restage(git, target, held)
 
-    got, removed, merged, conflicts, local = [], [], [], [], []
+    got, removed, merged, conflicts, local, copies_gone, copies = [], [], [], [], [], [], []
     entries = git('status', '--porcelain=v1', '-z', '--untracked-files=all').split('\0')
     for entry in filter(None, entries):
         code, path = entry[:2], entry[3:]
@@ -255,9 +277,16 @@ def receive(root: Path, auto: bool = False) -> int:
             got.append(path)
         elif code == '??':
             history = blobs_in_history(git, path, target)
+            base = None if history else onedrive_copy_of(git, target, path)
             if history and git('hash-object', f'--path={path}', '--', path).strip() in history:
                 (root / path).unlink()
                 removed.append(path)
+            elif base and git('hash-object', f'--path={base}', '--', path).strip() in blobs_in_history(git, base, target):
+                (root / path).unlink()                  # 본 파일의 어느 커밋 판과 같은 사본이다 — 잃는 것이 없다
+                copies_gone.append((path, base))
+            elif base:
+                copies.append((path, base))             # 커밋하지 않은 이 PC 고침이 사본에만 남았을 수 있다
+                local.append(entry)
             else:
                 local.append(entry)
         else:
@@ -265,7 +294,7 @@ def receive(root: Path, auto: bool = False) -> int:
 
     pending = git('log', '--format=%h %s', 'origin/main..HEAD').splitlines()
     how = '원격 main 위로 옮겨 쌓았' if target != old else '그대로 두었'
-    if auto and not (got or removed or merged or conflicts or unstaged):
+    if auto and not (got or removed or merged or conflicts or unstaged or copies_gone or copies):
         if pending:
             more = f' 외 {len(pending) - 1}개' if len(pending) > 1 else ''
             print(f'[시스템 파일 받기] 원격에 없는 이 PC 커밋({pending[0]}{more})을 {how}다 — push 하면 함께 올라간다.')
@@ -273,7 +302,9 @@ def receive(root: Path, auto: bool = False) -> int:
     if auto:
         print('[시스템 파일 받기] 새 작업을 열면서 원격(main)의 시스템 파일을 받았다. 이번 작업에 쓰는 지침이 아래 목록에 있으면 '
               '다시 읽는다. 사용자에게는 받은 개수와 충돌만 한 줄로 알린다.')
-    print(f'원격에서 받은 파일 {len(got)}개, 원격에서 지운 파일 {len(removed)}개.')
+    print(f'원격에서 받은 파일 {len(got)}개, 원격에서 지운 파일 {len(removed)}개'
+          + (f', 지운 OneDrive 충돌 사본 {len(copies_gone)}개' if copies_gone else '')
+          + (f', 본 파일과 다른 OneDrive 충돌 사본 {len(copies)}개' if copies else '') + '.')
     for p in got:
         print(f'  받음  {p}')
     for p in removed:
@@ -282,10 +313,17 @@ def receive(root: Path, auto: bool = False) -> int:
         print(f'  합침  {p}  (원격 고침과 이 PC 고침을 함께 살림 — 올릴 때 이 PC 변경으로 잡힌다)')
     for p in unstaged:
         print(f'  풀림  {p}  (색인에 담아 둔 것을 풀었음 — 원격도 고친 파일이라 받은 판과 맞댄 뒤 다시 담는다)')
+    for p, base in copies_gone:
+        print(f'  지움  {p}  (OneDrive 충돌 사본 — 본 파일 {base} 의 커밋 판과 같다)')
     if conflicts:
         print('충돌 — 원격도 고치고 이 PC에서도 고친 파일입니다. 올리지 말고 사용자에게 확인하십시오:')
         for p in conflicts:
             print(f'  충돌  {p}')
+    if copies:
+        print("OneDrive 충돌 사본 — 본 파일의 어느 커밋 판과도 다릅니다. 올리지 말고(add -A 금지) 사본에만 있는 고침을 본 파일에 옮긴 뒤 "
+              "사본을 지웁니다. 누가 고친 것인지 모르면 사용자에게 확인하십시오(공통/운영.md '시스템 파일 올리기'):")
+        for p, base in copies:
+            print(f'  사본  {p}  (본 파일 {base})')
     if pending:
         print(f'원격에 없는 이 PC 커밋 {len(pending)}개를 {how}습니다. push 하면 함께 올라갑니다:')
         for line in pending:

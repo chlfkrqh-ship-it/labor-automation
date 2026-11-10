@@ -389,6 +389,90 @@ class CheaperReadingTest(unittest.TestCase):
         self.assertEqual(run('check', other)[0], 0)
 
 
+class SameCaseMaterialRecordTest(unittest.TestCase):
+    """서면 사건에서 초안 전에 리서치만 먼저 하며 `--자료` 로 읽은 기록을 호증 기록으로 본다.
+    2026. 11. 11. `/하자보완`: 최문희 사건이 11. 6. 노 호증 등 17건을 `--자료` 로 모두 읽고 실측까지 마쳤는데, 관문은
+    `증거관리/호증읽기/` 만 보아 9건을 '기록 없음'으로 막았다. 같은 사건·같은 파일이면 확인표와 면별 글이 같다."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        실측 = mock.patch.object(er, '실측_문제', return_value=[])
+        실측.start()
+        self.addCleanup(실측.stop)
+        self.root = Path(self.tmp.name)
+        self.case = self.root / '4_서면작성' / '사건' / '최문희_부당강등'
+        self.ours = self.case / '라운드1' / '우리증거' / '2차 초심'
+        self.ours.mkdir(parents=True)
+        self.env = mock.patch.dict(os.environ, {'EVIDENCE_READ_ROOT': str(self.root)})
+        self.env.start()
+        self.name = '노 제3호증 복직확인서.pdf'
+        make_pdf(self.ours / self.name, [글 + f'{n}면 복직 안내' for n in range(1, 4)])
+
+    def tearDown(self):
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def 자료_기록(self, case=None):
+        return (case or self.case) / '작업' / '자료읽기' / f'{self.name}.md'
+
+    def 자료_채우기(self, 면=(1, 2, 3)):
+        t = self.자료_기록().read_text(encoding='utf-8')
+        글자 = (self.case / '작업' / '자료글자' / f'{self.name}.txt').read_text(encoding='utf-8')
+        t = t.replace('읽은 방식: \n', '읽은 방식: 글자층 전 면\n').replace('면)\n\n- \n', '면)\n\n- 2면 "복직"\n')
+        for n in 면:
+            표 = re.search(r'\[%d면 끝 · 확인표 ([A-Z0-9]{4})\]' % n, 글자).group(1)
+            t = t.replace(f'- {n}면: ', f'- {n}면: 복직 안내({n}) 확인표 {표}')
+        self.자료_기록().write_text(t, encoding='utf-8')
+
+    def test_material_record_of_the_same_file_counts_and_make_carries_it_over(self):
+        run('make', self.case, '--자료', self.ours, '--no-ocr')
+        self.자료_채우기(면=(1, 2))                                   # 3면을 비운 자료 기록
+        code, out = run('check', self.case)
+        self.assertEqual(code, 1)
+        self.assertIn('같은 사건 작업/자료읽기 의 기록(노 제3호증 복직확인서.pdf.md)으로 보았다 — 읽지 않았거나 비운 단위 1/3: 3면', out)
+        self.자료_채우기()
+        self.assertEqual(run('check', self.case, '--자료', self.ours)[0], 0)
+        code, out = run('check', self.case)                          # 고치기 전에는 '기록 없음'으로 막았다
+        self.assertEqual(code, 0, out)
+        self.assertIn('같은 사건 작업/자료읽기 의 기록(같은 파일)으로 본 호증(자료) 1건', out)
+        self.assertFalse((self.case / '증거관리' / '호증읽기' / '노3.md').exists())     # check 는 사건 기록을 고치지 않는다
+        code, out = run('make', self.case, '--no-ocr')
+        self.assertIn('같은 사건 작업/자료읽기 의 기록을 그대로 옮김 1건', out)
+        rec = (self.case / '증거관리' / '호증읽기' / '노3.md').read_text(encoding='utf-8')
+        self.assertTrue(rec.startswith('# 노 제3호증 읽기 기록'))
+        self.assertIn('파일: 라운드1/우리증거/2차 초심/노 제3호증 복직확인서.pdf', rec)
+        self.assertIn(f'같은 사건 기록: 작업/자료읽기/{self.name}.md', rec)
+        self.assertNotIn('(옮김)', rec)                                # 같은 사건의 기록은 다시 읽게 하지 않는다
+        self.assertEqual((self.case / '증거관리' / '호증글자' / '노3.txt').read_bytes(),
+                         (self.case / '작업' / '자료글자' / f'{self.name}.txt').read_bytes())
+        self.assertTrue(self.자료_기록().is_file())                    # 자료 쪽은 그대로 둔다
+        code, out = run('check', self.case)
+        self.assertEqual(code, 0, out)
+        self.assertNotIn('같은 사건 작업/자료읽기 의 기록(같은 파일)으로 본', out)   # 이제 호증 기록으로 본다
+
+    def test_other_file_or_changed_file_is_not_covered(self):
+        run('make', self.case, '--자료', self.ours, '--no-ocr')
+        self.자료_채우기()
+        make_pdf(self.ours / self.name, [글 + f'{n}면 고친 복직 안내' for n in range(1, 4)])     # 자료로 읽은 뒤 파일이 바뀌었다
+        code, out = run('check', self.case)
+        self.assertEqual(code, 1)
+        self.assertIn('기록 없음(make 로 틀을 만들고', out)
+
+    def test_material_record_of_another_case_is_offered_but_must_be_read_again(self):
+        """자료 기록은 검토의견만이 아니라 서면작성·판례검색 사건의 것도 다른 사건에 옮겨 준다(고치기 전에는 1_검토의견 의 것만 보았다)."""
+        run('make', self.case, '--자료', self.ours, '--no-ocr')
+        self.자료_채우기()
+        other = self.root / '4_서면작성' / '사건' / '다른 사건'
+        (other / '라운드1' / '우리증거').mkdir(parents=True)
+        (other / '라운드1' / '우리증거' / '갑 제2호증 복직확인서.pdf').write_bytes((self.ours / self.name).read_bytes())
+        code, out = run('make', other, '--no-ocr')
+        self.assertIn('다른 사건 기록에서 옮겨 옴 1건', out)
+        t = (other / '증거관리' / '호증읽기' / '갑2.md').read_text(encoding='utf-8')
+        self.assertIn(f'옮겨 온 기록: 4_서면작성/사건/최문희_부당강등/작업/자료읽기/{self.name}.md', t)
+        self.assertIn('- 1면: (옮김) 복직 안내(1)', t)
+        self.assertEqual(run('check', other)[0], 1)                 # 다른 사건의 기록으로 갈음하지 않는다
+
+
 class ProofOfReadingTest(unittest.TestCase):
     """면을 끝까지 열어 본 증표(확인표) 없이는 지나가지 못하는지 본다.
     2026. 11. 3. 한전 태양광 22명: 스캔 계좌내역 95면을 문자인식 줄을 걸러 금액이 큰 줄 중심으로 읽고 나머지를 모음 그림으로 보았는데
@@ -652,6 +736,29 @@ class MeasuredReadingTest(unittest.TestCase):
         run('make', self.case, '--no-ocr')
         세션(self.기록, '세션1', [self.읽음('사4'), ('Read', {'file_path': str(self.ours / '사 제4호증 급여.pdf'), 'pages': '2-2'}, 그림결과)])
         self.assertEqual(self.실측('--호증', '사4')[0], 0)
+
+    def test_same_file_name_in_two_folders_counts_images_of_both(self):
+        """같은 이름의 그림 파일이 호증과 참고자료(가리기 전 원본)에 함께 있어도 두 기록의 그림 열람을 모두 센다.
+        2026. 11. 10. 강성용 소장에서 한쪽 기록의 열람을 세지 못해 고쳤고(cc1dbde), 시험은 11. 11. `/하자보완` 이 더하였다."""
+        원본 = self.case / '라운드1' / '참고자료' / '가림 전 원본'
+        원본.mkdir(parents=True)
+        for 폴더_, 글자 in ((self.ours, '가린 대화'), (원본, '가리기 전 대화')):
+            d = pymupdf.open()
+            d.new_page(width=300, height=400).insert_text((20, 60), 글자, fontsize=12, fontname='korea')
+            d[0].get_pixmap(dpi=72).save(str(폴더_ / '갑 제8호증의1 사진.png'))
+        run('make', self.case, '--no-ocr')
+        키들 = sorted(p.stem for p in (self.case / '증거관리' / '호증읽기').glob('*.md'))
+        self.assertEqual(len(키들), 2, 키들)
+        폴더 = self.root / '그림'
+        낱장 = []
+        for k in 키들:
+            self.assertEqual(run('그림', self.case, '--호증', k, '--out', 폴더)[0], 0)
+            낱장 += sorted((폴더 / k).glob('*조각.png'))
+        self.assertEqual(len(낱장), 2)
+        세션(self.기록, '세션1', [('Read', {'file_path': str(x)}, 그림결과) for x in 낱장])
+        code, out = self.실측()
+        self.assertEqual(code, 0, out)
+        self.assertIn('통과 2건', out)
 
     def test_image_exhibit_all_pieces_and_files_that_cannot_be_measured(self):
         d = pymupdf.open()

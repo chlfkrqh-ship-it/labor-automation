@@ -27,6 +27,7 @@ IACIAC = 'https://www.iaciac.go.kr'
 DELAY = 0.5         # 호출 사이 간격(초)
 PAGE = 200          # 산재판례 목록 한 쪽의 최대 건수
 ID = re.compile(r"goView\('([^']+)'\)")
+파일_꼴 = ('.md', '.json', '.txt', '.tsv', '.csv', '.html', '.htm', '.pdf', '.docx', '.hwp', '.hwpx', '.xlsx')   # --out 에 붙으면 파일 이름이다
 
 
 def fetch(url, data=None, referer=None):
@@ -266,6 +267,9 @@ def main():
     a = p.parse_args()
     if a.cmd == '판례찾기' and not a.검색어 and not a.분류:
         p.error('검색어나 --분류를 준다')
+    if os.path.splitext(a.out.rstrip('/\\'))[1].lower() in 파일_꼴:
+        # 2026. 11. 10. OES 근골격계: '--out …/2018누40180_심급.md' 로 그 이름의 폴더가 생겨 읽기와 harvest_titles.py scan 이 '권한 없음'으로 멈췄다
+        p.error(f'--out 은 폴더 이름이다({a.out}). 확장자 없이 폴더를 주면 건마다 {{사건번호_법원}}.md 로 쓴다')
     a.fn(a)
 
 

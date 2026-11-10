@@ -54,6 +54,8 @@ def main():
     ap.add_argument("--out", required=True, help="저장할 폴더")
     ap.add_argument("--remove", action="store_true", help="모두 확인되면 결과 파일을 지운다")
     a = ap.parse_args()
+    if os.path.splitext(a.out.rstrip("/\\"))[1].lower() in (".pdf", ".zip", ".md", ".txt", ".json", ".docx", ".hwp", ".hwpx"):
+        ap.error(f"--out 은 저장할 폴더이다({a.out}). 파일 이름을 주면 그 이름의 폴더가 생긴다")   # 2026. 11. 11. `/하자보완`(comwel.py 와 같은 꼴)
     os.makedirs(a.out, exist_ok=True)
     ok, n = True, 0
     for res in a.results:

@@ -473,12 +473,38 @@ def 뿌리() -> Path:
     return Path(os.environ.get('EVIDENCE_READ_ROOT') or Path(__file__).resolve().parents[2])
 
 
+def 같은_사건_자료(자: '자리', p: Path) -> list:
+    """서면 사건의 호증(자료) 파일과 같은 파일(해시)을 이 사건 `작업/자료읽기/` 에 자료로 읽어 둔 기록. [(자료 자리, 자료 키)].
+    초안 전에 리서치만 먼저 할 때(`4_서면작성/CLAUDE.md` 3절) `--자료` 로 읽은 것이다. 같은 사건·같은 파일이면 확인표(사건 폴더 이름·
+    파일 해시·면)와 면별 글이 같으므로 다시 읽지 않는다. 2026. 11. 11. `/하자보완`: 최문희 사건이 11. 6. 노 호증·상대 답변서 등 17건을
+    `--자료` 로 모두 읽고 실측까지 마쳤는데, 관문은 `증거관리/호증읽기/` 만 보아 9건을 '기록 없음'으로 막았다."""
+    if 자.자료:
+        return []
+    z = 자리(자.사건, True)
+    if not z.기록.is_dir():
+        return []
+    if z.기록 not in _자료_색인:      # 호증마다 기록을 다시 읽지 않게 한 번 돌 때 한 번만 읽는다
+        색 = {}
+        for f in sorted(z.기록.glob('*.md')):
+            try:
+                색.setdefault(기록_읽기(f.read_text(encoding='utf-8'))['해시'], []).append(f.stem)
+            except OSError:
+                continue
+        _자료_색인[z.기록] = 색
+    return [(z, s) for s in _자료_색인[z.기록].get(해시(p), [])]
+
+
+_자료_색인 = {}
+
+
 def 다른_기록(자: '자리') -> dict:
-    """저장소 안 다른 사건·자료의 읽기 기록. 해시 → [기록 파일]. 같은 파일을 두 번 읽지 않으려는 것이다."""
+    """저장소 안 다른 사건·자료의 읽기 기록. 해시 → [기록 파일]. 같은 파일을 두 번 읽지 않으려는 것이다.
+    자료 기록은 검토의견만이 아니라 판례검색·서면작성(리서치만 먼저)·손배계산 사건의 것도 본다(2026. 11. 11. `/하자보완`).
+    같은 사건의 자료 기록은 `같은_사건_자료` 가 그대로 옮기므로 여기서는 뺀다."""
     out = {}
-    for pat in ('*/사건/*/증거관리/호증읽기/*.md', '1_검토의견/사건/*/작업/자료읽기/*.md'):
+    for pat in ('*/사건/*/증거관리/호증읽기/*.md', '*/사건/*/작업/자료읽기/*.md'):
         for f in sorted(뿌리().glob(pat)):
-            if f.parent.resolve() == 자.기록.resolve():
+            if f.parent.resolve() == 자.기록.resolve() or 자.사건.resolve() in f.resolve().parents:
                 continue
             try:
                 h = 기록_읽기(f.read_text(encoding='utf-8'))['해시']
@@ -647,6 +673,10 @@ def 기대_확인표(자: 자리, k: str, p: Path) -> dict | None:
 def 문제들(자: 자리, k: str, p: Path) -> list:
     f = 자.기록_파일(k)
     if not f.is_file():
+        같은 = 같은_사건_자료(자, p)
+        if 같은:      # 같은 사건에서 자료로 읽은 기록을 그 기록의 자리(작업/자료읽기·자료글자)에서 그대로 본다
+            남은 = min((문제들(z, zk, p) for z, zk in 같은), key=len)
+            return [f'같은 사건 작업/자료읽기 의 기록({같은[0][1]}.md)으로 보았다 — ' + 남은[0]] + 남은[1:] if 남은 else []
         return ['기록 없음(make 로 틀을 만들고 모든 면을 읽어 채운다)']
     r = 기록_읽기(f.read_text(encoding='utf-8'))
     out = []
@@ -1682,11 +1712,12 @@ def cmd_make(a) -> int:
                 옛글.rename(자.글_파일(새[0]))
             옮김.append(f'{k_old} → {새[0]}')
     다시 = set(a.다시 or [])
-    새로, 바뀜, 알림, 옮겨옴 = [], [], [], []
+    새로, 바뀜, 알림, 옮겨옴, 자료에서 = [], [], [], [], []
     색인 = 다른_기록(자)
     바뀐_파일 = set()
     for k in sorted(목록, key=호증_정렬):
         p, f = 목록[k], 자.기록_파일(k)
+        같은 = [] if f.is_file() else 같은_사건_자료(자, p)
         if f.is_file():
             r = 기록_읽기(f.read_text(encoding='utf-8'))
             if r['해시'] != 현재해시[k]:
@@ -1697,6 +1728,19 @@ def cmd_make(a) -> int:
                     새로.append(k)
                 else:
                     바뀜.append(k)
+        elif 같은:      # 같은 사건에서 자료로 읽은 기록과 면별 글을 그대로 옮긴다(확인표·실측의 글 해시가 같다). 자료 쪽은 그대로 둔다
+            z, zk = min(같은, key=lambda x: len(문제들(*x, p)))
+            t = z.기록_파일(zk).read_text(encoding='utf-8')
+            t = re.sub(r'^# .+? 읽기 기록', lambda _: f'# {자.제목(k)} 읽기 기록', t, count=1, flags=re.M)
+            rel = nfc(p.relative_to(자.사건).as_posix()) if 자.사건 in p.parents else nfc(str(p))
+            t = re.sub(r'^파일:.*$', lambda _: f'파일: {rel}', t, count=1, flags=re.M)
+            t = re.sub(r'^(만든 날:.*)$', lambda m: f'{m.group(1)}\n같은 사건 기록: 작업/자료읽기/{zk}.md (같은 파일, '
+                                                  f'{dt.date.today().isoformat()}에 옮김)', t, count=1, flags=re.M)
+            f.write_text(t, encoding='utf-8')
+            if z.글_파일(zk).is_file() and not 자.글_파일(k).is_file():
+                자.글.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(z.글_파일(zk), 자.글_파일(k))
+            자료에서.append(k)
         else:
             units = 단위들(p)
             t = next((x for x in (옮겨_오기(자, k, p, units, g) for g in 색인.get(현재해시[k], [])) if x), None)
@@ -1721,7 +1765,8 @@ def cmd_make(a) -> int:
                 알림.append(f'{자.제목(k)}: {msg}')
         print(f'{자.제목(k)} — {nfc(p.name)}', flush=True)
     print(f'기록 틀 새로 {len(새로)}건, 다른 사건 기록에서 옮겨 옴 {len(옮겨옴)}건(쟁점 문구만 채운다), 번호 따라 옮김 {len(옮김)}건, '
-          f'파일이 바뀐 기록 {len(바뀜)}건 → {자.기록}')
+          f'파일이 바뀐 기록 {len(바뀜)}건 → {자.기록}'
+          + (f' · 같은 사건 작업/자료읽기 의 기록을 그대로 옮김 {len(자료에서)}건(다시 읽지 않는다)' if 자료에서 else ''))
     for s in 옮김:
         print('  옮김: ' + s)
     for k in 옮겨옴:
@@ -1898,6 +1943,10 @@ def cmd_check(a) -> int:
         if ps:
             나쁨[k] = ps
     옛것 = sorted(f.stem for f in 자.기록.glob('*.md') if f.stem not in {자.이름(k) for k in 전체}) if 자.기록.is_dir() else []
+    자료로 = [k for k in 목록 if not 자.기록_파일(k).is_file() and 같은_사건_자료(자, 목록[k])]
+    if 자료로:
+        print(f'참고: 같은 사건 작업/자료읽기 의 기록(같은 파일)으로 본 호증(자료) {len(자료로)}건 — '
+              '서면을 쓰기 전 `make` 가 증거관리/호증읽기 로 그대로 옮긴다(다시 읽지 않는다)')
     몫 = f"서면 '{a.서면}' 몫의 " if a.범위 else ''
     if 나쁨:
         print(f'전 면 읽기 기록: {몫}호증(자료) {len(목록)}건 가운데 {len(나쁨)}건이 덜 되었다 → {자.기록}')
@@ -1942,6 +1991,7 @@ def main(argv=None) -> int:
             s.add_argument('--창', type=int, help=f'한 창에서 읽을 양의 상한(토큰, 기본 {창_기본:,})')
     a = ap.parse_args(argv)
     _끼운_캐시.clear()      # 한 번 돌 때만 쓴다(같은 프로세스에서 파일을 바꾸어 다시 돌리는 시험)
+    _자료_색인.clear()
     if a.서면:
         if a.자료:
             ap.error('--서면 은 서면 사건(호증)에만 쓴다')
