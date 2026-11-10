@@ -1377,13 +1377,16 @@ def 기록_폴더() -> Path:
     return Path.home() / '.claude' / 'projects' / re.sub(r'[^A-Za-z0-9]', '-', str(뿌리()))
 
 
-def 도구_뜻(b: dict, 자: 자리, 파일이름: dict):
-    """도구 호출이 면별 글을 찍는 것이면 '글', 호증의 면을 그림으로 여는 것이면 (기록 이름, 면들. 면을 안 정했으면 None)."""
+def 도구_뜻(b: dict, 자: 자리, 파일이름: dict, 이름들: set = None):
+    """도구 호출이 면별 글을 찍는 것이면 '글', 호증의 면을 그림으로 여는 것이면 (기록 이름, 면들. 면을 안 정했으면 None).
+    이름들은 모든 기록 이름이다. 파일이름(파일 이름 → 기록 이름)은 같은 이름의 파일이 두 폴더에 있으면 한쪽 기록 이름만 남으므로
+    낱장 그림의 폴더(기록 이름)는 이름들로 가린다(2026. 11. 10. 강성용: 갑 제8호증과 같은 이름의 가리기 전 원본을 참고자료에 두자
+    호증 쪽 그림 열람을 세지 못하였다)."""
     i = b.get('input') or {}
     경로 = nfc(str(i.get('file_path') or '')).replace('\\', '/')
     if b.get('name') == 'Read' and 경로:
         m = re.search(r'/([^/]+)/(?:(\d+)_)?(\d+)(면|조각)\.png$', 경로)      # `그림` 이 낸 낱장(압축·문서 안의 것은 '차례_' 가 붙는다)
-        if m and nfc(m.group(1)) in 파일이름.values():
+        if m and nfc(m.group(1)) in (이름들 if 이름들 is not None else set(파일이름.values())):
             if m.group(2):
                 return nfc(m.group(1)), {f'{int(m.group(2))}:{int(m.group(3))}{m.group(4)}'}
             return nfc(m.group(1)), {int(m.group(3)) if m.group(4) == '면' else f'조각{int(m.group(3))}'}
@@ -1393,9 +1396,11 @@ def 도구_뜻(b: dict, 자: 자리, 파일이름: dict):
     return '글' if 자.글.name in json.dumps(i, ensure_ascii=False) else None
 
 
-def 본_기록(폴더: Path, 자: 자리, 파일이름: dict) -> dict:
+def 본_기록(폴더: Path, 자: 자리, 파일이름: dict, 이름들: set = None) -> dict:
     """이 PC 세션 기록에서 면별 글을 찍은 도구 결과의 줄(세션별)과 그림으로 연 면(기록 이름별)을 모은다. 파일이름: 호증 파일 이름 → 기록 이름.
+    이름들: 모든 기록 이름(주지 않으면 파일이름의 값).
     세션 기록 폴더 바로 아래만 보므로 하위 작업(`{세션}/subagents/`)은 세지 않는다. 호증은 작성 세션이 직접 읽는다(루트 CLAUDE.md)."""
+    이름들 = set(이름들) if 이름들 is not None else set(파일이름.values())
     줄들, 그림 = {}, {}
     for f in sorted(폴더.glob('*.jsonl')):
         도구 = {}
@@ -1415,7 +1420,7 @@ def 본_기록(폴더: Path, 자: 자리, 파일이름: dict) -> dict:
                     if not isinstance(b, dict):
                         continue
                     if b.get('type') == 'tool_use':
-                        뜻 = 도구_뜻(b, 자, 파일이름)
+                        뜻 = 도구_뜻(b, 자, 파일이름, 이름들)
                         if 뜻:
                             도구[b.get('id')] = 뜻
                     elif b.get('type') == 'tool_result' and b.get('tool_use_id') in 도구 and not b.get('is_error'):
@@ -1514,7 +1519,7 @@ def cmd_실측(a) -> int:
         print('잴 호증(자료)이 없습니다:', a.case)
         return 2
     폴더 = Path(a.기록폴더) if a.기록폴더 else 기록_폴더()
-    본 = 본_기록(폴더, 자, {nfc(p.name): 자.이름(k) for k, p in 잴.items()})
+    본 = 본_기록(폴더, 자, {nfc(p.name): 자.이름(k) for k, p in 잴.items()}, {자.이름(k) for k in 잴})
     통과, 덜, 안읽음, 없음 = [], [], [], []
     for k in sorted(잴, key=호증_정렬):
         p = 잴[k]
