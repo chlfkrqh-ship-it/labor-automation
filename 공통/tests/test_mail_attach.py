@@ -323,6 +323,28 @@ class LoginTests(unittest.TestCase):
         self.assertEqual((code, fake.calls), (0, ['silent']))
         self.assertIn('이미 로그인', out)
 
+    def test_one_login_asks_every_tool_permission_but_never_send(self):
+        self.assertEqual(mail.SCOPES, ['Mail.Read'])                                    # 첨부 받기는 읽기만 쓴다
+        for scope in ('Mail.Read', 'Mail.ReadWrite', 'Chat.Read'):
+            self.assertIn(scope, mail.LOGIN_SCOPES)
+        for scope in mail.LOGIN_SCOPES:                                                 # 보내기·올리기·관리자 승인 권한은 넣지 않는다
+            self.assertNotRegex(scope, r'Send|Chat\.ReadWrite|Files\.ReadWrite|\.ReadWrite\.All|ChannelMessage')
+        asked = []
+
+        class Recorder(FakeApp):
+            def acquire_token_silent(self, scopes, account):
+                asked.append(('silent', list(scopes)))
+                return {'error': 'invalid_grant', 'error_description': 'AADSTS65001: consent'}   # 새 권한에 아직 동의하지 않았다
+
+            def acquire_token_interactive(self, scopes, **kw):
+                asked.append(('interactive', list(scopes)))
+                return OK
+
+        code, out = self.login(Recorder(accounts=[{'username': 'u'}]))
+        self.assertEqual(code, 0)
+        self.assertEqual(asked, [('silent', mail.LOGIN_SCOPES), ('interactive', mail.LOGIN_SCOPES)])
+        self.assertIn('Chat.Read', out)
+
     def test_browser_login_timeout_and_admin_approval(self):
         with self.assertRaises(mail.MailError) as caught:
             self.login(FakeApp(interactive=BrowserInteractionTimeoutError('late')))

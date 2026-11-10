@@ -7,15 +7,16 @@
     python -B 공통/scripts/mail_draft.py new --to a@example.com --cc b@example.com --subject "…" --body 본문.txt --attach a.pdf
     python -B 공통/scripts/mail_draft.py forward "mail:///messages/…" --same-as "mail:///messages/…" --body 본문.txt   # 전달
     python -B 공통/scripts/mail_draft.py check "mail:///messages/…" --files a.pdf b.docx   # 받는 사람·첨부를 보고 SHA-256 을 맞댄다
-    python -B 공통/scripts/mail_draft.py login             # PC마다 처음 한 번. 브라우저 창에서 회사 계정을 고르고 메일 쓰기에 동의한다
+    python -B 공통/scripts/mail_draft.py login             # PC마다 처음 한 번. 브라우저 창에서 회사 계정을 고르고 공통 도구의 권한에 한꺼번에 동의한다
     python -B 공통/scripts/mail_draft.py login --device    # 브라우저 창이 뜨지 않을 때. 코드를 받아 휴대폰에서 로그인
     python -B 공통/scripts/mail_draft.py status            # 메일 쓰기 권한으로 로그인되어 있는지
 
-- 권한은 메일 쓰기(Mail.ReadWrite) 하나이다. 초안을 만들고 고치고 첨부를 붙이기만 한다. 보내기(Mail.Send)는 받지 않았고
+- 이 스크립트가 쓰는 권한은 메일 쓰기(Mail.ReadWrite)이다. 초안을 만들고 고치고 첨부를 붙이기만 한다. 보내기(Mail.Send)는 받지 않았고
   보내기·옮기기·복사·지우기 요청은 이 스크립트가 막는다. 보내는 것은 담당자가 Outlook 에서 누르거나 담당자가 그 자리에서
   보내라고 한 때이고, 초안 만들기도 담당자가 시킨 때에만 한다(CLAUDE.md 'Microsoft 365 연결은 읽기만 한다').
 - 로그인은 mail_attach.py 와 같은 공용 앱(Microsoft Graph Command Line Tools)·같은 보관함(%LOCALAPPDATA%\\노동사건자동화\\메일\\)을
-  쓰되 권한은 따로 동의받는다. mail_attach.py 는 그대로 읽기 전용이다.
+  쓰고, 로그인 한 번에 공통 도구의 권한(mail_attach.py 의 LOGIN_SCOPES)을 함께 동의받는다(2026. 11. 10.). mail_attach.py 는
+  그대로 읽기만 한다.
 - 본문은 UTF-8 글 파일이고 줄마다 맑은 고딕 11pt 줄로 넣는다(빈 줄은 빈 줄로). 줄 안에서 '**…**' 로 감싼 글은 굵게 넣는다
   (예: '**1. 검토 요지**'. 2026. 11. 9. 담당자가 항목 제목을 Outlook 에서 굵게 고쳐 보낸 뒤 넣었다). 서명은 보낸 편지함의 최근 메일에서
   <div id="Signature"> 를 그대로 가져와 그 아래에 붙인다(새 Outlook 이 화면에서 넣는 서명과 같은 모양). --no-signature 로 뺀다.
@@ -105,8 +106,7 @@ def session() -> tuple[str, str]:
 
 
 def explain(result: dict) -> str:
-    return (ma.explain(result).replace('메일 읽기(Mail.Read)', '메일 쓰기(Mail.ReadWrite)')
-            .replace('그동안 첨부는 사용자에게 사건 폴더에 저장해 달라고 한다.', '그동안 초안은 새 Outlook 화면 제어로 만든다.'))
+    return ma.explain(result).replace('그동안 첨부는 사용자에게 사건 폴더에 저장해 달라고 한다.', '그동안 초안은 새 Outlook 화면 제어로 만든다.')
 
 
 def finish(result: dict) -> int:
@@ -121,18 +121,18 @@ def finish(result: dict) -> int:
 def login(device: bool = False) -> int:
     a = app()
     try:
-        already = silent(a)
+        already = ma.has_all(a)                         # 공통 도구의 권한을 모두 받아 두었는지
     except Exception:                                   # 새로 받다 실패하면 다시 로그인한다
-        already = None
+        already = False
     if already:
-        print('이미 메일 쓰기 권한으로 로그인되어 있습니다.')
+        print(f'이미 로그인되어 있습니다({ma.PERMISSIONS}).')
         return 0
     if device:
         return login_device(a)
-    print('브라우저 창에서 회사 계정을 고르십시오. 처음이면 "메일 읽기 및 쓰기" 권한 동의를 묻습니다. 5분 안에 마치지 않으면 끝납니다.',
-          flush=True)
+    print(f'브라우저 창에서 회사 계정을 고르십시오. 처음이거나 권한이 늘었으면 권한 동의({ma.PERMISSIONS})를 한 번 묻습니다. '
+          '5분 안에 마치지 않으면 끝납니다.', flush=True)
     try:
-        result = a.acquire_token_interactive(SCOPES, prompt='select_account', timeout=300)
+        result = a.acquire_token_interactive(ma.LOGIN_SCOPES, prompt='select_account', timeout=300)
     except Exception as exc:
         if type(exc).__name__ == 'BrowserInteractionTimeoutError':
             raise MailError('5분 안에 로그인을 마치지 않아 끝났습니다. login 을 다시 실행하십시오.') from None
@@ -153,7 +153,7 @@ def login_device(a) -> int:
         if not isinstance(flow, dict) or flow.get('expires_at', 0) <= time.time() + 5:
             flow = None
     if flow is None:
-        flow = a.initiate_device_flow(scopes=SCOPES)
+        flow = a.initiate_device_flow(scopes=ma.LOGIN_SCOPES)
         if 'user_code' not in flow:
             raise MailError(explain(flow))
         path.write_text(json.dumps(flow), encoding='utf-8')

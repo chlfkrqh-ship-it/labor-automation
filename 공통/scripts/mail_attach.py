@@ -13,9 +13,10 @@ Microsoft 365 연결(claude.ai 커넥터)은 첨부의 글자만 돌려주고 �
     python -B 공통/scripts/mail_attach.py status            # 로그인되어 있는지(네트워크를 쓰지 않는다)
     python -B 공통/scripts/mail_attach.py logout
 
-- 권한은 메일 읽기(Mail.Read) 하나이다. 메일을 고치거나 보내거나 지우지 않는다.
+- 이 스크립트가 쓰는 권한은 메일 읽기(Mail.Read)이다. 메일을 고치거나 보내거나 지우지 않는다.
 - 로그인은 마이크로소프트가 스크립트용으로 둔 공용 앱(Microsoft Graph Command Line Tools)으로 한다. 법인 설정에
-  따라 처음 로그인할 때 관리자 승인이 필요할 수 있다.
+  따라 처음 로그인할 때 관리자 승인이 필요할 수 있다. 같은 보관함을 쓰는 공통 도구(mail_draft.py·teams_get.py)의 권한까지
+  로그인 한 번에 함께 동의받는다(아래 LOGIN_SCOPES). 보내기 권한은 받지 않는다.
 - 로그인 정보는 PC마다 %LOCALAPPDATA%\\노동사건자동화\\메일\\ 에 두고(Windows 는 사용자 계정으로 암호화한다)
   OneDrive·git 에 두지 않는다.
 - 받는 자리는 저장소 밖이거나 사건 폴더(경로에 '사건' 폴더가 있는 곳)여야 한다. 저장소의 다른 자리에 받으면
@@ -44,7 +45,14 @@ ROOT = Path(__file__).resolve().parents[2]
 GRAPH = 'https://graph.microsoft.com/v1.0'
 CLIENT_ID = '14d82eec-204b-4c2f-b7e8-296a70dab67e'      # Microsoft Graph Command Line Tools
 AUTHORITY = 'https://login.microsoftonline.com/organizations'
-SCOPES = ['Mail.Read']
+SCOPES = ['Mail.Read']                                  # 이 스크립트가 쓰는 권한(읽기만)
+# 로그인할 때 한꺼번에 동의받는 권한. 같은 보관함을 쓰는 공통 도구(mail_attach·mail_draft·teams_get)의 권한을 모두 넣어 도구가 늘 때마다
+# 동의를 다시 받지 않게 한다(2026. 11. 10. 담당 노무사 "마이크로소프트 오피스 관련한 권한 자꾸 찔끔찔끔 하는 것 같은데 필요하다면 그냥 다
+# 승인 받는게 낫지 않나?"). 보내기·올리기·지우기 권한(Mail.Send, ChatMessage.Send, Chat.ReadWrite, Files.ReadWrite 등)은 일부러 넣지
+# 않는다(CLAUDE.md 'Microsoft 365 연결은 읽기만 한다'). 파일·일정은 연결이 하므로 넣지 않고, 법인 관리자 승인이 드는 권한
+# (ChannelMessage.Read.All 등)은 넣으면 로그인 전체가 막히므로 넣지 않는다.
+LOGIN_SCOPES = ['Mail.Read', 'Mail.ReadWrite', 'Chat.Read']
+PERMISSIONS = '메일 읽기(Mail.Read)·메일 쓰기(Mail.ReadWrite)·팀즈 대화 읽기(Chat.Read)'
 OPENER = urllib.request.urlopen
 KST = timezone(timedelta(hours=9))
 NEED_LOGIN, PENDING = 3, 4
@@ -122,7 +130,7 @@ def explain(result: dict) -> str:
     first = lines[0] if lines else ''
     if code == 'consent_required' or any(c in first for c in ADMIN_CODES):
         return ('법인 관리자의 승인이 필요합니다. 관리자가 Microsoft Entra 관리 센터에서 "Microsoft Graph Command Line Tools" '
-                '앱의 메일 읽기(Mail.Read) 권한에 동의해 주면 됩니다. 그동안 첨부는 사용자에게 사건 폴더에 저장해 달라고 한다. '
+                f'앱의 {PERMISSIONS} 권한에 동의해 주면 됩니다. 그동안 첨부는 사용자에게 사건 폴더에 저장해 달라고 한다. '
                 f'({first})')
     if 'AADSTS53003' in first:
         return f'법인의 접근 정책(조건부 액세스)이 이 로그인을 막았습니다. 관리자에게 확인이 필요합니다. ({first})'
@@ -140,21 +148,30 @@ def finish(result: dict) -> int:
     raise MailError(explain(result or {}))
 
 
+def has_all(a) -> bool:
+    """공통 도구의 권한(LOGIN_SCOPES)을 모두 동의받은 로그인이 있는지. 하나라도 빠졌으면 다시 로그인해 한꺼번에 동의받는다."""
+    for account in a.get_accounts():
+        result = a.acquire_token_silent(LOGIN_SCOPES, account=account)
+        if result and 'access_token' in result:
+            return True
+    return False
+
+
 def login(device: bool = False) -> int:
     a = app()
     try:
-        already = silent(a)
+        already = has_all(a)
     except Exception:                                   # 새로 받다 실패하면 다시 로그인한다
-        already = None
+        already = False
     if already:
-        print('이미 로그인되어 있습니다.')
+        print(f'이미 로그인되어 있습니다({PERMISSIONS}).')
         return 0
     if device:
         return login_device(a)
-    print('브라우저 창에서 회사 계정을 고르십시오. 처음이면 "메일 읽기" 권한 동의를 묻습니다. 5분 안에 마치지 않으면 끝납니다.',
-          flush=True)
+    print(f'브라우저 창에서 회사 계정을 고르십시오. 처음이거나 권한이 늘었으면 권한 동의({PERMISSIONS})를 한 번 묻습니다. '
+          '5분 안에 마치지 않으면 끝납니다.', flush=True)
     try:
-        result = a.acquire_token_interactive(SCOPES, prompt='select_account', timeout=300)
+        result = a.acquire_token_interactive(LOGIN_SCOPES, prompt='select_account', timeout=300)
     except Exception as exc:
         if type(exc).__name__ == 'BrowserInteractionTimeoutError':
             raise MailError('5분 안에 로그인을 마치지 않아 끝났습니다. login 을 다시 실행하십시오.') from None
@@ -175,7 +192,7 @@ def login_device(a) -> int:
         if not isinstance(flow, dict) or flow.get('expires_at', 0) <= time.time() + 5:
             flow = None
     if flow is None:
-        flow = a.initiate_device_flow(scopes=SCOPES)
+        flow = a.initiate_device_flow(scopes=LOGIN_SCOPES)
         if 'user_code' not in flow:
             raise MailError(explain(flow))
         path.write_text(json.dumps(flow), encoding='utf-8')

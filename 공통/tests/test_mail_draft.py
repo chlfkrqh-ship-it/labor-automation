@@ -392,7 +392,8 @@ class LoginTests(unittest.TestCase):
         out = io.StringIO()
         with mock.patch.object(draft, 'app', lambda: fake), redirect_stdout(out):
             self.assertEqual(draft.login(), 0)
-        self.assertEqual(fake.scopes[-1], ('interactive', ['Mail.ReadWrite']))
+        self.assertEqual(fake.scopes[-1], ('interactive', draft.ma.LOGIN_SCOPES))       # 공통 도구의 권한을 한 번에 묻는다
+        self.assertIn('Mail.ReadWrite', draft.ma.LOGIN_SCOPES)
         self.assertIn(ME, out.getvalue())
 
     def test_admin_approval_message_names_the_write_permission(self):
