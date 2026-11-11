@@ -416,5 +416,148 @@ class DataGoTests(unittest.TestCase):
         self.assertIn('인증키가 없습니다', err.getvalue())
 
 
+def comwel_xml(items, total, page=1, rows=1000):
+    """근로복지공단 API 의 XML 응답(2026. 11. 11. 실측 모양). items 는 칸 사전 목록이다."""
+    body = ''.join('<item>' + ''.join(f'<{k}>{escape(v)}</{k}>' for k, v in it.items()) + '</item>' for it in items)
+    return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><response><header><resultCode>00</resultCode>'
+            f'<resultMsg>NORMAL SERVICE.</resultMsg></header><body><items>{body}</items><numOfRows>{rows}</numOfRows>'
+            f'<pageNo>{page}</pageNo><totalCount>{total}</totalCount></body></response>')
+
+
+def 판결(no, court, result, kind, gubun, title, text):
+    return {'accnum': no, 'courtname': court, 'kinda': result, 'kindb': kind, 'kindc': gubun, 'title': title, 'noncontent': text}
+
+
+class ComwelApiTests(unittest.TestCase):
+    """근로복지공단 산재판례 판결문·심사결정서 API(2026. 11. 11. 붙임). 판결문 API 는 검색어가 없어 전체를 받아 색인을 둔다.
+    가짜 응답은 DataGoTests 의 것을 쓴다(상속하면 그 시험들이 이 클래스에서 키를 둔 채 다시 돈다)."""
+    opener = DataGoTests.opener
+    tearDown = DataGoTests.tearDown
+
+    def setUp(self):
+        DataGoTests.setUp(self)
+        os.environ['DATAGO_KEY'] = 'k'
+
+    def test_sjb_index_takes_every_page_and_search_finds_words_ignoring_spaces(self):
+        self.nps = [comwel_xml([판결('(창원)2018누10258', '부산고등법원', '기각', '요양', '업무상질병', '요양불승인처분취소',
+                                    '원고는 적응 장애 진단을 받았다. 업무상 스트레스가 원인이라고 주장한다.'),
+                                판결('2020구단1', '서울행정법원', '취소', '유족', '업무상사고', '유족급여부지급처분취소', '추락 사고')], 3),
+                    comwel_xml([판결('2021구단7', '서울행정법원', '취소', '요양', '업무상질병', '적응장애 요양불승인처분취소',
+                                    '적응장애와 업무상 스트레스 &amp; 과로')], 3, page=2)]
+        r = datago.sjb_search(['적응장애', '업무상 스트레스'], kind='요양')
+        self.assertEqual(r['색인']['건수'], 3)
+        self.assertEqual([c['pageNo'] for c in self.calls], ['1', '2'])
+        self.assertEqual(self.calls[0]['numOfRows'], '1000')
+        self.assertEqual([x['사건번호'] for x in r['rows']], ['2021구단7', '2018누10258'])     # 사건명에 낱말이 든 것이 앞이다
+        self.assertEqual((r['rows'][1]['표시번호'], r['rows'][1]['지원'], r['rows'][1]['comwel']),
+                         ('(창원)2018누10258', '창원', '2018누10258_부산고등법원'))
+        self.assertIn('적응 장애', r['rows'][1]['스니펫'])
+        self.assertEqual(r['_본문'][0]['본문'], '적응장애와 업무상 스트레스 & 과로')
+        # 색인이 있으면 다시 받지 않는다. 분류만으로도 찾는다
+        r = datago.sjb_search([], result='취소', court='서울행정')
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(sorted(x['사건번호'] for x in r['rows']), ['2020구단1', '2021구단7'])
+        with self.assertRaises(datago.DataGoError):
+            datago.sjb_search([])
+
+    def test_short_index_is_an_error_not_a_partial_index(self):
+        self.nps = [comwel_xml([판결('2020구단1', '서울행정법원', '취소', '유족', '업무상사고', 't', 'x')], 5), comwel_xml([], 5, page=2)]
+        with self.assertRaises(datago.DataGoError):
+            datago.sjb_index()
+        self.assertFalse(datago.sjb_index_path().is_file())
+
+    def test_simsa_search_sends_body_query_and_conditions(self):
+        self.nps = [comwel_xml([{'accnum': '20170006473', 'kinda': '취소', 'kindb': '최초요양', 'kindc': '법리해석',
+                                 'title': '', 'noncontent': '근골격계 질병 인정기준 … 취소한다'}], 1)]
+        r = datago.simsa_search(body='근골격계', result='취소', limit=5)
+        self.assertEqual(self.calls[0]['path'], '/B490001/simsaPstateInfoService/getSimsaResultNaeyongPstate')
+        self.assertEqual((self.calls[0]['cq'], self.calls[0]['kinda'], self.calls[0]['numOfRows']), ('근골격계', '취소', '5'))
+        self.assertNotIn('tq', self.calls[0])
+        self.assertEqual((r['전체'], r['rows'][0]['결정번호'], r['rows'][0]['청구유형']), (1, '20170006473', '최초요양'))
+        self.nps = [comwel_xml([], 0)]
+        datago.simsa_search(title='요양')                        # 사건명만 주면 사건명 조회로 보낸다
+        self.assertEqual(self.calls[-1]['path'], '/B490001/simsaPstateInfoService/getSimsaResultSageonPstate')
+        self.assertEqual(self.calls[-1]['tq'], '요양')
+
+    def test_codes_drop_the_empty_item(self):
+        self.nps = [comwel_xml([{'kinda': '각하'}, {'kinda': '기각'}], 2) .replace('</items>', '<item/></items>'),
+                    comwel_xml([{'kindb': '요양'}], 1), comwel_xml([{'kindc': '업무상질병'}], 1)]
+        r = datago.codes('산재판례')
+        self.assertEqual(r['분류'], {'결과': ['각하', '기각'], '유형': ['요양'], '구분': ['업무상질병']})
+
+    def test_cli_writes_list_and_texts_into_the_folder(self):
+        self.nps = [comwel_xml([{'accnum': '20170006473', 'kinda': '취소', 'kindb': '최초요양', 'kindc': '법리해석',
+                                 'title': '', 'noncontent': '근골격계 질병 … 취소한다'}], 1)]
+        out = Path(self.tmp.name) / '공단심사결정'
+        with mock.patch.object(sys, 'argv', ['datago.py', '심사결정', '--본문검색', '근골격계', '--본문', '1', '--out', str(out)]), \
+                mock.patch('sys.stdout', new_callable=io.StringIO) as printed:
+            self.assertEqual(datago.main(), 0)
+        self.assertNotIn('"_본문"', printed.getvalue())            # 전문은 화면에 내지 않고 파일로만 쓴다
+        self.assertTrue((out / '심사결정_목록.json').is_file())
+        self.assertIn('## [심사결정] 심사결정 20170006473 최초요양', (out / '심사결정_본문.md').read_text(encoding='utf-8'))
+        with mock.patch.object(sys, 'argv', ['datago.py', '심사결정', '--본문검색', 'x', '--out', str(out / '목록.json')]), \
+                mock.patch('sys.stderr', new_callable=io.StringIO), self.assertRaises(SystemExit):
+            datago.main()
+
+
+def kosha_json(items, total, code='00'):
+    """안전보건공단·헌법재판소 JSON 응답(response 봉투가 없다, 2026. 11. 11. 실측)."""
+    if code != '00':
+        return json.dumps({'header': {'resultCode': code, 'resultMsg': 'UNKNOWN_ERROR'}})
+    return json.dumps({'body': {'pageNo': 1, 'totalCount': total, 'numOfRows': 1000, 'items': {'item': items}},
+                       'header': {'resultCode': '00', 'resultMsg': 'NORMAL_CODE'}}, ensure_ascii=False)
+
+
+class PortalApiTests(unittest.TestCase):
+    """승인된 그 밖의 포털 API 공통 호출과 안전보건공단 재해사례 색인(2026. 11. 11. 붙임)."""
+    opener = DataGoTests.opener
+    tearDown = DataGoTests.tearDown
+
+    def setUp(self):
+        DataGoTests.setUp(self)
+        os.environ['DATAGO_KEY'] = 'k'
+
+    def test_alias_sends_fixed_params_and_reads_json_without_envelope(self):
+        self.nps = [kosha_json([{'techGdlnNm': '작업장의 소음제어에 관한 기술지침', 'techGdlnNo': 'M-51-2023'}], 1)]
+        r = datago.portal('코샤가이드', {'techGdlnNm': '소음'})
+        self.assertEqual(self.calls[0]['path'], '/B552468/disaster_api02/getdisaster_api02')
+        self.assertEqual((self.calls[0]['callApiId'], self.calls[0]['techGdlnNm']), ('1050', '소음'))
+        self.assertEqual((r['전체'], r['rows'][0]['techGdlnNo']), (1, 'M-51-2023'))
+        self.nps = [kosha_json([], 0, code='99')]
+        with self.assertRaises(datago.DataGoError) as caught:            # 고정값이 틀리면 200 에 오류 코드가 온다
+            datago.portal('B552468/sifArchive/view', {'callApiId': '1010'})
+        self.assertIn('callApiId', str(caught.exception))
+
+    def test_paths_and_paging(self):
+        first = kosha_json([{'eventNo': '2025헌마980'}, {'eventNo': '2020헌마1369'}], 3)
+        self.nps = [first, first, kosha_json([{'eventNo': '2022헌바154'}], 3)]
+        r = datago.portal('헌재판례', {'eventNm': '근로'}, limit=2)
+        self.assertEqual(len(self.calls), 1)                              # limit 만큼만 받는다
+        self.assertEqual((self.calls[0]['type'], self.calls[0]['numOfRows'], r['받은건수']), ('json', '2', 2))
+        r = datago.portal('9750000/PrecedentInfomationService/getKorPrcdntList', {'eventNm': '근로', 'numOfRows': '2'}, limit=10)
+        self.assertEqual([c['pageNo'] for c in self.calls[1:]], ['1', '2'])   # 전체 건수까지 쪽을 넘긴다
+        self.assertEqual([x['eventNo'] for x in r['rows']], ['2025헌마980', '2020헌마1369', '2022헌바154'])
+        self.assertNotIn('type', self.calls[1])                           # 경로로 부르면 별칭의 고정 변수는 붙지 않는다
+
+    def test_kosha_index_strips_html_and_search_finds_words(self):
+        self.nps = [kosha_json([{'business': '건설업', 'contents': '<p>이동식 사다리에서 작업 중 <b>추락</b></p>', 'atcflcnt': '1',
+                                 'keyword': '사다리 작업 중 추락', 'boardno': '20260930101010AAA'},
+                                {'business': '제조업', 'contents': '프레스 끼임', 'atcflcnt': '0', 'keyword': '끼임', 'boardno': '20250101AAA'}], 2),
+                    kosha_json([{'contents': '옥상 사다리에서 떨어짐(사망 1명)', 'keyword': '[11/5] 옥상 추락', 'arno': '202611081652545ND'}], 1)]
+        r = datago.kosha_search(['사다리', '추락'])
+        self.assertEqual([c['callApiId'] for c in self.calls], ['1060', '1040'])
+        self.assertEqual(r['색인']['게시판별'], {'사례': 2, '속보': 1})
+        self.assertEqual([x['번호'] for x in r['rows']], ['20260930101010AAA', '202611081652545ND'])   # 제목에 두 낱말이 든 것이 앞이다
+        self.assertEqual(r['_본문'][0]['본문'], '이동식 사다리에서 작업 중 추락')
+        r = datago.kosha_search([], business='제조')
+        self.assertEqual([x['제목'] for x in r['rows']], ['끼임'])
+        self.assertEqual(len(self.calls), 2)                              # 색인을 다시 받지 않는다
+
+    def test_portal_cli_needs_name_value_pairs(self):
+        with mock.patch.object(sys, 'argv', ['datago.py', '포털', '헌재판례', '--변수', 'eventNm']), \
+                mock.patch('sys.stderr', new_callable=io.StringIO), self.assertRaises(SystemExit):
+            datago.main()
+
+
 if __name__ == '__main__':
     unittest.main()

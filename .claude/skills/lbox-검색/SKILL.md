@@ -155,6 +155,16 @@ python -B 공통/scripts/comwel.py 판례 2018구단57530_서울행정법원 --�
 python -B 공통/scripts/comwel.py 심사찾기 "요양기간 단축" --본문 --out "<라운드>/작업/공단심사결정"
 ```
 
+**판결 전문에서 낱말로 찾을 때는 공단의 공식 API(data.go.kr)를 먼저 쓴다**(2026. 11. 11. 담당자 키로 승인되어 있던 것을 붙였다, `공통/판례출처.md`). 산재판례 판결문 API 는 34,912건을 주지만 검색어가 없어, `datago.py` 가 처음 한 번 전체를 받아 이 PC 에 색인을 두고 판결 전문에서 낱말을 모두 찾는다(누리집 통합검색은 띄어 쓴 낱말을 AND 로 걸지 않는다). 심사결정서 API 는 공단이 본문 검색어로 거른다. API 에는 선고일·심급 칸이 없으므로 **인용할 판결은 위의 `comwel.py 판례 {사건번호_법원} --심급` 으로 열어** 선고일과 상급심을 본다(결과의 `comwel` 칸이 그 id 이다).
+
+```
+python -B 공통/scripts/datago.py 산재판례 --낱말 적응장애 "업무상 스트레스" --유형 요양 --본문 10 --out "<라운드>/작업/공단산재판례"
+python -B 공통/scripts/datago.py 산재판례분류                      # --결과·--유형·--구분 에 넣을 값
+python -B 공통/scripts/datago.py 심사결정 --본문검색 근골격계 --결과 취소 --본문 10 --out "<라운드>/작업/공단심사결정"
+python -B 공통/scripts/datago.py 재해사례 --낱말 사다리 추락 --게시판 사례 --본문 10 --out "<라운드>/작업/재해사례"   # 안전보건공단 국내재해사례·사고 속보
+python -B 공통/scripts/datago.py 코샤가이드 --이름 소음                                                         # KOSHA GUIDE 와 파일 주소
+```
+
 | 자료 | 곳 | 쓰는 법 |
 |---|---|---|
 | 근로복지공단 심사결정서 | `https://simsacase.comwel.or.kr` | 검색 `/service/searchList?q=검색어&pageIndex=1&pageUnit=1000`, 원문 `/service/dataView?id=심사사건번호` |

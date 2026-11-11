@@ -1,6 +1,6 @@
 """공공데이터포털(data.go.kr) API 조회.
 
-셋을 다룬다. 법제처 API와는 다른 포털이므로 인증키가 따로 있고, **인증키는 계정에 하나지만
+다섯을 다룬다. 법제처 API와는 다른 포털이므로 인증키가 따로 있고, **인증키는 계정에 하나지만
 API마다 따로 활용신청해야 한다.** 신청하지 않은 API는 '등록되지 않은 서비스키'로 막힌다.
 
 - 국세청 사업자등록 상태조회: 휴업·폐업 여부. 해고 뒤 위장폐업, 구제이익, 체당금, 상대방 실재 확인
@@ -8,6 +8,12 @@ API마다 따로 활용신청해야 한다.** 신청하지 않은 API는 '등록
   (**가입자 수는 근로기준법상 상시 근로자 수가 아니다.** 아래 '한계'를 읽는다)
 - 한국산업안전보건공단 물질안전보건자료(MSDS): 화학물질의 유해성·노출기준·독성·법적 규제.
   산재에서 유해물질 노출이 쟁점일 때(.claude/skills/의학논문-검색/SKILL.md)
+- 근로복지공단 산재보험 판례 판결문(34,912건, 2026. 11. 11.): API 에 검색어가 없어 처음 한 번 전체를 받아 이 PC 에
+  색인을 두고(`산재판례 --새로` 로 다시 받는다) 판결 전문에서 낱말을 찾는다. 선고일·심급 칸이 없으므로 인용할 판결은
+  `comwel.py 판례 {사건번호_법원} --심급` 으로 공단 누리집에서 연다
+- 근로복지공단 심사결정서: 본문 검색어·사건명 검색어와 심사결과·청구유형·쟁점유형으로 공단이 거른다
+
+산재판례·심사결정의 --out 은 폴더이다. {이름}_목록.json 과, --본문 N 이면 앞 N건의 전문 {이름}_본문.md 를 쓴다.
 
 인증키와 받은 결과는 PC마다 %LOCALAPPDATA%\\노동사건자동화\\ 아래에 두고 OneDrive에 올리지 않는다.
 인증키를 채팅에 받거나 대신 입력하지 않는다.
@@ -19,9 +25,14 @@ API마다 따로 활용신청해야 한다.** 신청하지 않은 API는 '등록
     python 공통/scripts/datago.py msds 벤젠
     python 공통/scripts/datago.py msds 71-43-2
     python 공통/scripts/datago.py msds-detail 001008 --절 2 8 11 15 --out 결과.json
+    python 공통/scripts/datago.py 산재판례분류
+    python 공통/scripts/datago.py 산재판례 --낱말 적응장애 "업무상 스트레스" --유형 요양 --본문 10 --out "{사건}/작업/공단산재판례"
+    python 공통/scripts/datago.py 심사결정분류
+    python 공통/scripts/datago.py 심사결정 --본문검색 근골격계 --결과 취소 --본문 10 --out "{사건}/작업/공단심사결정"
 """
 import argparse
 import html
+import importlib.util
 import json
 import os
 import re
@@ -31,6 +42,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from datetime import datetime
 from pathlib import Path
 
 STATUS_URL = 'https://api.odcloud.kr/api/nts-businessman/v1/status'
@@ -407,6 +419,296 @@ def msds_detail(chem_id, *, sections=MSDS_DEFAULT, key=None):
             '안내': 'MSDS 는 물질의 유해성 참고자료이다. 실제 노출(농도·기간·작업)은 작업환경측정 결과와 역학조사로 따로 본다.'}
 
 
+# ---------------------------------------------------------------- 근로복지공단 산재판례 판결문·심사결정서
+# data.go.kr 15041878(판결문)·15110818(심사결정서). 2026. 11. 11. 담당자 키로 승인만 되어 있던 것을 붙였다(공통/판례출처.md).
+# 공단 누리집 화면을 읽는 comwel.py 와 같은 자료의 공식 API 이다. 판결문은 선고일 칸이 없으므로 인용할 판결은 comwel.py 판례로 연다.
+SJB_BASE = 'https://apis.data.go.kr/B490001/sjbPrecedentInfoService'
+SJB_SERVICE = '근로복지공단_산재보험 판례 판결문 조회 서비스'
+SIMSA_BASE = 'https://apis.data.go.kr/B490001/simsaPstateInfoService'
+SIMSA_SERVICE = '근로복지공단_심사결정서 조회 서비스'
+SJB_PAGE = 1000          # 한 쪽 1,000줄이 1.5초·3.2MB 로 온다(2026. 11. 11. 실측, 전체 34,912건)
+SJB_CODES = {'결과': ('getSjbPrecedentResultYuhyeongPstate', 'kinda'), '유형': ('getSjbSageonYuhyeongPstate', 'kindb'),
+             '구분': ('getSjbSagoJilbyeongGubunPstate', 'kindc')}
+SIMSA_CODES = {'결과': ('getSimsaResultYuhyeongPstate', 'kinda'), '청구': ('getChungguYuhyeongPstate', 'kindb'),
+               '쟁점': ('getJaengjeomGubunPstate', 'kindc')}
+_spec = importlib.util.spec_from_file_location('workflow_system', Path(__file__).with_name('system.py'))
+_system = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_system)
+CASE_NUMBER = re.compile(_system.CASE_NUMBER)
+
+
+def _items(data, name):
+    items, total = nps_items(data, name)
+    return [x for x in items if isinstance(x, dict)], total     # 분류 목록 끝에 빈 <item/> 이 온다
+
+
+def _text(value):
+    return html.unescape(value if isinstance(value, str) else '').strip()
+
+
+def squash(text):
+    return re.sub(r'[\s·ㆍ]+', '', text or '')
+
+
+def snippet(text, words, width=90):
+    """첫 낱말이 처음 나온 자리 앞뒤 글. 띄어쓰기가 달라도 찾는다."""
+    for w in words:
+        w = squash(w)
+        if not w:
+            continue
+        m = re.search(r'\s*'.join(map(re.escape, w)), text or '')
+        if m:
+            a = max(0, m.start() - width)
+            return ('…' if a else '') + re.sub(r'\s+', ' ', text[a:m.end() + width]).strip() + '…'
+    return re.sub(r'\s+', ' ', (text or '')[:width * 2]).strip()
+
+
+def sjb_row(item):
+    raw = _text(item.get('accnum'))
+    m = CASE_NUMBER.search(raw)
+    branch = re.match(r'\(([^)]+)\)', raw)
+    return {'사건번호': re.sub(r'\s', '', m.group(0)) if m else raw, '표시번호': raw, '법원': _text(item.get('courtname')),
+            '지원': branch.group(1) if branch else '', '결과': _text(item.get('kinda')), '유형': _text(item.get('kindb')),
+            '구분': _text(item.get('kindc')), '사건명': _text(item.get('title')), '본문': _text(item.get('noncontent'))}
+
+
+def codes(kind, key=None):
+    """산재판례(결과·유형·구분) 또는 심사결정(결과·청구·쟁점)의 분류 값. 검색 조건에 이 값을 글자 그대로 넣는다."""
+    base, table, service = (SJB_BASE, SJB_CODES, SJB_SERVICE) if kind == '산재판례' else (SIMSA_BASE, SIMSA_CODES, SIMSA_SERVICE)
+    key = key_value(key)
+    out = {}
+    for name, (op, field) in table.items():
+        items, _ = _items(call_get(f'{base}/{op}', {'pageNo': 1, 'numOfRows': 100}, key, service=service), kind)
+        out[name] = [_text(x.get(field)) for x in items if _text(x.get(field))]
+    return {'분류': out, '호출': CALLS['n'], '안내': f'{kind} 명령의 조건에 이 값을 글자 그대로 넣는다'}
+
+
+def sjb_index_path():
+    return home() / '캐시' / 'datago' / '산재판례.jsonl'
+
+
+def sjb_index(key=None, refresh=False):
+    """판결문을 모두 받아 이 PC 에 색인을 둔다. 판결문 API 에는 검색어가 없고 분류 코드로만 거르기 때문이다.
+    2026. 11. 11. 34,912건을 1,000줄씩 35회에 받는다(약 110MB, %LOCALAPPDATA% 아래라 OneDrive 에 올라가지 않는다)."""
+    path, meta = sjb_index_path(), sjb_index_path().with_suffix('.json')
+    if path.is_file() and not refresh:
+        try:
+            return json.loads(meta.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return {'건수': None}
+    key = key_value(key)
+    rows, page, total, start = [], 1, None, CALLS['n']
+    while True:
+        data = call_get(f'{SJB_BASE}/getSjbPrecedentNaeyongPstate', {'pageNo': page, 'numOfRows': SJB_PAGE}, key, service=SJB_SERVICE)
+        items, n = _items(data, '산재판례')
+        total = n if total is None else total
+        rows += [sjb_row(x) for x in items]
+        if not items or len(rows) >= total:
+            break
+        page += 1
+    if total and len(rows) < total:
+        raise DataGoError(f'산재판례 색인을 다 받지 못했습니다({len(rows)}/{total}). 잠시 뒤 --새로 로 다시 받으십시오.')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + '.tmp')
+    with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
+        for r in rows:
+            f.write(json.dumps(r, ensure_ascii=False) + '\n')
+    tmp.replace(path)
+    info = {'건수': len(rows), '받은날': datetime.now().strftime('%Y-%m-%d'), '호출': CALLS['n'] - start}
+    meta.write_text(json.dumps(info, ensure_ascii=False), encoding='utf-8')
+    return info
+
+
+def sjb_search(words=(), *, result=None, kind=None, gubun=None, court=None, limit=200, key=None, refresh=False):
+    """색인에서 낱말(띄어쓰기 무시, 모두 든 것)과 분류로 판결문을 찾는다. 사건명에 낱말이 든 것 → 본문에 많이 나온 것 순이다."""
+    ws = [w for w in words if squash(w)]
+    if not ws and not any((result, kind, gubun, court)):
+        raise DataGoError('--낱말 이나 분류(--결과·--유형·--구분·--법원) 가운데 하나는 넣어야 합니다.')
+    info = sjb_index(key, refresh)
+    sq = [squash(w) for w in ws]
+    hits = []
+    with open(sjb_index_path(), encoding='utf-8') as f:
+        for line in f:
+            r = json.loads(line)
+            if (result and r['결과'] != result) or (kind and r['유형'] != kind) or (gubun and r['구분'] != gubun) \
+                    or (court and squash(court) not in squash(r['법원'] + r['지원'])):
+                continue
+            hay = squash(r['사건명'] + r['본문'])
+            if all(w in hay for w in sq):
+                r['_점수'] = (-sum(w in squash(r['사건명']) for w in sq), -sum(hay.count(w) for w in sq))
+                hits.append(r)
+    hits.sort(key=lambda r: r.pop('_점수'))
+    rows = [{k: v for k, v in r.items() if k != '본문'} | {'스니펫': snippet(r['본문'], ws), 'comwel': f"{r['사건번호']}_{r['법원']}"}
+            for r in hits[:limit]]
+    return {'낱말': ws, '조건': {k: v for k, v in (('결과', result), ('유형', kind), ('구분', gubun), ('법원', court)) if v},
+            '색인': info, '전체': len(hits), '받은건수': len(rows), 'rows': rows, '_본문': hits[:limit],
+            '안내': '판결문 API 에는 선고일·심급 칸이 없다. 인용할 판결은 comwel.py 판례 {comwel} --심급 으로 공단 누리집에서 열어 선고일을 본다'}
+
+
+def simsa_row(item):
+    return {'결정번호': _text(item.get('accnum')), '결과': _text(item.get('kinda')), '청구유형': _text(item.get('kindb')),
+            '쟁점': _text(item.get('kindc')), '사건명': _text(item.get('title')), '본문': _text(item.get('noncontent'))}
+
+
+def simsa_search(*, body=None, title=None, result=None, claim=None, issue=None, limit=200, key=None):
+    """심사결정서를 찾는다. 본문 검색어(cq)·사건명 검색어(tq)와 분류로 공단이 거른다. 둘을 함께 주면 본문으로 찾고 사건명은 받은 줄에서 거른다."""
+    if not any((body, title, result, claim, issue)):
+        raise DataGoError('--본문검색·--사건명 이나 분류(--결과·--청구·--쟁점) 가운데 하나는 넣어야 합니다.')
+    key = key_value(key)
+    op = 'getSimsaResultSageonPstate' if title and not body else 'getSimsaResultNaeyongPstate'
+    params = {k: v for k, v in (('kinda', result), ('kindb', claim), ('kindc', issue)) if v}
+    params.update({'cq': body} if body else ({'tq': title} if title else {}))
+    rows, page, total, size = [], 1, None, max(1, min(SJB_PAGE, limit))
+    while len(rows) < limit:
+        items, n = _items(call_get(f'{SIMSA_BASE}/{op}', {**params, 'pageNo': page, 'numOfRows': size}, key, service=SIMSA_SERVICE), '심사결정')
+        total = n if total is None else total
+        rows += [simsa_row(x) for x in items]
+        if not items or len(rows) >= total:
+            break
+        page += 1
+    if body and title:
+        rows = [r for r in rows if squash(title) in squash(r['사건명'] + r['본문'][:300])]
+    rows = rows[:limit]
+    words = [w for w in (body, title) if w]
+    return {'조건': {k: v for k, v in (('본문검색', body), ('사건명', title), ('결과', result), ('청구', claim), ('쟁점', issue)) if v},
+            '전체': total or 0, '받은건수': len(rows), '호출': CALLS['n'],
+            'rows': [{k: v for k, v in r.items() if k != '본문'} | {'스니펫': snippet(r['본문'], words)} for r in rows], '_본문': rows}
+
+
+def write_found(out, name, result, texts, head):
+    """--out 폴더에 {이름}_목록.json 과 앞의 texts 건 본문 {이름}_본문.md 를 쓴다."""
+    folder = Path(out)
+    folder.mkdir(parents=True, exist_ok=True)
+    docs = result.pop('_본문', [])[:texts]
+    (folder / f'{name}_목록.json').write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
+    written = [str(folder / f'{name}_목록.json')]
+    if docs:
+        parts = [f'# 근로복지공단 {name} {len(docs)}건\n']
+        for d in docs:
+            parts.append(f"## [{name}] {head(d)}\n\n" + '\n'.join(f'- {k}: {v}' for k, v in d.items() if k != '본문' and v)
+                         + '\n\n' + d['본문'] + '\n')
+        (folder / f'{name}_본문.md').write_text('\n'.join(parts), encoding='utf-8')
+        written.append(str(folder / f'{name}_본문.md'))
+    return written
+
+
+# ---------------------------------------------------------------- 그 밖에 승인된 포털 API(공통 호출)·안전보건공단 재해사례
+# 2026. 11. 11. 담당자가 추가로 신청해 승인된 API 를 실측한 주소·고정 변수. 안전보건공단 게이트웨이(B552468)는 경로와 관계없이
+# callApiId 로 자료를 고른다(1030 KOSHA 자료 목록 9,276건, 1040 중대재해 사고 속보 2,998건, 1050 KOSHA GUIDE 1,039건,
+# 1060 국내재해사례 6,398건, 1070 재해사례 첨부, 1080 은 certNo 가 필요하다). 1040·1060 은 business·keyword 를 받아도 거르지 않는다.
+PORTAL_ALIASES = {
+    '헌재판례': ('9750000/PrecedentInfomationService/getKorPrcdntList', {'type': 'json'}),      # eventNm·eventNo·eventType·rstaResult
+    '헌재공보': ('9750000/PrecedentInfomationService/getOcprPrcdntList', {'type': 'json'}),     # title(공보 호수)·adjudgeYm
+    '헌재주요판례': ('9750000/PrecedentInfomationService/getRealmMainPrcdntList', {'type': 'json', 'code': '0'}),   # eventNm·decisionNm
+    '안전보건법령': ('B552468/srch/smartSearch', {'category': '0'}),                              # searchValue(필수)·category
+    '코샤가이드': ('B552468/disaster_api02/getdisaster_api02', {'callApiId': '1050'}),          # techGdlnNm(이름에서 찾는다)
+    '재해사례첨부': ('B552468/disaster_attach_api02/Disaster_attach_api02', {'callApiId': '1070'}),   # boardno(필수)
+    'KOSHA자료': ('B552468/disaster_api02/getdisaster_api02', {'callApiId': '1030'}),
+}
+KOSHA_PATH = 'B552468/disaster_api02/getdisaster_api02'
+KOSHA_BOARDS = {'사례': '1060', '속보': '1040'}      # 국내재해사례 6,398건·중대재해 사고 속보 2,998건(2026. 11. 11.)
+
+
+def portal_rows(data):
+    """포털 응답에서 (줄 목록, 전체 건수, body). response 봉투가 있든 없든(안전보건공단·헌법재판소 JSON 은 없다) 읽는다."""
+    root = data.get('response', data) if isinstance(data, dict) else {}
+    header = root.get('header') or {}
+    code = str(header.get('resultCode', '00'))
+    if code.strip('0'):
+        raise DataGoError(f"포털 응답 오류: {code} {header.get('resultMsg', '')}"
+                          + (' — 필수 변수나 고정값(callApiId 등)을 확인하십시오' if code in ('80', '90', '99') else ''))
+    body = root.get('body') if isinstance(root.get('body'), dict) else {}
+    items = body.get('items')
+    items = items.get('item') if isinstance(items, dict) else items
+    items = [items] if isinstance(items, dict) else (items if isinstance(items, list) else [])
+    total = re.sub(r'\D', '', str(body.get('totalCount', '')))
+    return [x for x in items if isinstance(x, dict)], int(total or 0), body
+
+
+def portal(target, params=None, *, limit=100, key=None):
+    """승인된 포털 API 를 부른다. target 은 PORTAL_ALIASES 의 이름, 'B552468/srch/smartSearch' 같은 경로, 전체 주소 가운데 하나이다."""
+    path, fixed = PORTAL_ALIASES.get(target, (target, {}))
+    url = path if path.startswith('http') else 'https://apis.data.go.kr/' + path.lstrip('/')
+    params = {**fixed, **{k: v for k, v in (params or {}).items() if v not in (None, '')}}
+    key = key_value(key)
+    page = int(params.pop('pageNo', 1))
+    size = int(params.pop('numOfRows', max(1, min(limit, SJB_PAGE))))
+    rows, total, body = [], None, {}
+    while len(rows) < limit:
+        items, n, body = portal_rows(call_get(url, {**params, 'pageNo': page, 'numOfRows': size}, key, service=target))
+        total = n if total is None else total
+        rows += items
+        if not items or not n or len(rows) >= n:
+            break
+        page += 1
+    out = {'주소': url, '변수': params, '전체': total or 0, '받은건수': len(rows[:limit]), '호출': CALLS['n'], 'rows': rows[:limit]}
+    if not rows and body:
+        out['body'] = body          # 안전보건법령 스마트검색처럼 items 가 아닌 꼴로 오는 응답
+    return out
+
+
+def plain_html(text):
+    text = re.sub(r'<br\s*/?>|</p>|</div>', '\n', text or '')
+    text = html.unescape(re.sub(r'<[^>]+>', ' ', text))
+    return re.sub(r'\n\s*\n+', '\n', re.sub(r'[ \t\xa0]+', ' ', text)).strip()
+
+
+def kosha_index_path():
+    return home() / '캐시' / 'datago' / '재해사례.jsonl'
+
+
+def kosha_index(key=None, refresh=False):
+    """안전보건공단 국내재해사례(1060)와 중대재해 사고 속보(1040)를 모두 받아 이 PC 에 색인을 둔다. 두 게시판은 업종·검색어로 거르지 않는다."""
+    path, meta = kosha_index_path(), kosha_index_path().with_suffix('.json')
+    if path.is_file() and not refresh:
+        try:
+            return json.loads(meta.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return {'건수': None}
+    rows, start = [], CALLS['n']
+    for board, cid in KOSHA_BOARDS.items():
+        got = portal(KOSHA_PATH, {'callApiId': cid}, limit=10 ** 6, key=key)
+        if got['전체'] and got['받은건수'] < got['전체']:
+            raise DataGoError(f"재해사례 {board} 색인을 다 받지 못했습니다({got['받은건수']}/{got['전체']}). --새로 로 다시 받으십시오.")
+        for it in got['rows']:
+            rows.append({'게시판': board, '번호': _text(it.get('boardno') or it.get('arno')), '업종': _text(it.get('business')),
+                         '제목': _text(it.get('keyword')), '첨부': int(re.sub(r'\D', '', str(it.get('atcflcnt') or '')) or 0),
+                         '본문': plain_html(it.get('contents') if isinstance(it.get('contents'), str) else '')})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + '.tmp')
+    with open(tmp, 'w', encoding='utf-8', newline='\n') as f:
+        for r in rows:
+            f.write(json.dumps(r, ensure_ascii=False) + '\n')
+    tmp.replace(path)
+    info = {'건수': len(rows), '게시판별': {b: sum(1 for r in rows if r['게시판'] == b) for b in KOSHA_BOARDS},
+            '받은날': datetime.now().strftime('%Y-%m-%d'), '호출': CALLS['n'] - start}
+    meta.write_text(json.dumps(info, ensure_ascii=False), encoding='utf-8')
+    return info
+
+
+def kosha_search(words=(), *, board=None, business=None, limit=200, key=None, refresh=False):
+    """색인에서 낱말(띄어쓰기 무시, 모두 든 것)·게시판·업종으로 재해사례를 찾는다. 제목에 낱말이 든 것 → 최신 순이다."""
+    ws = [w for w in words if squash(w)]
+    if not ws and not any((board, business)):
+        raise DataGoError('--낱말 이나 --게시판·--업종 가운데 하나는 넣어야 합니다.')
+    info = kosha_index(key, refresh)
+    sq = [squash(w) for w in ws]
+    hits = []
+    with open(kosha_index_path(), encoding='utf-8') as f:
+        for line in f:
+            r = json.loads(line)
+            if (board and r['게시판'] != board) or (business and squash(business) not in squash(r['업종'])):
+                continue
+            if all(w in squash(r['제목'] + r['본문'] + r['업종']) for w in sq):
+                hits.append(r)
+    hits.sort(key=lambda r: r['번호'], reverse=True)            # 번호가 등록 일시로 시작한다(20261105093815…)
+    hits.sort(key=lambda r: -sum(w in squash(r['제목']) for w in sq))
+    rows = [{k: v for k, v in r.items() if k != '본문'} | {'스니펫': snippet(r['본문'], ws)} for r in hits[:limit]]
+    return {'낱말': ws, '조건': {k: v for k, v in (('게시판', board), ('업종', business)) if v}, '색인': info,
+            '전체': len(hits), '받은건수': len(rows), 'rows': rows, '_본문': hits[:limit],
+            '안내': '사례 게시판의 첨부(PDF)는 포털 재해사례첨부 --변수 boardno={번호} 로 주소를 받는다. 속보는 신고 직후 내용이라 조사 결과와 다를 수 있다'}
+
+
 def check(key=None):
     """인증키가 살아 있는지 확인한다. 실제 사업자가 아닌 번호를 넣어 응답 형식만 본다."""
     try:
@@ -446,14 +748,81 @@ def main():
     s.add_argument('--절', dest='sections', nargs='+', default=list(MSDS_DEFAULT),
                    help='받을 절 번호(1~16). all 이면 16절 모두')
     s.add_argument('--out', help='결과를 JSON 파일로 쓴다')
+    subs.add_parser('산재판례분류', help='산재판례 판결문의 결과·유형·구분 값을 받는다(근로복지공단, 호출 3회)')
+    s = subs.add_parser('산재판례', help='근로복지공단 산재판례 판결문을 이 PC 의 색인에서 찾는다(색인이 없으면 먼저 전체를 받는다)')
+    s.add_argument('--낱말', dest='words', nargs='*', default=[], help='판결 전문에 모두 든 것을 찾는다(띄어쓰기 무시)')
+    s.add_argument('--결과', dest='result', help='사건결과(기각·취소·일부취소·파기환송 등)')
+    s.add_argument('--유형', dest='kind', help='사건유형(요양·유족·장해·평균임금 등)')
+    s.add_argument('--구분', dest='gubun', help='사고·질병 구분(업무상질병·업무상사고·퇴직후진단 등)')
+    s.add_argument('--법원', dest='court', help='법원 이름의 일부')
+    s.add_argument('--limit', type=int, default=200, help='목록에 둘 최대 줄 수(기본 200)')
+    s.add_argument('--본문', dest='texts', type=int, default=0, help='앞 N건의 판결 전문을 {out}/산재판례_본문.md 에 쓴다')
+    s.add_argument('--새로', dest='refresh', action='store_true', help='색인을 다시 받는다(호출 35회 안팎)')
+    s.add_argument('--out', help='결과를 쓸 폴더')
+    subs.add_parser('심사결정분류', help='심사결정서의 결과·청구·쟁점 값을 받는다(근로복지공단, 호출 3회)')
+    s = subs.add_parser('심사결정', help='근로복지공단 심사결정서를 찾는다')
+    s.add_argument('--본문검색', dest='body', help='결정서 본문 검색어')
+    s.add_argument('--사건명', dest='title', help='사건명 검색어')
+    s.add_argument('--결과', dest='result', help='심사결과(기각·취소·일부취소·각하·취하)')
+    s.add_argument('--청구', dest='claim', help='청구유형(최초요양·추가상병·유족급여 등)')
+    s.add_argument('--쟁점', dest='issue', help='쟁점유형 구분 값(심사결정분류로 본다)')
+    s.add_argument('--limit', type=int, default=200, help='받을 최대 줄 수(기본 200)')
+    s.add_argument('--본문', dest='texts', type=int, default=0, help='앞 N건의 결정서 전문을 {out}/심사결정_본문.md 에 쓴다')
+    s.add_argument('--out', help='결과를 쓸 폴더')
+    s = subs.add_parser('재해사례', help='안전보건공단 국내재해사례·중대재해 사고 속보를 이 PC 의 색인에서 찾는다(색인이 없으면 먼저 받는다)')
+    s.add_argument('--낱말', dest='words', nargs='*', default=[], help='제목·사고 경위에 모두 든 것을 찾는다(띄어쓰기 무시)')
+    s.add_argument('--게시판', dest='board', choices=list(KOSHA_BOARDS), help='사례(국내재해사례) 또는 속보(중대재해 사고 속보)')
+    s.add_argument('--업종', dest='business', help='업종(사례 게시판의 건설업·제조업·조선업 등)')
+    s.add_argument('--limit', type=int, default=200, help='목록에 둘 최대 줄 수(기본 200)')
+    s.add_argument('--본문', dest='texts', type=int, default=0, help='앞 N건의 사고 경위를 {out}/재해사례_본문.md 에 쓴다')
+    s.add_argument('--새로', dest='refresh', action='store_true', help='색인을 다시 받는다(호출 10회 안팎)')
+    s.add_argument('--out', help='결과를 쓸 폴더')
+    s = subs.add_parser('코샤가이드', help='KOSHA GUIDE(안전보건공단 기술지원규정)를 이름으로 찾는다(파일 주소 포함)')
+    s.add_argument('--이름', dest='name', required=True, help='지침 이름에서 찾을 말(예: 소음)')
+    s.add_argument('--limit', type=int, default=50)
+    s.add_argument('--out', help='결과를 JSON 파일로 쓴다')
+    s = subs.add_parser('포털', help='승인된 포털 API 를 부른다. 별칭: ' + ', '.join(PORTAL_ALIASES))
+    s.add_argument('target', help='별칭이나 apis.data.go.kr 뒤의 경로(예: B552468/srch/smartSearch)')
+    s.add_argument('--변수', dest='params', nargs='*', default=[], help='요청 변수 이름=값(예: searchValue=사다리)')
+    s.add_argument('--limit', type=int, default=100, help='받을 최대 줄 수(기본 100)')
+    s.add_argument('--out', help='결과를 JSON 파일로 쓴다')
     args = parser.parse_args()
+    if args.command in ('산재판례', '심사결정', '재해사례') and args.out and Path(args.out.rstrip('/\\')).suffix.lower() in ('.json', '.md', '.txt'):
+        parser.error(f'{args.command} 의 --out 은 폴더 이름이다({args.out})')
+    if args.command == '포털' and any('=' not in p for p in args.params):
+        parser.error('--변수 는 이름=값 꼴로 준다')
     try:
         if args.command == 'set-key':
             result = set_key(args.value)
         elif args.command == 'check':
             result = check(args.key)
+        elif args.command in ('산재판례분류', '심사결정분류'):
+            result = codes(args.command[:-2], key=args.key)
+        elif args.command in ('산재판례', '심사결정', '재해사례'):
+            if args.command == '산재판례':
+                result = sjb_search(args.words, result=args.result, kind=args.kind, gubun=args.gubun, court=args.court,
+                                    limit=args.limit, key=args.key, refresh=args.refresh)
+                head = lambda d: ' '.join(x for x in (d['법원'], d['표시번호'], d['사건명']) if x)
+            elif args.command == '재해사례':
+                result = kosha_search(args.words, board=args.board, business=args.business, limit=args.limit, key=args.key,
+                                      refresh=args.refresh)
+                head = lambda d: ' '.join(x for x in (d['게시판'], d['업종'], d['제목']) if x)
+            else:
+                result = simsa_search(body=args.body, title=args.title, result=args.result, claim=args.claim, issue=args.issue,
+                                      limit=args.limit, key=args.key)
+                head = lambda d: ' '.join(x for x in ('심사결정', d['결정번호'], d['사건명'] or d['청구유형']) if x)
+            if args.out:
+                files = write_found(args.out, args.command, result, args.texts, head)     # _본문을 꺼내 쓰고 목록 파일을 쓴다
+                result = {k: v for k, v in result.items() if k not in ('rows', '_본문')} | {'파일': files, '앞 10건': result['rows'][:10]}
+            else:
+                result.pop('_본문', None)
+                result['rows'] = result['rows'][:20]
         else:
-            if args.command == '사업자':
+            if args.command == '코샤가이드':
+                result = portal('코샤가이드', {'techGdlnNm': args.name}, limit=args.limit, key=args.key)
+            elif args.command == '포털':
+                result = portal(args.target, dict(p.split('=', 1) for p in args.params), limit=args.limit, key=args.key)
+            elif args.command == '사업자':
                 result = status(args.numbers, key=args.key)
             elif args.command == '사업장':
                 result = workplaces(name=args.name, bno=args.bno, detail=args.detail,
