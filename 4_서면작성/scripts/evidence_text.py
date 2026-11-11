@@ -569,6 +569,25 @@ def 텍스트_글(data: bytes) -> str:
     return data.decode('latin-1')
 
 
+def html_글(data: bytes) -> dict | None:
+    """HTML 문서(그룹웨어 품의서, 저장한 웹 화면, 메일 본문)의 {'글': 글, '넣은 그림': 파일에 든 그림 수, '바깥 그림': 바깥 주소 그림 수}.
+    글자로 된 파일이 아니면 None 이다(`글자_풀기`). 스크립트·스타일·주석을 빼고, 줄을 나누는 꼬리표(br·p·div·tr·li·h·table·title)는 줄로,
+    표 칸(td·th)은 ' | ' 로 바꾼 뒤 꼬리표를 걷는다(`eml_글` 의 HTML 본문과 같은 방식에 표 칸을 살린 것). 2026. 11. 12. `/하자보완`:
+    그룹웨어에서 내려받은 구매품의서 .html 이 읽을 대상에 들지 않았다."""
+    t = 글자_풀기(data)
+    if t is None:
+        return None
+    t = re.sub(r'(?is)<!--.*?-->', '', re.sub(r'(?is)<(script|style)\b.*?</\1\s*>', '', t))
+    그림 = re.findall(r'(?is)<img\b[^>]*>', t)
+    넣은 = sum(1 for g in 그림 if re.search(r'''(?is)\bsrc\s*=\s*["']?\s*data:''', g))
+    t = re.sub(r'(?i)<br\s*/?>|</(?:p|div|tr|li|h\d|table|title)\s*>', '\n', t)
+    t = re.sub(r'(?i)</t[dh]\s*>', ' | ', t)
+    t = html.unescape(re.sub(r'<[^>]+>', ' ', t))
+    줄 = [re.sub(r'[ \t\u00a0\u3000]+', ' ', x).strip() for x in t.splitlines()]
+    줄 = [re.sub(r'^(?:\|\s*)+|(?:\s*\|)+$', '', x).strip() for x in 줄]
+    return {'글': '\n'.join(x for x in 줄 if x), '넣은 그림': 넣은, '바깥 그림': len(그림) - 넣은}
+
+
 def eml_글(data: bytes) -> dict:
     """{'글': 머리와 본문, '첨부': [(이름, 바이트)]}"""
     m = email.message_from_bytes(data, policy=email.policy.default)

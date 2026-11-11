@@ -41,6 +41,8 @@ PDF 가 아닌 호증은 단위 줄('- [파일] 이름:', '- [시트] 이름:', 
 '확인표 단위:' 목록이 단위마다 몇 개가 있어야 하는지 보여 준다. 뽑지 못한 문서(한글이 없는 PC의 .hwp, 머리 서명이 한글 문서가 아닌 .hwp,
 머리 서명이 워드·엑셀 문서가 아닌 .doc·.xls, 글자로 풀리지 않는 .txt·.csv, 그리지 못한 문서 안 그림)는 막히고, 같은 폴더에 같은 이름의
 PDF 를 두면 그 PDF 를 면마다 읽는 것으로 갈음한다. 소리·영상과 열리지 않는 그림 파일만 '읽은 방식'의 신고로 본다.
+읽는 방식을 모르는 형식(.ozd, 옛 .ppt·.rtf, .egg·.7z, 확장자 없는 파일)도 읽을 대상으로 세고 막는다. 같은 폴더에 같은 이름의 PDF·그림·
+문서나 같은 이름 폴더(압축을 푼 것)를 두면 그것을 읽는다(`읽을_파일`·`갈음`). 시스템·작업 파일(.md·.json·.log 등, `작업_꼴`)은 세지 않는다.
 확인표는 사건 폴더 이름·파일 해시·면 번호로 정해지므로 다른 사건의 기록을 옮겨 와도 맞지 않는다. 스크립트로 확인표만 뽑거나 줄을 걸러 읽지 않는다.
 모음 그림(여러 면을 줄여 한 장에 모은 그림)은 글자를 읽을 수 없으므로 읽은 것으로 치지 않는다.
 
@@ -89,8 +91,17 @@ _et = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_et)
 
 IMAGE = ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tif', '.tiff', '.heic', '.webp')
-DOCS = IMAGE + ('.pdf', '.zip', '.xlsx', '.xlsm', '.xls', '.docx', '.doc', '.hwp', '.hwpx', '.pptx', '.txt', '.csv',
-                '.msg', '.eml', '.mp3', '.m4a', '.wav', '.mp4', '.mov')
+# 소리·영상은 녹취록으로 읽고 '읽은 방식'의 신고로 본다
+소리_꼴 = ('.mp3', '.m4a', '.wav', '.mp4', '.mov', '.aac', '.ogg', '.oga', '.opus', '.flac', '.wma', '.amr', '.3gp', '.3ga',
+          '.avi', '.wmv', '.mkv', '.m4v', '.webm', '.mpg', '.mpeg', '.mts')
+DOCS = IMAGE + ('.pdf', '.zip', '.xlsx', '.xlsm', '.xls', '.docx', '.docm', '.doc', '.hwp', '.hwpx', '.pptx', '.txt', '.csv',
+                '.msg', '.eml', '.htm', '.html') + 소리_꼴
+# 시스템·작업 파일의 꼴과 이름. 이것 말고는 형식을 몰라도 읽을 대상으로 센다(`읽을_파일`). 2026. 11. 12. `/하자보완`: 읽을 대상을 DOCS 로만
+# 골라 그 밖의 형식(그룹웨어 품의서 .html, 녹음 .aac, 증권사 거래내역 .ozd, 옛 .ppt, 확장자 없는 메일 그림)은 기록이 없어도 check 가 지났다
+작업_꼴 = ('.md', '.json', '.py', '.pyc', '.log', '.tsv', '.gitkeep', '.gitignore', '.ini', '.db', '.lnk', '.url', '.tmp', '.bak',
+         '.crdownload', '.part', '.partial', '.xml', '.rels', '.css', '.js', '.lock')
+작업_이름 = frozenset(('desktop.ini', 'thumbs.db', '.ds_store'))
+갈음_꼴 = ('.pdf',) + IMAGE + ('.docx', '.xlsx', '.pptx', '.hwpx', '.hwp')      # 형식을 모르는 파일을 갈음하는 같은 이름 파일의 꼴
 빈말 = {'', '-', '…', '...', '같음', '동일', '위와 같음', '위와같음', '반복', '반복 기재', '생략', '확인', '확인 필요', '내용 확인 필요'}
 면_줄 = re.compile(r'^-\s*(\d+)\s*(?:~\s*(\d+)\s*)?면\s*:\s*(.*)$')
 단위_줄 = re.compile(r'^-\s*\[(파일|시트)\]\s*(.+?)\s*:\s*(.*)$')
@@ -187,6 +198,45 @@ def 면_표시(units: list) -> str:
     return ', '.join(out)
 
 
+# ---------------------------------------------------------------- 형식을 모르는 파일
+def 작업_파일(n: str) -> bool:
+    """시스템·작업 파일 이름인가(작은 글자로 준다). 워드의 '~$' 와 LibreOffice 의 '.~lock.…#' 잠금 파일도 든다."""
+    return n.startswith(('~$', '.~lock.')) or n in 작업_이름 or n.endswith(작업_꼴)
+
+
+def 모르는_꼴(p: Path) -> bool:
+    """읽는 방식을 모르는 형식인가(DOCS 도 작업 파일도 아닌 것. 확장자 없는 파일 포함). 글을 뽑지 못하므로 check 가 막는다."""
+    n = nfc(p.name).lower()
+    return not n.endswith(DOCS) and not 작업_파일(n)
+
+
+def 갈음(p: Path) -> Path | None:
+    """형식을 모르는 파일을 갈음하는 것. 같은 폴더의 같은 이름 PDF·그림·문서(원본을 열어 그 꼴로 저장한 것)나 같은 이름 폴더(압축을 푼 것)."""
+    이름 = nfc(p.stem)
+    try:
+        형제 = list(p.parent.iterdir())
+    except OSError:
+        return None
+    return next((q for q in 형제 if q != p and (q.is_dir() and nfc(q.name) == 이름 or
+                                              q.is_file() and q.suffix.lower() in 갈음_꼴 and nfc(q.stem) == 이름)), None)
+
+
+def 읽을_파일(p: Path) -> bool:
+    """전 면 읽기 대상으로 셀 파일인가. 알려진 형식(DOCS)과, 시스템·작업 파일이 아닌 그 밖의 형식이다. 그 밖의 형식은 같은 이름의
+    PDF 등이나 폴더(`갈음`)가 있으면 그것을 읽으므로 세지 않는다."""
+    n = nfc(p.name).lower()
+    if n.startswith(('~$', '.~lock.')) or n in 작업_이름:
+        return False
+    if n.endswith(DOCS):
+        return True
+    return 모르는_꼴(p) and 갈음(p) is None
+
+
+def 모르는_말(p: Path) -> str:
+    return (f"{p.suffix.lower() or '확장자 없는'} 형식은 글을 뽑지 못한다 — 원본을 열어 같은 폴더에 같은 이름의 PDF 로 저장해 두면 그 PDF 를 "
+            "면마다 읽는 것으로 갈음한다(압축이면 같은 이름 폴더에 풀고, 머리 바이트로 형식을 알면 바른 확장자를 붙인다)")
+
+
 # ---------------------------------------------------------------- 대상 찾기
 def 최근_라운드(사건: Path):
     rs = sorted((p for p in 사건.glob('라운드*') if p.is_dir()), key=lambda p: int(re.sub(r'\D', '', p.name) or 0))
@@ -209,7 +259,7 @@ def 서면_호증(사건: Path) -> dict:
         if '백업' in parts or '작업' in parts or '원고별 정리' in parts or not any(x in _ecr.EVIDENCE_DIRS for x in parts):
             continue
         for f in sorted(fn):
-            if f.startswith('~$') or not f.lower().endswith(DOCS):
+            if not 읽을_파일(Path(dp) / f):
                 continue
             k = _ecr.file_key(f)
             owner = _ecr._system.folder_owner(Path(dp) / f, 사건, names) if k and names else None
@@ -221,7 +271,7 @@ def 서면_호증(사건: Path) -> dict:
 
 def 서면류_파일(p: Path, 뿌리_: Path) -> bool:
     """읽을 문서인가. 임시 파일과 작업·백업·원고별 정리 폴더의 것은 뺀다(노동위원회_기록의 우리 서면도 읽는다)."""
-    return (p.is_file() and not p.name.startswith('~$') and p.name.lower().endswith(DOCS)
+    return (p.is_file() and 읽을_파일(p)
             and not any(x in ('작업', '백업', '원고별 정리') for x in p.relative_to(뿌리_).parts[:-1]))
 
 
@@ -282,7 +332,7 @@ def 자료_목록(사건: Path, 폴더들: list) -> dict:
     for d in 폴더들:
         d = Path(d)
         for p in sorted(d.rglob('*')):
-            if not p.is_file() or p.name.startswith('~$') or not p.name.lower().endswith(DOCS) or 산출물_이름.search(p.name):
+            if not p.is_file() or not 읽을_파일(p) or 산출물_이름.search(p.name):
                 continue
             if any(우리_폴더.search(x) for x in p.relative_to(d).parts[:-1]) and p.relative_to(d).parts[:-1] != ('작업', '인용판결_PDF'):
                 continue      # 우리 작업 폴더는 빼되, 검토의견에 인용한 판결문(작업/인용판결_PDF)은 전문을 읽는다
@@ -671,6 +721,8 @@ def 기대_확인표(자: 자리, k: str, p: Path) -> dict | None:
 
 
 def 문제들(자: 자리, k: str, p: Path) -> list:
+    if 모르는_꼴(p):      # 같은 이름의 PDF 등(`갈음`)이 있으면 읽을 대상에서 빠지므로 여기 온 것은 아직 읽을 꼴로 바꾸지 않은 것이다
+        return [모르는_말(p)]
     f = 자.기록_파일(k)
     if not f.is_file():
         같은 = 같은_사건_자료(자, p)
@@ -946,8 +998,8 @@ def 숫자표_같나(줄들: list) -> bool:
 
 
 # ---------------------------------------------------------------- PDF 가 아닌 호증(압축·엑셀·문서·메일)
-기타_꼴 = ('.zip', '.xlsx', '.xlsm', '.xls', '.docx', '.docm', '.doc', '.hwp', '.hwpx', '.pptx', '.txt', '.csv', '.eml', '.msg')
-소리_꼴 = ('.mp3', '.m4a', '.wav', '.mp4', '.mov')
+기타_꼴 = ('.zip', '.xlsx', '.xlsm', '.xls', '.docx', '.docm', '.doc', '.hwp', '.hwpx', '.pptx', '.txt', '.csv', '.eml', '.msg',
+         '.htm', '.html')
 목록_머리 = '확인표 단위: '
 가름 = ' ⟶ '
 글판 = 3      # 글을 뽑는 방식(evidence_text.py, 아래 파일_항목)이 바뀌어 면별 글의 내용이 달라지면 올린다.
@@ -1032,6 +1084,15 @@ def 파일_항목(자: 자리, k: str, 이름: str, data: bytes, 경로: list, u
                 모름(f'{ext} 이름이지만 글자로 된 파일이 아니다(깨졌거나 다른 형식의 파일이다. 원본을 열어 보고 PDF 로 저장해 둔다)')
             else:
                 글(t, '(빈 파일)')
+        elif ext in ('.htm', '.html'):      # 그룹웨어 품의서·저장한 웹 화면·메일 본문(2026. 11. 12. `/하자보완`)
+            r = _et.html_글(data)
+            if r is None:
+                모름(f'{ext} 이름이지만 글자로 된 파일이 아니다(깨졌거나 다른 형식의 파일이다. 원본을 열어 보고 PDF 로 저장해 둔다)')
+            else:
+                글(r['글'] + (f"\n[바깥 주소의 그림 {r['바깥 그림']}개는 이 파일에 없다(그룹웨어의 도장·로고 등). 그 그림이 있어야 읽히는 문서이면 "
+                             '원본 화면을 같은 이름의 PDF 로 저장해 둔다]' if r['바깥 그림'] else ''), '(빈 문서)')
+                if r['넣은 그림']:
+                    모름(f"HTML 에 넣은 그림 {r['넣은 그림']}개를 그리지 못했다(브라우저로 열어 같은 이름의 PDF 로 저장해 두고 그 PDF 로 읽는다)")
         elif ext == '.eml':
             r = _et.eml_글(data)
             글(r['글'], '(빈 메일)')
@@ -1717,6 +1778,10 @@ def cmd_make(a) -> int:
     바뀐_파일 = set()
     for k in sorted(목록, key=호증_정렬):
         p, f = 목록[k], 자.기록_파일(k)
+        if 모르는_꼴(p):      # 틀을 만들어도 읽을 글이 없다. 같은 이름의 PDF 로 저장하면 그 PDF 의 틀을 만든다
+            알림.append(f'{자.제목(k)}: {모르는_말(p)}')
+            print(f'{자.제목(k)} — {nfc(p.name)}', flush=True)
+            continue
         같은 = [] if f.is_file() else 같은_사건_자료(자, p)
         if f.is_file():
             r = 기록_읽기(f.read_text(encoding='utf-8'))

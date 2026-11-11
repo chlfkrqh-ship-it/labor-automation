@@ -1865,5 +1865,124 @@ class MeasuredEmbeddedPictureTest(unittest.TestCase):
         self.assertEqual(run('check', self.case)[0], 0)
 
 
+def 자료_채우기(case: Path, 이름: str, 표: dict, 방식='글자층 전부'):
+    """자료 기록(작업/자료읽기)의 단위 줄마다 그 단위의 확인표를 적고 '읽은 방식'과 쟁점 문구를 채운다."""
+    rec = case / '작업' / '자료읽기' / f'{이름}.md'
+    t = rec.read_text(encoding='utf-8')
+    units = er.단위들(case / re.search(r'^파일: (.+)$', t, re.M).group(1))
+    head, rest = t.split('## 면별 내용', 1)
+    tail = rest.split('## 쟁점에 닿는 문구', 1)[1].replace('\n- \n', '\n- 없음\n', 1)
+    줄 = [f'- {u}{"면" if isinstance(u, int) else ""}: 읽음 확인표 {" ".join(표.get(u, []))}' for u in units]
+    head = re.sub(r'^읽은 방식:.*$', lambda _: f'읽은 방식: {방식}', head, count=1, flags=re.M)
+    rec.write_text(head + '## 면별 내용\n\n' + '\n'.join(줄) + '\n\n## 쟁점에 닿는 문구' + tail, encoding='utf-8')
+
+
+class OtherFileTypesCountedTest(unittest.TestCase):
+    """DOCS 밖의 형식도 읽을 대상으로 센다. 형식을 모르면 막고 같은 이름의 PDF·그림이나 같은 이름 폴더(압축을 푼 것)가 갈음하며,
+    HTML 은 글을 뽑아 확인표로 읽고, 녹음·영상은 녹취록으로 읽어 신고한다. 2026. 11. 12. `/하자보완`: 읽을 대상을 DOCS 로만 골라
+    그룹웨어 품의서 .html, 녹음 .aac, 증권사 거래내역 .ozd, 옛 .ppt, 확장자 없는 메일 그림이 기록 없이 check 를 지났다."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        실측 = mock.patch.object(er, '실측_문제', return_value=[])      # 실측은 MeasuredReadingTest 가 본다
+        실측.start()
+        self.addCleanup(실측.stop)
+        self.case = Path(self.tmp.name) / '1_검토의견' / '사건' / 'HPS_자문'
+        self.case.mkdir(parents=True)
+        make_pdf(self.case / '취업규칙.pdf', [글 + '제1조'])
+        (self.case / '계좌거래내역.ozd').write_bytes(b'OZD' + b'\0' * 64)
+        (self.case / '옛 발표.ppt').write_bytes(er._et.OLE_서명 + b'\0' * 64)
+        (self.case / '0167461001783929801').write_bytes(png_bytes(100, 80, '서명'))         # 확장자 없이 받은 메일 그림
+        (self.case / '자료 묶음.egg').write_bytes(b'EGGA' + b'\0' * 64)
+        (self.case / '통화 녹음.aac').write_bytes(b'\xff\xf1' + b'\0' * 64)
+        (self.case / '구매품의서.html').write_text(
+            '<html><head><title>구매 품의서</title><style>p { color: red }</style><script>var a = 1;</script></head><body>'
+            '<!-- 숨은 주석 --><table><tr><td>문서번호</td><td>CE02</td></tr><tr><th>계약금액</th><td>2,085,000,000</td></tr></table>'
+            '<p>품의 내용&nbsp;입니다<br>둘째 줄</p><img src="http://gw.example/stamp.png"></body></html>', encoding='utf-8')
+        for n in ('법제처.harvest.log', '메모.md', '목록.json', 'desktop.ini', 'Thumbs.db', '수확.tsv', '.~lock.취업규칙.docx#'):
+            (self.case / n).write_text('x', encoding='utf-8')                               # 열어 둔 문서의 LibreOffice 잠금 파일도 작업 파일
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_other_formats_are_counted_and_block_until_a_readable_file_stands_in(self):
+        self.assertEqual(sorted(er.자료_목록(self.case, [self.case])),
+                         sorted(['취업규칙.pdf', '계좌거래내역.ozd', '옛 발표.ppt', '0167461001783929801', '자료 묶음.egg', '통화 녹음.aac',
+                                 '구매품의서.html']))                                      # 시스템·작업 파일(.log·.md·.json·.tsv 등)은 세지 않는다
+        code, out = run('make', self.case, '--자료', self.case, '--no-ocr')
+        self.assertEqual(code, 0, out)
+        자료읽기 = self.case / '작업' / '자료읽기'
+        for n in ('계좌거래내역.ozd', '옛 발표.ppt', '0167461001783929801', '자료 묶음.egg'):
+            self.assertFalse((자료읽기 / f'{n}.md').exists(), n)                          # 읽을 글이 없으니 틀을 만들지 않고 알린다
+        self.assertIn('.ozd 형식은 글을 뽑지 못한다', out)
+        code, out = run('check', self.case, '--자료', self.case)
+        self.assertEqual(code, 1)
+        for x in ('계좌거래내역.ozd', '옛 발표.ppt', '0167461001783929801', '자료 묶음.egg'):
+            self.assertIn(f'- {x} (', out)
+        for x in ('.ozd 형식은 글을 뽑지 못한다', '.ppt 형식은 글을 뽑지 못한다', '확장자 없는 형식은 글을 뽑지 못한다', '.egg 형식은'):
+            self.assertIn(x, out)
+        make_pdf(self.case / '계좌거래내역.pdf', [글 + '거래'])                         # 원본을 열어 같은 이름의 PDF 로 저장
+        make_pdf(self.case / '옛 발표.pdf', [글 + '발표'])
+        (self.case / '0167461001783929801.png').write_bytes(png_bytes(100, 80, '서명'))   # 바른 확장자를 붙인 그림
+        (self.case / '자료 묶음').mkdir()                                                  # 같은 이름 폴더에 푼 압축
+        (self.case / '자료 묶음' / '안의 메모.txt').write_text('압축 안의 메모', encoding='utf-8')
+        목록 = er.자료_목록(self.case, [self.case])
+        for n in ('계좌거래내역.ozd', '옛 발표.ppt', '0167461001783929801', '자료 묶음.egg'):
+            self.assertNotIn(n, 목록)
+        for n in ('계좌거래내역.pdf', '옛 발표.pdf', '0167461001783929801.png', '안의 메모.txt'):
+            self.assertIn(n, 목록)                                                         # 갈음한 파일은 그대로 읽는다
+
+    def test_html_text_is_read_with_codes_and_sound_is_declared(self):
+        for n in ('계좌거래내역.ozd', '옛 발표.ppt', '0167461001783929801', '자료 묶음.egg', '취업규칙.pdf'):
+            (self.case / n).unlink()
+        run('make', self.case, '--자료', self.case, '--no-ocr')
+        글자 = (self.case / '작업' / '자료글자' / '구매품의서.html.txt').read_text(encoding='utf-8')
+        for x in ('구매 품의서', '문서번호 | CE02', '계약금액 | 2,085,000,000', '품의 내용 입니다', '둘째 줄', '[바깥 주소의 그림 1개는'):
+            self.assertIn(x, 글자)
+        for x in ('color: red', 'var a', '숨은 주석', '<td>'):
+            self.assertNotIn(x, 글자)
+        self.assertIn('- 전체: ', (self.case / '작업' / '자료읽기' / '통화 녹음.aac.md').read_text(encoding='utf-8'))
+        code, out = run('check', self.case, '--자료', self.case)
+        self.assertEqual(code, 1)
+        self.assertIn('확인표가 없거나 맞지 않는 단위 1/1: 전체', out)                     # HTML 은 덩이 끝 확인표까지 읽어야 한다
+        자 = er.자리(self.case, True)
+        자료_채우기(self.case, '구매품의서.html', er.기대_확인표(자, '구매품의서.html', self.case / '구매품의서.html'))
+        자료_채우기(self.case, '통화 녹음.aac', {}, 방식='녹취록(통화 녹음.녹취.md) 전부')         # 소리는 녹취록으로 읽어 신고한다
+        code, out = run('check', self.case, '--자료', self.case)
+        self.assertEqual(code, 0, out)
+
+    def test_html_with_pictures_inside_blocks_until_a_pdf_stands_in(self):
+        for n in ('계좌거래내역.ozd', '옛 발표.ppt', '0167461001783929801', '자료 묶음.egg', '통화 녹음.aac', '구매품의서.html'):
+            (self.case / n).unlink()
+        (self.case / '웹 화면.htm').write_text('<p>공지</p><img src="data:image/png;base64,iVBORw0KGgo=">', encoding='utf-8')
+        run('make', self.case, '--자료', self.case, '--no-ocr')
+        자 = er.자리(self.case, True)
+        자료_채우기(self.case, '웹 화면.htm', er.기대_확인표(자, '웹 화면.htm', self.case / '웹 화면.htm'))
+        code, out = run('check', self.case, '--자료', self.case)
+        self.assertEqual(code, 1)
+        self.assertIn('HTML 에 넣은 그림 1개를 그리지 못했다', out)
+        make_pdf(self.case / '웹 화면.pdf', [글 + '공지 화면'])
+        code, out = run('check', self.case, '--자료', self.case, '--호증', '웹 화면.htm')
+        self.assertEqual(code, 0, out)                                                     # 같은 이름의 PDF 를 면마다 읽는다
+        self.assertNotIn('HTML 에 넣은 그림', out)
+
+    def test_brief_cases_count_numbered_and_reference_files_of_other_formats(self):
+        case = Path(self.tmp.name) / '4_서면작성' / '사건' / 'GGM_정직'
+        r1 = case / '라운드1'
+        for d in (r1 / '우리증거', r1 / '상대증거', r1 / '참고자료' / '전환작업' / 'unpacked' / '_rels'):
+            d.mkdir(parents=True, exist_ok=True)
+        (r1 / '우리증거' / '사 제9호증 거래내역.ozd').write_bytes(b'OZD' + b'\0' * 64)
+        (r1 / '상대증거' / '노 제2호증 품의서.html').write_text('<p>품의</p>', encoding='utf-8')
+        (r1 / '참고자료' / '제보 녹음.aac').write_bytes(b'\xff\xf1' + b'\0' * 64)
+        (r1 / '참고자료' / '전환작업' / 'unpacked' / '[Content_Types].xml').write_text('<x/>', encoding='utf-8')
+        (r1 / '참고자료' / '전환작업' / 'unpacked' / '_rels' / '.rels').write_text('<x/>', encoding='utf-8')
+        호증 = er.서면_호증(case)
+        self.assertEqual(sorted(호증), ['노2', '사9'])
+        self.assertEqual(sorted(er.서면_자료(case, 호증)), ['라운드1 참고 제보 녹음.aac'])      # 변환 부품(.xml·.rels)은 세지 않는다
+        code, out = run('check', case)
+        self.assertEqual(code, 1)
+        self.assertIn('.ozd 형식은 글을 뽑지 못한다', out)
+
+
 if __name__ == '__main__':
     unittest.main()
