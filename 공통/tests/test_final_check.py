@@ -1101,6 +1101,20 @@ class CaseLawGateTest(unittest.TestCase):
         with mock.patch.object(fc, 'RUN', lambda a: run(a, 0)):
             fc.검색_완결(res, 폴더)
         self.assertEqual(status(res, '판례 검색 기록'), '막힘')
+        # LBOX 를 멈춘 동안(2026. 11. 11.~)에는 검색기록의 'LBOX 중지' 줄이 LBOX 목록을 갈음한다. 줄이 없으면 그 방법을 알려 주며 막는다
+        글 = [x for x in res.줄 if x[0] == '판례 검색 기록'][0][2]
+        self.assertIn('LBOX 중지', 글)
+        (폴더 / '작업' / '검색기록.md').write_text('# 검색기록\n\nLBOX 중지(2026. 11. 11.~): 하급심 검색어 "시험기기 징계"는 담당자에게 맡김\n',
+                                              encoding='utf-8')
+        res = fc.결과()
+        with mock.patch.object(fc, 'RUN', lambda a: run(a, 0)):
+            fc.검색_완결(res, 폴더)
+        self.assertEqual(status(res, '판례 검색 기록'), '통과')
+        self.assertIn('LBOX 중지 기간', [x for x in res.줄 if x[0] == '판례 검색 기록'][0][2])
+        res = fc.결과()
+        with mock.patch.object(fc._system, 'LBOX_중지', ''), mock.patch.object(fc, 'RUN', lambda a: run(a, 0)):
+            fc.검색_완결(res, 폴더)
+        self.assertEqual(status(res, '판례 검색 기록'), '막힘')
 
 
 class BriefCaseOtherOutputTest(unittest.TestCase):
