@@ -530,8 +530,19 @@ def 검색_완결(res: 결과, 폴더: Path):
                                     ('법제처_목록.json', any(x for d in 폴더들 for x in d.rglob('법제처_목록.json'))),
                                     ('검색기록.md', any((d / '작업' / '검색기록.md').is_file() or (d / '검색기록.md').is_file() for d in 폴더들)))
              if not 있나]
+    통과글 = 'LBOX·법제처 목록과 검색기록 있음'
+    if _system.LBOX_중지 and '작업/LBOX_목록.tsv' in 없는것:
+        # LBOX 를 멈춘 동안에는 LBOX 목록 대신 검색기록에 'LBOX 중지'와 LBOX 로 보지 못한 범위를 적는다(`lbox-검색` 맨 앞 '사용 중지').
+        기록글 = ''.join(p.read_text(encoding='utf-8', errors='replace') for d in 폴더들
+                         for p in (d / '작업' / '검색기록.md', d / '검색기록.md') if p.is_file())
+        i = 없는것.index('작업/LBOX_목록.tsv')
+        if re.search(r'LBOX\s*중지', 기록글):
+            del 없는것[i]
+            통과글 = f'법제처 목록과 검색기록 있음(LBOX 중지 기간 {_system.LBOX_중지}~: LBOX 목록 대신 검색기록의 LBOX 중지 줄)'
+        else:
+            없는것[i] = "작업/LBOX_목록.tsv(LBOX 중지 기간이면 검색기록에 'LBOX 중지'와 LBOX 로 보지 못한 범위를 적는다)"
     res.add('판례 검색 기록', '막힘' if 없는것 else '통과',
-            ('없다: ' + ', '.join(없는것) + ' (`lbox-검색` 4·7항, `법제처-검색`)') if 없는것 else 'LBOX·법제처 목록과 검색기록 있음')
+            ('없다: ' + ', '.join(없는것) + ' (`lbox-검색` 맨 앞·4·7항, `법제처-검색`)') if 없는것 else 통과글)
     재확인들 = sorted(작업.glob('수확목록_재확인*.md'))
     if not 재확인들:
         res.add('찾은 판례 다시 훑기', '막힘', f"수확 목록 재확인(harvest_titles.py scan)을 하지 않았다: {작업 / '수확목록_재확인.md'}")
