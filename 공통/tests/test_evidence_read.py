@@ -1418,6 +1418,48 @@ class WholeCaseReadingTest(unittest.TestCase):
         code, out = run('check', case, '--호증', '라운드1 참고 대법원 2019다1234.pdf')
         self.assertEqual(code, 0, out)
 
+    def test_unnumbered_client_material_in_our_evidence_is_read(self):
+        """우리증거/ 에 번호 없이 남은 의뢰인 자료도 읽는다. 평안이 낸 서면·법원 문서·우리 산출물·푼 폴더가 있는 압축·호증과 같은 파일은
+        빼고, 바로 아래의 상대방 서면은 `evidence_sort.py` 가 상대증거/ 로 옮겨 거기서 읽는다(2026. 11. 12. `/하자보완`, 담당 노무사 "넣기")."""
+        case = self.root / 'GGM_정직'
+        r1 = case / '라운드1'
+        ours = r1 / '우리증거'
+        for d in (ours / '회신 자료(11. 2.)', ours / '메일1', ours / '메일2', ours / '(GGM) 입증방법', ours / '사진 묶음', r1 / '상대증거'):
+            d.mkdir(parents=True, exist_ok=True)
+        make_pdf(ours / '사 제1호증 근로계약서.pdf', [글 + '계약'])
+        (ours / '근로계약서 사본.pdf').write_bytes((ours / '사 제1호증 근로계약서.pdf').read_bytes())     # 호증과 같은 파일
+        make_pdf(ours / '인사위원회 회의록.pdf', [글 + '회의록'])                                          # 번호 없는 의뢰인 자료
+        (ours / '회신 자료(11. 2.)' / 'KakaoTalk_20261102_1.jpg').write_bytes(png_bytes(200, 300, '대화'))
+        make_pdf(ours / '서울행정법원_2025구합1_001001_2025.04.25_소장_(소장)_원고 대리인_법무법인 평안.pdf', [글 + '소장'])
+        make_pdf(ours / '서울행정법원_2025구합1_005001_2025.10.17_변론조서_(변론조서).pdf', [글 + '조서'])
+        make_pdf(ours / '서울행정법원_2025구합1_006001_2025.10.20_준비서면_(준비서면)_피고 대리인_법무법인 바른.pdf', [글 + '바로 아래'])
+        make_pdf(ours / '회신 자료(11. 2.)' / '서울행정법원_2025구합1_007001_2025.10.21_준비서면_(준비서면)_피고 대리인_법무법인 바른.pdf',
+                 [글 + '하위 폴더'])                                                                      # 옮기지 않는 하위 폴더의 상대 서면
+        make_pdf(ours / '(GGM) 답변서_초안.pdf', [글 + '초안'])
+        make_pdf(ours / '261014_(평안)_의견서_초안.pdf', [글 + '의견서'])
+        make_pdf(ours / '(GGM) 입증방법' / '목록.pdf', [글 + '목록'])                                      # 우리 산출물 폴더
+        with zipfile.ZipFile(ours / '사진 묶음.zip', 'w') as z:
+            z.writestr('a.png', png_bytes(100, 100, '사진'))
+        (ours / '사진 묶음' / 'a.png').write_bytes(png_bytes(100, 100, '사진'))                             # 푼 폴더가 있는 압축
+        make_pdf(ours / '입증자료(사제1호증~사제2호증).pdf', [글 + '묶음 1', 글 + '묶음 2'])               # 호증마다 읽는 묶음
+        for i, d in enumerate((ours, ours / '메일1', ours / '메일2'), 1):                                    # 같은 이름의 다른 파일 셋
+            (d / 'image001.png').write_bytes(png_bytes(100 + i, 100, f'그림{i}'))
+        자료 = er.서면_자료(case, er.서면_호증(case))
+        self.assertEqual(sorted(k for k in 자료 if ' 우리 ' in k), sorted([
+            '라운드1 우리 인사위원회 회의록.pdf', '라운드1 우리 KakaoTalk_20261102_1.jpg', '라운드1 우리 a.png',
+            '라운드1 우리 서울행정법원_2025구합1_007001_2025.10.21_준비서면_(준비서면)_피고 대리인_법무법인 바른.pdf',
+            '라운드1 우리 image001.png', '라운드1 우리 메일1_image001.png', '라운드1 우리 메일2_image001.png']))
+        code, out = run('make', case, '--no-ocr')
+        self.assertEqual(code, 0, out)
+        self.assertTrue((case / '증거관리' / '호증읽기' / '라운드1 우리 인사위원회 회의록.pdf.md').is_file())
+        code, out = run('check', case)
+        self.assertEqual(code, 1)
+        self.assertIn('- 라운드1 우리 인사위원회 회의록.pdf (인사위원회 회의록.pdf)', out)
+        # 호증을 주고받지 않는 절차(호증목록이 '증' 뿐)는 바로 아래의 민사 피고 서면도 옮기지 않으므로 여기서 읽는다(`evidence_sort.py` 머리)
+        (case / '증거관리' / '우리호증목록.md').write_text('| 호증번호 | 파일명 |\n|---|---|\n| 증 제1호증 | 근로계약서 |\n', encoding='utf-8')
+        self.assertIn('라운드1 우리 서울행정법원_2025구합1_006001_2025.10.20_준비서면_(준비서면)_피고 대리인_법무법인 바른.pdf',
+                      er.서면_자료(case, er.서면_호증(case)))
+
     def test_cited_judgments_in_review_opinions_are_read(self):
         case = self.root / '1_검토의견' / '사건' / 'HPS_근로시간면제'
         (case / '첨부').mkdir(parents=True)

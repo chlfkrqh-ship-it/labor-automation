@@ -10,7 +10,8 @@
     python -B 4_서면작성/scripts/evidence_read.py make  "1_검토의견/사건/{의뢰인}_{검토내용}" --자료 "<첨부 폴더>"   # 호증 번호 없는 자료
 
 make  서면 사건은 호증마다(우리·상대, PDF 가 아닌 원자료 포함) `증거관리/호증읽기/{호증키}.md` 틀을 만든다. 호증 번호가 없는 상대방 서면,
-      참고자료(인용판결_PDF 의 판결문 포함), 노동위원회_기록의 서면도 '라운드2 상대 {파일 이름}' 같은 키로 같이 만든다. 틀에는 파일·해시·단위 수와
+      참고자료(인용판결_PDF 의 판결문 포함), 노동위원회_기록의 서면, 우리증거/ 에 번호 없이 남은 의뢰인 자료(`우리_자료`)도
+      '라운드2 상대 {파일 이름}'·'라운드1 우리 {파일 이름}' 같은 키로 같이 만든다. 틀에는 파일·해시·단위 수와
       단위마다 빈 줄(PDF·그림은 '- 3면:', 압축파일은 '- [파일] 이름:', 엑셀은 '- [시트] 이름:', 그 밖은 '- 전체:')이 있다.
       PDF 는 면별 글(글자층, 없거나 깨지면 Windows 문자인식)을 `증거관리/호증글자/{호증키}.txt` 에 낸다.
       압축·엑셀·워드·한글·파워포인트·메일·텍스트도 단위마다 글을 뽑아 같은 자리에 낸다(`evidence_text.py`). 글은 3,000자 안팎의
@@ -89,6 +90,9 @@ _spec.loader.exec_module(_ecr)
 _spec = importlib.util.spec_from_file_location('evidence_text', Path(__file__).resolve().parent / 'evidence_text.py')
 _et = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_et)
+_spec = importlib.util.spec_from_file_location('evidence_sort_for_read', Path(__file__).resolve().parent / 'evidence_sort.py')
+_es = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_es)
 
 IMAGE = ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tif', '.tiff', '.heic', '.webp')
 # 소리·영상은 녹취록으로 읽고 '읽은 방식'의 신고로 본다
@@ -278,32 +282,83 @@ def 서면류_파일(p: Path, 뿌리_: Path) -> bool:
 def 서면_자료(사건: Path, 호증: dict) -> dict:
     """호증 번호가 없는 서면과 참고자료. 키 → 파일. `/서면` 1단계에서 모두 읽는다고 한 것 가운데 호증이 아닌 것이다.
     라운드마다 상대증거/ 의 상대방 서면(판정서·결정문 포함), 참고자료/ 전체(인용판결_PDF 의 판결문, 타 사건 자료), 노동위원회_기록/ 의
-    우리·상대 서면. 호증과 같은 파일(해시)은 두 번 읽지 않게 뺀다. 키는 '라운드2 상대 {파일 이름}', '라운드2 참고 {파일 이름}',
-    '노동위 {파일 이름}' 꼴이다(같은 이름이 또 있으면 폴더 이름을 붙인다).
+    우리·상대 서면, 그리고 우리증거/ 에 번호 없이 남은 의뢰인 자료(`우리_자료`). 호증과 같은 파일(해시)은 두 번 읽지 않게 뺀다.
+    키는 '라운드2 상대 {파일 이름}', '라운드2 참고 {파일 이름}', '노동위 {파일 이름}', '라운드1 우리 {파일 이름}' 꼴이다(같은 이름이 또
+    있으면 위 폴더 이름을 붙인다).
     2026. 11. 3. 담당 노무사 "위와 같은 완결성 원칙은 시스템 전반에 적용되는거지?" — 그때까지 확인표·실측은 호증에만 걸려 있었다."""
     호증해시 = {해시(p) for p in 호증.values()}
+    본해시 = set(호증해시)
     out = {}
 
     def 넣기(앞: str, p: Path):
-        k = nfc(f'{앞} {p.name}')
-        if k in out:
-            k = nfc(f'{앞} {p.parent.name}_{p.name}')
+        k, 위 = nfc(f'{앞} {p.name}'), p.parent
+        while k in out and 위 != 위.parent:      # 같은 이름이 또 있으면 위 폴더 이름을 하나씩 붙인다(덮어써 한 파일을 빼지 않는다)
+            k, 위 = nfc(f'{앞} {위.name}_{k[len(앞) + 1:]}'), 위.parent
         out[k] = p
 
-    for 라운드 in sorted((x for x in 사건.glob('라운드*') if x.is_dir()), key=lambda x: int(re.sub(r'\D', '', x.name) or 0)):
+    라운드들 = sorted((x for x in 사건.glob('라운드*') if x.is_dir()), key=lambda x: int(re.sub(r'\D', '', x.name) or 0))
+    for 라운드 in 라운드들:
         n = re.sub(r'\D', '', 라운드.name) or '0'
         for 폴더, 말 in (('상대증거', '상대'), ('참고자료', '참고')):
             d = 라운드 / 폴더
             if not d.is_dir():
                 continue
             for p in sorted(d.rglob('*')):
-                if 서면류_파일(p, d) and not (폴더 == '상대증거' and _ecr.file_key(p.name)) and 해시(p) not in 호증해시:
-                    넣기(f'라운드{n} {말}', p)
+                if 서면류_파일(p, d) and not (폴더 == '상대증거' and _ecr.file_key(p.name)):
+                    h = 해시(p)
+                    if h not in 호증해시:
+                        넣기(f'라운드{n} {말}', p)
+                        본해시.add(h)
     d = 사건 / '노동위원회_기록'
     if d.is_dir():
         for p in sorted(d.rglob('*')):
-            if 서면류_파일(p, d) and not _ecr.file_key(p.name) and 해시(p) not in 호증해시:
-                넣기('노동위', p)
+            if 서면류_파일(p, d) and not _ecr.file_key(p.name):
+                h = 해시(p)
+                if h not in 호증해시:
+                    넣기('노동위', p)
+                    본해시.add(h)
+    for 라운드 in 라운드들:
+        n = re.sub(r'\D', '', 라운드.name) or '0'
+        for p in 우리_자료(사건, 라운드):
+            h = 해시(p)
+            if h not in 본해시:
+                넣기(f'라운드{n} 우리', p)
+                본해시.add(h)
+    return out
+
+
+def 우리_자료(사건: Path, 라운드: Path) -> list:
+    """우리증거/ 에 호증 번호 없이 남은 의뢰인 자료. 아래는 뺀다.
+    - 우리 산출물: 파일이나 그 위 폴더 이름이 '({사건 약칭}…) …'(앞에 송부일이 붙기도 한다), '(평안)', '(리서치) …' 이거나 검토의견 산출물
+      이름(`산출물_이름`)인 것. 사건 약칭은 사건 폴더 이름의 앞머리이다(`4_서면작성/CLAUDE.md` 3-1절).
+    - 평안이 낸 서면(전자소송으로 받은 소장·준비서면 등)과 법원 문서·제3자 회신(`evidence_sort.분류` 가 우리·참고로 가르는 것).
+    - 우리증거/ 바로 아래의 상대방 서면·서증: `evidence_sort.py` 가 상대증거/ 로 옮겨 거기서 읽는다(관문의 '증거 나누기'가 막는다). 하위 폴더의
+      것은 옮기지 않으므로 여기서 읽고, 호증을 주고받지 않는 절차(호증목록이 '증' 뿐)는 바로 아래 것도 여기서 읽는다.
+    - 같은 이름 폴더에 푼 압축(그 폴더의 파일을 읽는다)과, 이름에 호증 범위가 든 묶음('입증자료(사제1호증~사제18호증).pdf'. 호증마다 읽는다).
+    2026. 11. 12. `/하자보완`: 관문은 우리증거/ 의 번호 단 호증만 읽게 하여, 번호를 달지 않은 의뢰인 자료 861건이 읽기 기록 없이 지났다
+    (루트 `CLAUDE.md` '호증과 의뢰인 자료 … 모든 면을 읽고'). 담당 노무사가 넣기로 정하였다("넣기")."""
+    d = 라운드 / '우리증거'
+    if not d.is_dir():
+        return []
+    약칭 = nfc(Path(사건).resolve().name).split('_')[0]
+    꼴 = re.compile(r'^(?:\d{6}_)?\(' + re.escape(약칭) + r'(?:\s[^()]*)?\)|\(평안\)|^\(리서치\)')
+    이름들 = [nfc(x.name) for 쪽 in ('우리증거', '상대증거') for r in 사건.glob('라운드*') if (r / 쪽).is_dir()
+             for x in (r / 쪽).rglob('*') if x.is_file()]
+    목록부호 = _es.목록_부호(Path(사건))
+    상대없음 = set(목록부호) == {'증'}
+    우리표 = _es.우리_라벨(이름들)
+    out = []
+    for p in sorted(d.rglob('*')):
+        if not 서면류_파일(p, d) or _ecr.file_key(p.name):
+            continue
+        if any(꼴.search(nfc(x)) or 산출물_이름.search(nfc(x)) for x in p.relative_to(d).parts):
+            continue
+        쪽, _ = _es.분류(p.name, 목록부호, 우리표)
+        if 쪽 in (_es.우리, _es.참고) or (쪽 == _es.상대 and p.parent == d and not 상대없음):
+            continue
+        if (p.suffix.lower() == '.zip' and (p.parent / p.stem).is_dir()) or re.search(r'호증\s*(?:~|내지)', nfc(p.name)):
+            continue
+        out.append(p)
     return out
 
 
