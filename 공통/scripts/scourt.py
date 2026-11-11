@@ -15,8 +15,10 @@
 그래서 검색어는 제목에 쓰일 낱말 하나나 붙어 다니는 구절로 여러 개 넣고, 여러 검색어에 걸린 글을 앞에 세운다.
 
 지키는 것(LBOX 계정 보호와 같은 뜻)
-  - 요청은 한 번에 한 건, 앞 요청과 4.5초 넘게 띄운다(다른 창에서 돌려도 사용량 파일로 간격을 잰다).
-  - 하루 상한 500건(환경변수 SCOURT_DAILY_MAX). 넘으면 멈춘다. 상한을 올리는 것은 담당자가 정한다.
+  - 요청은 한 번에 한 건, 앞 요청과 1.5초 넘게 띄운다(다른 창에서 돌려도 사용량 파일로 간격을 잰다).
+  - 하루 상한 2,000건(환경변수 SCOURT_DAILY_MAX). 넘으면 멈춘다. 상한을 올리는 것은 담당자가 정한다.
+    2026. 11. 11. 처음에는 4.5초·500건으로 두었다가 같은 날 담당 노무사가 "엘박스도 아닌데 제한 걸 필요 있음?"이라고 물어
+    1.5초·2,000건으로 줄였다. 같은 법원 전산망이 전자소송·나의사건검색을 운영하므로 간격은 없애지 않는다.
   - 요청 전에 그 호스트의 robots.txt 를 하루 한 번 받아 가장 긴 규칙으로 판정하고, 막힌 주소는 보내지 않는다.
     첨부 내려받기(file.scourt.go.kr/AttachDownload)는 robots.txt 가 막으므로 쓰지 않고, 허용된 폴더 주소
     (file.scourt.go.kr/dcboard/·/nboard/, www.scourt.go.kr/sjudge/)로만 받는다.
@@ -64,8 +66,8 @@ ROOT = Path(__file__).resolve().parents[2]
 OCR_PS1 = ROOT / '4_서면작성' / 'scripts' / 'ocr_win.ps1'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0 Safari/537.36'
 WWW = 'https://www.scourt.go.kr'
-DELAY = float(os.environ.get('SCOURT_DELAY', '4.5'))          # 요청 사이 간격(초). 시험만 줄인다
-DAILY_MAX = int(os.environ.get('SCOURT_DAILY_MAX', '500'))
+DELAY = float(os.environ.get('SCOURT_DELAY', '1.5'))          # 요청 사이 간격(초). 시험만 더 줄인다
+DAILY_MAX = int(os.environ.get('SCOURT_DAILY_MAX', '2000'))
 LIST_ROWS = 10                                              # 게시판 한 쪽의 글 수
 파일_꼴 = ('.md', '.json', '.txt', '.tsv', '.csv', '.html', '.htm', '.pdf', '.docx', '.hwp', '.hwpx', '.xlsx')
 
