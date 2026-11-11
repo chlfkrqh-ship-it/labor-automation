@@ -3,6 +3,11 @@
   "env": {
     "CLAUDE_CODE_EFFORT_LEVEL": "max"
   },
+  "modelSettings": {
+    "claude-fable-5-2": {
+      "maxEffortLevel": "high"
+    }
+  },
   "cleanupPeriodDays": 10,
   "desktopSessionCleanupPeriodDays": 10,
   "permissions": {
