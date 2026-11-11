@@ -242,7 +242,7 @@ class SystemTests(unittest.TestCase):
             self.put(rel, '다' * 10)
         result = self.system.budget(only='판례검색', record=True)
         self.assertEqual(result['missing'], [])
-        self.assertEqual(result['commands']['판례검색'], 80)   # 지침 8개 × 10자(인용 대조 지침 공통/자체검토.md 포함)
+        self.assertEqual(result['commands']['판례검색'], 90)   # 지침 9개 × 10자(인용 대조 지침 공통/자체검토.md, 2026. 11. 11. 더한 법원판결-검색 포함)
         self.assertTrue(result['ok'])
         # 지침이 아무리 커져도 실패로 만들지 않는다. 증감만 보고한다.
         self.put('2_판례검색/CLAUDE.md', '마' * 500000)

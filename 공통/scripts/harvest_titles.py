@@ -14,6 +14,8 @@ LBOX 에는 요청을 보내지 않는다. 넘긴 폴더 안의 파일만 읽는
 scan
   - 법제처: 폴더 아래 모든 `법제처_목록.json`(lawgo.py harvest 가 쓴 것. `법제처_양정` 처럼 나눈 수확 폴더도)의 줄.
     제목(사건명·안건명)에서 찾는다.
+  - 법원 누리집: 폴더 아래 모든 `법원_목록.json`(scourt.py harvest 가 쓴 것. 같은 칸이다)의 줄. 게시물 제목(공보는 사건명)에서 찾는다.
+    게시물을 열지 않은 줄은 사건번호가 없어 '번호 없음'으로 나온다(2026. 11. 11. LBOX 를 멈추며 넣었다).
   - LBOX: 폴더 아래 `LBOX_목록*.tsv`(lbox-save 가 쓴 것. `LBOX_목록_2차.tsv` 처럼 나눈 목록도)와 --lbox 로 준 파일. --lbox 에는 lbox-save 의 결과 파일이나
     `lboxLines` 출력이 남은 세션 결과 파일(tool-results 의 .txt, 세션 기록 .jsonl)을 줄 수 있다. 사건명과 스니펫에서 찾는다.
   - 낱말은 공백과 가운뎃점을 무시하고 찾는다('유지보수'로 '유지·보수'도 걸린다). '발전+정비'처럼 + 로 이으면 둘 다 든 줄만
@@ -55,8 +57,9 @@ BREAKS = re.compile(r"[\x0b\x0c\x1c\x1d\x1e\x85  ]")
 
 
 def harvest_dir(seg):
-    """lawgo.py harvest 가 쓴 수확 폴더('법제처', '법제처_양정', '법제처_재검증' 등)."""
-    return seg.startswith("법제처")
+    """lawgo.py harvest 가 쓴 수확 폴더('법제처', '법제처_양정', '법제처_재검증' 등)와 scourt.py harvest 가 쓴 폴더('법원', '법원_양정').
+    '법원 제출본'처럼 사건 기록이 든 폴더를 빼지 않도록 법원은 이름이 '법원' 이거나 '법원_' 으로 시작할 때만 수확 폴더로 본다."""
+    return seg.startswith("법제처") or seg == "법원" or seg.startswith("법원_")
 
 
 def sq(t):
@@ -135,6 +138,22 @@ def load_lawgo(case):
                 rows.append({"src": "법제처-" + (r.get("종류") or kind), "id": r.get("사건번호") or r.get("id") or "",
                              "org": r.get("기관") or "", "date": r.get("일자") or "", "title": r.get("제목") or "",
                              "extra": "", "q": r.get("검색어") or "", "lawgo_id": str(r.get("id") or "")})
+    return files, rows
+
+
+def load_court(case):
+    """scourt.py harvest 가 쓴 법원_목록.json. 게시물을 열지 않은 줄은 사건번호가 비어 '번호 없음'으로 가린다."""
+    rows = []
+    files = glob.glob(os.path.join(case, "**", "법원_목록.json"), recursive=True)
+    for f in files:
+        with open(f, encoding="utf-8") as fh:
+            d = json.load(fh)
+        for kind, v in d.items():
+            for r in (v.get("rows", []) if isinstance(v, dict) else []):
+                no = (r.get("사건번호") or "").split(",")[0].strip()
+                rows.append({"src": "법원-" + (r.get("종류") or kind), "id": no, "org": r.get("기관") or "",
+                             "date": r.get("일자") or r.get("게시일") or "", "title": r.get("제목") or "", "extra": "",
+                             "q": r.get("검색어") or "", "court_id": str(r.get("id") or "")})
     return files, rows
 
 
@@ -222,7 +241,8 @@ def record_text(case):
     for f in glob.glob(os.path.join(case, "**", "*.md"), recursive=True) + glob.glob(os.path.join(case, "**", "*.docx"), recursive=True):
         rel = os.path.relpath(f, case).replace("\\", "/")
         dirs, base = rel.split("/")[:-1], os.path.basename(f)
-        if any(seg in SKIP_DIRS or harvest_dir(seg) for seg in dirs) or base.startswith(("수확목록_재확인", "법제처_", "~$")):
+        if any(seg in SKIP_DIRS or harvest_dir(seg) for seg in dirs) or base.startswith(("수확목록_재확인", "법제처_", "법원_본문_",
+                                                                                          "법원_게시물_", "~$")):
             continue
         if not os.path.isfile(f):      # 이름이 .md 로 끝나는 폴더(2026. 11. 10. comwel.py --out '…_심급.md')를 열면 Windows 가 '권한 없음'을 낸다
             continue
@@ -251,6 +271,7 @@ def scan(a):
     case = a.case.rstrip("/\\")
     words = [w for w in a.낱말 if sq(w)]
     files, law = load_lawgo(case)
+    court_files, court = load_court(case)
     lbox_files = glob.glob(os.path.join(case, "**", "LBOX_목록*.tsv"), recursive=True) + (a.lbox or [])
     lbox = []
     for f in lbox_files:
@@ -258,12 +279,14 @@ def scan(a):
     for r in lbox:                                 # 주소 그대로 저장된 id('%EA%B5%AD…')는 번호를 찾을 수 없으므로 글자로 푼다
         r["id"] = unquote(r["id"])
     seen, rows, 검색어들, 줄_검색어 = set(), [], {}, {}
-    for r in law + lbox:                           # 같은 줄이 여러 수확·파일에 있으면 하나로
+    # 법고을(법원 누리집 목록의 '법고을')은 법제처와 같은 법원도서관 판례 자료이다. 법제처 줄과 사건번호가 같은 법원 줄은 한 줄로 둔다
+    법제처_번호 = {number_key(r) for r in law} - {""}
+    for r in law + court + lbox:                   # 같은 줄이 여러 수확·파일에 있으면 하나로
         key = (r["src"].split("-")[0], sq(r["id"]) or sq(r["title"]))
         for q in queries(r.get("q")):
             검색어들.setdefault((key[0], q), set()).add(key[1])
             줄_검색어.setdefault(key, []).append(q)
-        if key in seen:
+        if key in seen or (key[0] == "법원" and number_key(r) in 법제처_번호):
             continue
         seen.add(key)
         rows.append(r)
@@ -280,7 +303,7 @@ def scan(a):
         k = number_key(r)
         r["낱말"] = ", ".join(got)
         r["기록"] = ("있음" if k in recs else "없음") if k else "번호 없음"
-        r["본문"] = ("받음" if k and k in heads else "안 받음") if r["src"].startswith("법제처") else "—"
+        r["본문"] = ("받음" if k and k in heads else "안 받음") if r["src"].startswith(("법제처", "법원")) else "—"
         hits.append(r)
     order = {"없음": 0, "번호 없음": 1, "있음": 2}
     hits.sort(key=lambda r: (order[r["기록"]], r["src"], r["date"]), reverse=False)
@@ -291,15 +314,17 @@ def scan(a):
     out = ["# 수확 목록 제목 다시 훑기 — %s" % os.path.basename(case), "",
            "낱말: %s" % ", ".join(words),
            "좁은 검색어(목록에 걸린 줄이 %d줄 이하인 검색어) %d개 — 그 줄은 낱말과 관계없이 함께 가린다" % (NARROW, len(좁은)),
-           "법제처 목록 %d개 파일 · %d줄 / LBOX 목록 %d개 파일 · %d줄(같은 줄 합친 뒤 %d줄)" % (len(files), len(law), len(lbox_files), len(lbox), len(rows)),
-           "걸린 줄 %d건 — 기록에 있음 %d건, 없음 %d건(그 가운데 법제처 본문을 받은 것 %d건), 번호가 없어 가리지 못한 것 %d건"
+           "법제처 목록 %d개 파일 · %d줄 / 법원 누리집 목록 %d개 파일 · %d줄 / LBOX 목록 %d개 파일 · %d줄(같은 줄 합친 뒤 %d줄)"
+           % (len(files), len(law), len(court_files), len(court), len(lbox_files), len(lbox), len(rows)),
+           "걸린 줄 %d건 — 기록에 있음 %d건, 없음 %d건(그 가운데 법제처·법원 본문을 받은 것 %d건), 번호가 없어 가리지 못한 것 %d건"
            % (len(hits), len(hits) - len(miss), sum(1 for r in miss if r["기록"] == "없음"),
               sum(1 for r in miss if r["기록"] == "없음" and r["본문"] == "받음"), sum(1 for r in miss if r["기록"] == "번호 없음")),
            "처리 칸이 빈 줄 %d건 — 기록에 없는 줄과 번호가 없는 줄은 '처리' 칸에 줄마다 무엇을 하였는지 적는다(같은 --out 으로 다시 돌려도 이어진다)"
            % sum(1 for r in miss if not r["처리"]),
            ""]
     if not lbox_files:
-        out += ["LBOX 목록 파일이 없다. 조종 탭에 모은 목록이 남아 있으면 `lboxUnread`로, 없으면 검색기록의 검색어로 다시 수확해 본다(`/검토의견` 4-2단계, `/서면` 8-1단계 ⑧).", ""]
+        out += ["LBOX 목록 파일이 없다. LBOX 를 멈춘 동안(`lbox-검색` 맨 앞 '사용 중지')에는 그대로 두고 법제처·법원 누리집 목록만 본다. "
+                "그 밖에는 조종 탭에 모은 목록이 남아 있으면 `lboxUnread`로, 없으면 검색기록의 검색어로 다시 수확해 본다(`/검토의견` 4-2단계, `/서면` 8-1단계 ⑧).", ""]
     for title, part in (("기록에 없는 줄(본문을 읽고 반영하거나 유사 사례 표에 미반영 이유를 적고, 줄마다 '처리' 칸에 적는다)", miss),
                         ("기록에 있는 줄", [r for r in hits if r["기록"] == "있음"])):
         more = part is miss

@@ -28,7 +28,8 @@ MC_FALLBACK = '{http://schemas.openxmlformats.org/markup-compatibility/2006}Fall
 # 명령어별로 읽는 지침 파일. 글자 수만 집계하며 토큰 수로 환산하지 않는다.
 COMMON = ['CLAUDE.md', '공통/운영.md']
 CITE = ['공통/자체검토.md']      # 판례·결정례·행정해석을 인용하는 산출물을 넘기기 전에 읽는다(인용 대조표와 스크립트 검사)
-LBOX = ['.claude/skills/lbox-검색/SKILL.md', '.claude/skills/lbox-하이라이트/SKILL.md', '.claude/skills/법제처-검색/SKILL.md']
+LBOX = ['.claude/skills/lbox-검색/SKILL.md', '.claude/skills/lbox-하이라이트/SKILL.md', '.claude/skills/법제처-검색/SKILL.md',
+        '.claude/skills/법원판결-검색/SKILL.md']      # LBOX 를 멈춘 동안 하급심을 보태는 법원 누리집 게시판(2026. 11. 11.)
 # LBOX 를 멈춘 날. 비어 있지 않으면 최종 관문이 LBOX 목록 대신 검색기록의 'LBOX 중지' 줄을 본다(`lbox-검색` 맨 앞 '사용 중지').
 # LBOX 의 서면 동의를 받아 담당자가 다시 쓰기로 하면 '' 로 둔다. 2026. 11. 11. LBOX 가 이용약관 제11조(자동화 수단 금지)를 들어 계정을 제한하였다.
 LBOX_중지 = '2026. 11. 11.'

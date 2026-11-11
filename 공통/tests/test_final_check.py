@@ -1106,11 +1106,29 @@ class CaseLawGateTest(unittest.TestCase):
         self.assertIn('LBOX 중지', 글)
         (폴더 / '작업' / '검색기록.md').write_text('# 검색기록\n\nLBOX 중지(2026. 11. 11.~): 하급심 검색어 "시험기기 징계"는 담당자에게 맡김\n',
                                               encoding='utf-8')
+        # 그 기간에는 하급심을 법원 누리집 게시판으로 보태므로 법원_목록.json 이 있어야 한다(2026. 11. 11.)
+        res = fc.결과()
+        with mock.patch.object(fc, 'RUN', lambda a: run(a, 0)):
+            fc.검색_완결(res, 폴더)
+        self.assertEqual(status(res, '판례 검색 기록'), '막힘')
+        self.assertIn('법원_목록.json', [x for x in res.줄 if x[0] == '판례 검색 기록'][0][2])
+        (폴더 / '작업' / '법원').mkdir()
+        (폴더 / '작업' / '법원' / '법원_목록.json').write_text('{}', encoding='utf-8')
         res = fc.결과()
         with mock.patch.object(fc, 'RUN', lambda a: run(a, 0)):
             fc.검색_완결(res, 폴더)
         self.assertEqual(status(res, '판례 검색 기록'), '통과')
         self.assertIn('LBOX 중지 기간', [x for x in res.줄 if x[0] == '판례 검색 기록'][0][2])
+        self.assertIn('법원 누리집 목록 있음', [x for x in res.줄 if x[0] == '판례 검색 기록'][0][2])
+        # 누리집을 쓰지 못한 날은 검색기록의 '법원 누리집 못 봄' 줄로 지나간다
+        (폴더 / '작업' / '법원' / '법원_목록.json').unlink()
+        with open(폴더 / '작업' / '검색기록.md', 'a', encoding='utf-8') as f:
+            f.write('법원 누리집 못 봄: 누리집 점검(2026. 11. 11. 21:00~)\n')
+        res = fc.결과()
+        with mock.patch.object(fc, 'RUN', lambda a: run(a, 0)):
+            fc.검색_완결(res, 폴더)
+        self.assertEqual(status(res, '판례 검색 기록'), '통과')
+        self.assertIn('못 봄', [x for x in res.줄 if x[0] == '판례 검색 기록'][0][2])
         res = fc.결과()
         with mock.patch.object(fc._system, 'LBOX_중지', ''), mock.patch.object(fc, 'RUN', lambda a: run(a, 0)):
             fc.검색_완결(res, 폴더)
