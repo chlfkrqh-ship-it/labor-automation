@@ -22,8 +22,8 @@ su = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(su)
 
 
-def 응답(i, 쓰기, 읽기, 출력, 도구=None, 모델='claude-opus-5-5', 노력='max', 줄=2):
-    """한 응답을 기록 줄 여럿으로(앱은 내용 덩이마다 한 줄씩 적는다)."""
+def 응답(i, 쓰기, 읽기, 출력, 도구=None, 모델='claude-opus-5-5', 노력='max', 줄=2, 명령=None):
+    """한 응답을 기록 줄 여럿으로(앱은 내용 덩이마다 한 줄씩 적는다). 명령을 주면 앱처럼 그 명령 이름(attributionSkill)을 남긴다."""
     usage = {'input_tokens': 1, 'cache_creation_input_tokens': 쓰기, 'cache_read_input_tokens': 읽기, 'output_tokens': 출력,
              'cache_creation': {'ephemeral_1h_input_tokens': 쓰기, 'ephemeral_5m_input_tokens': 0}}
     덩이 = [{'type': 'thinking', 'thinking': ''}] + ([{'type': 'tool_use', 'name': n, 'input': x} for n, x in 도구] if 도구 else [{'type': 'text', 'text': '답'}])
@@ -31,6 +31,8 @@ def 응답(i, 쓰기, 읽기, 출력, 도구=None, 모델='claude-opus-5-5', 노
     for k, b in enumerate(덩이[:줄] if 줄 < len(덩이) else 덩이):
         out.append({'type': 'assistant', 'timestamp': f'2026-11-02T10:{i:02d}:{k:02d}Z', 'effort': 노력, 'perTurnEffort': 노력,
                     'message': {'id': f'msg_{i}', 'model': 모델, 'usage': usage, 'content': [b]}})
+        if 명령:
+            out[-1]['attributionSkill'] = 명령
     return out
 
 
@@ -215,6 +217,39 @@ class UsageTest(unittest.TestCase):
                 with redirect_stdout(buf):
                     self.assertEqual(su.main(['--이세션', '--폴더', str(self.d)]), 기대, (sid, env, buf.getvalue()))
         self.assertIn('맞지 않음', buf.getvalue())
+
+    def test_full_review_turn_must_run_on_fable_5_2(self):
+        """`전면재검토` 명령이 낸 마지막 응답 묶음만 본다. 명령을 부른 응답(세션 모델)은 묶음에 들지 않고, 앱이 모델을 바꾸지 않았으면 1."""
+        부름 = [('Skill', {'skill': '전면재검토', 'args': '1_검토의견/사건/가나_검토 검토의견 4-1'})]
+        F = 'claude-fable-5-2[1m]'
+        self.put('ok', [*말('검토의견'), *응답(1, 10, 0, 1, 도구=부름), *도구결과(),
+                        *응답(2, 10, 0, 1, 모델=F, 명령='전면재검토'), *응답(3, 10, 0, 1, 모델='<synthetic>'),
+                        *응답(4, 10, 0, 1, 모델=F, 명령='전면재검토')])
+        self.put('skipped', [*말('서면'), *응답(1, 10, 0, 1, 도구=부름), *응답(2, 10, 0, 1, 명령='전면재검토')])
+        self.put('none', [*말('서면'), *응답(1, 10, 0, 1)])
+        # 두 번 불렀으면 마지막 것: 앞은 Fable, 뒤(고친 판)는 바뀌지 않음
+        self.put('again', [*말('서면'), *응답(1, 10, 0, 1, 모델=F, 명령='전면재검토'), *말('고쳐 줘'), *응답(2, 10, 0, 1),
+                           *응답(3, 10, 0, 1, 명령='전면재검토')])
+        for sid, 기대, 글 in (('ok', 0, '응답 2회 · 모델 claude-fable-5-2 · 노력 max — 맞음'), ('skipped', 1, '맞지 않음'),
+                             ('none', 1, '응답이 기록에 없다'), ('again', 1, '응답 1회 · 모델 claude-opus-5-5')):
+            with mock.patch.dict(os.environ, {'CLAUDE_CODE_SESSION_ID': sid}):
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    self.assertEqual(su.main(['--재검토', '--폴더', str(self.d)]), 기대, (sid, buf.getvalue()))
+                self.assertIn(글, buf.getvalue(), sid)
+
+    def test_report_counts_fable_cost_and_shows_the_review_turn(self):
+        self.put('s1', [*말('최문희 재검토'), *응답(1, 1_000_000, 0, 0),
+                        *응답(2, 1_000_000, 0, 1_000_000, 모델='claude-fable-5-2[1m]', 명령='전면재검토')])
+        buf = io.StringIO()
+        with redirect_stdout(buf), mock.patch.dict(os.environ, {'CLAUDE_CODE_SESSION_ID': 'other'}):
+            su.main(['--낱말', '최문희', '--폴더', str(self.d)])
+        글 = buf.getvalue()
+        self.assertIn('전면 재검토 응답 1회 · 모델 claude-fable-5-2', 글)
+        self.assertNotIn('가 아닌 응답이 있다', 글)
+        self.assertNotIn('단가를 모르는 모델', 글)
+        # 1시간 캐시 쓰기는 입력의 2배: Opus 1M×4×2=8, Fable 1M×8×2=16 + 출력 1M×40=40 → 64
+        self.assertIn('비용 $64.00', 글)
 
 
 if __name__ == '__main__':
