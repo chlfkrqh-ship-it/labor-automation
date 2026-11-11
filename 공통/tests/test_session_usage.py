@@ -218,19 +218,24 @@ class UsageTest(unittest.TestCase):
                     self.assertEqual(su.main(['--이세션', '--폴더', str(self.d)]), 기대, (sid, env, buf.getvalue()))
         self.assertIn('맞지 않음', buf.getvalue())
 
-    def test_full_review_turn_must_run_on_fable_5_2(self):
-        """`전면재검토` 명령이 낸 마지막 응답 묶음만 본다. 명령을 부른 응답(세션 모델)은 묶음에 들지 않고, 앱이 모델을 바꾸지 않았으면 1."""
+    def test_full_review_turn_must_run_on_fable_5_2_at_high(self):
+        """`전면재검토` 명령이 낸 마지막 응답 묶음만 본다. 명령을 부른 응답(세션 모델)은 묶음에 들지 않고, 앱이 모델을 바꾸지 않았거나
+        설정의 상한이 먹지 않아 보낸 노력(기록의 effort)이 high 가 아니면 1. 대화의 차례 표시(perTurnEffort)는 보낸 값이 아니다."""
         부름 = [('Skill', {'skill': '전면재검토', 'args': '1_검토의견/사건/가나_검토 검토의견 4-1'})]
         F = 'claude-fable-5-2[1m]'
+        표시만최대 = 응답(4, 10, 0, 1, 모델=F, 노력='high', 명령='전면재검토')
+        for r in 표시만최대:
+            r['perTurnEffort'] = 'max'
         self.put('ok', [*말('검토의견'), *응답(1, 10, 0, 1, 도구=부름), *도구결과(),
-                        *응답(2, 10, 0, 1, 모델=F, 명령='전면재검토'), *응답(3, 10, 0, 1, 모델='<synthetic>'),
-                        *응답(4, 10, 0, 1, 모델=F, 명령='전면재검토')])
+                        *응답(2, 10, 0, 1, 모델=F, 노력='high', 명령='전면재검토'), *응답(3, 10, 0, 1, 모델='<synthetic>'), *표시만최대])
         self.put('skipped', [*말('서면'), *응답(1, 10, 0, 1, 도구=부름), *응답(2, 10, 0, 1, 명령='전면재검토')])
+        self.put('maxed', [*말('서면'), *응답(1, 10, 0, 1, 도구=부름), *응답(2, 10, 0, 1, 모델=F, 명령='전면재검토')])
         self.put('none', [*말('서면'), *응답(1, 10, 0, 1)])
         # 두 번 불렀으면 마지막 것: 앞은 Fable, 뒤(고친 판)는 바뀌지 않음
-        self.put('again', [*말('서면'), *응답(1, 10, 0, 1, 모델=F, 명령='전면재검토'), *말('고쳐 줘'), *응답(2, 10, 0, 1),
+        self.put('again', [*말('서면'), *응답(1, 10, 0, 1, 모델=F, 노력='high', 명령='전면재검토'), *말('고쳐 줘'), *응답(2, 10, 0, 1),
                            *응답(3, 10, 0, 1, 명령='전면재검토')])
-        for sid, 기대, 글 in (('ok', 0, '응답 2회 · 모델 claude-fable-5-2 · 노력 max — 맞음'), ('skipped', 1, '맞지 않음'),
+        for sid, 기대, 글 in (('ok', 0, '응답 2회 · 모델 claude-fable-5-2 · 노력 high — 맞음'),
+                             ('skipped', 1, '모델이 claude-fable-5-2 가 아니다'), ('maxed', 1, '노력이 high 가 아니다'),
                              ('none', 1, '응답이 기록에 없다'), ('again', 1, '응답 1회 · 모델 claude-opus-5-5')):
             with mock.patch.dict(os.environ, {'CLAUDE_CODE_SESSION_ID': sid}):
                 buf = io.StringIO()

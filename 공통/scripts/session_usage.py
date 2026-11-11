@@ -1,7 +1,7 @@
 """세션 기록에서 모델·노력 수준과 사용량을 본다. 모델을 쓰지 않는다.
 
     python -B 공통/scripts/session_usage.py --이세션                  # 지금 세션의 모델·노력(`/하자보완` 1단계). Opus 5.5·최대가 아니면 종료 코드 1
-    python -B 공통/scripts/session_usage.py --재검토                  # 이 세션에서 `전면재검토` 명령이 낸 마지막 응답 묶음의 모델·노력. Fable 5.2 가 아니면 종료 코드 1
+    python -B 공통/scripts/session_usage.py --재검토                  # 이 세션에서 `전면재검토` 명령이 낸 마지막 응답 묶음의 모델·노력. Fable 5.2·high 가 아니면 종료 코드 1
     python -B 공통/scripts/session_usage.py --낱말 노정일 [--시간 240]    # 그 낱말이 나온 세션마다 사용량과 쓰인 곳
     python -B 공통/scripts/session_usage.py --시간 21                  # 그 시간 안의 세션마다(`/하자보완` 3단계). 범위 안의 응답만 센다
 
@@ -44,9 +44,11 @@ from session_errors import 기록_폴더, 시각, 차례  # noqa: E402
 모델 = 'claude-opus-5-5'
 노력 = 'max'
 
-# 넘기기 전 전면 재검토는 작성 세션이 `전면재검토` 명령을 불러 그 차례만 이 모델로 돈다(`.claude/commands/전면재검토.md`).
-# 앱은 그 명령이 낸 응답의 기록 줄에 명령 이름(attributionSkill)을 남긴다. 2026. 11. 11. 담당 노무사 "전면 재검토는 Fable high로 하도록 세팅하고".
+# 넘기기 전 전면 재검토는 작성 세션이 `전면재검토` 명령을 불러 그 차례만 이 모델·노력으로 돈다(`.claude/commands/전면재검토.md`).
+# 노력은 `.claude/settings.json` 의 modelSettings 상한(high)이 정한다. 앱은 그 명령이 낸 응답의 기록 줄에 명령 이름(attributionSkill)을 남긴다.
+# 2026. 11. 11. 담당 노무사 "전면 재검토는 Fable high로 하도록 세팅하고", "작업 개시 시에는 오푸스의 최대, 페이블 쓸때는 하이".
 재검토_모델 = 'claude-fable-5-2'
+재검토_노력 = 'high'
 재검토_명령 = '전면재검토'
 
 # 100만 토큰당 달러(입력, 출력, 캐시 읽기). 캐시 쓰기는 입력의 1.25배(5분)·2배(1시간)이다. claude-api 스킬의 모델 표(2026. 10. 6.,
@@ -143,7 +145,8 @@ def 읽기(f: Path, 부터: float | None = None, 본줄: dict | None = None) -> 
         elif r.get('type') == 'assistant' and m.get('id'):
             k = m['id']
             if k not in 응답:
-                응답[k] = {'쓰임': {}, '도구': [], '모델': 맨모델(m.get('model')), '노력': r.get('perTurnEffort') or r.get('effort'), '압축뒤': 압축뒤,
+                # 기록의 effort 는 요청에 실어 보낸 값(output_config.effort, 설정의 상한을 거친 값)이고 perTurnEffort 는 대화에 적힌 차례 표시이다
+                응답[k] = {'쓰임': {}, '도구': [], '모델': 맨모델(m.get('model')), '노력': r.get('effort') or r.get('perTurnEffort'), '압축뒤': 압축뒤,
                          '범위밖': not 안, '옮김': 옮김, '명령': r.get('attributionSkill') or ''}
                 차례.append(k)
                 압축뒤 = False
@@ -317,7 +320,7 @@ def 이세션(폴더: Path, sid: str | None = None) -> tuple:
     for r in 줄들(f):
         if r.get('type') == 'assistant' and isinstance(r.get('message'), dict) and r['message'].get('model'):
             m = 맨모델(r['message']['model'])
-            e = r.get('perTurnEffort') or r.get('effort') or e
+            e = r.get('effort') or r.get('perTurnEffort') or e
     e = e or os.environ.get('CLAUDE_EFFORT') or os.environ.get('CLAUDE_CODE_EFFORT_LEVEL') or ''
     return f, m, str(e)
 
@@ -325,7 +328,7 @@ def 이세션(폴더: Path, sid: str | None = None) -> tuple:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description='세션 기록의 모델·노력과 사용량')
     ap.add_argument('--이세션', action='store_true', help='지금 세션의 모델·노력을 보고 Opus 5.5·최대가 아니면 종료 코드 1')
-    ap.add_argument('--재검토', action='store_true', help='이 세션에서 전면재검토 명령이 낸 마지막 응답 묶음을 보고 Fable 5.2 가 아니면 종료 코드 1')
+    ap.add_argument('--재검토', action='store_true', help='이 세션에서 전면재검토 명령이 낸 마지막 응답 묶음을 보고 Fable 5.2·high 가 아니면 종료 코드 1')
     ap.add_argument('--낱말', help='도구 입력이나 담당자 말에 이 낱말이 나온 세션만 본다(사건 이름 등)')
     ap.add_argument('--시간', type=float, help='이 시간(시) 안에 시각이 찍힌 기록만 센다(범위 안에 응답이 없는 세션은 뺀다)')
     ap.add_argument('--폴더', help='세션 기록 폴더(시험용)')
@@ -345,10 +348,11 @@ def main(argv=None) -> int:
             return 1
         모델들 = sorted({x['모델'] for x in 묶음 if x['모델']})
         노력들 = sorted({str(x['노력']) for x in 묶음 if x['노력']})
-        맞음 = 모델들 == [재검토_모델]
+        틀린것 = ([f'모델이 {재검토_모델} 가 아니다(앱이 모델을 바꾸지 않음)'] if 모델들 != [재검토_모델] else []) \
+            + ([f"노력이 {재검토_노력} 가 아니다(`.claude/settings.json` 의 modelSettings 상한이 먹지 않음)"] if 노력들 != [재검토_노력] else [])
         print(f"세션 {f.stem[:8]} · 전면 재검토 응답 {len(묶음)}회 · 모델 {', '.join(모델들) or '모름'} · 노력 {', '.join(노력들) or '모름'} — "
-              + ('맞음' if 맞음 else f'맞지 않음(전면 재검토는 {재검토_모델}. 앱이 모델을 바꾸지 않았다, `.claude/commands/전면재검토.md` 1.)'))
-        return 0 if 맞음 else 1
+              + ('맞음' if not 틀린것 else f"맞지 않음({'; '.join(틀린것)}. `.claude/commands/전면재검토.md` 1.)"))
+        return 0 if not 틀린것 else 1
     부터 = dt.datetime.now().timestamp() - a.시간 * 3600 if a.시간 else None
     지금 = os.environ.get('CLAUDE_CODE_SESSION_ID')
     본, 비용, 뺀 = 0, 0.0, []
