@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+import unicodedata
 import unittest
 from unittest import mock
 import zipfile
@@ -1468,6 +1469,33 @@ class WholeCaseReadingTest(unittest.TestCase):
         make_pdf(case / '작업' / '인용판결_PDF' / '대법원 2020다5678.pdf', [글 + '판단', 글 + '인정사실'])
         make_pdf(case / '작업' / '검색메모.pdf', [글])                                     # 우리 작업 폴더의 다른 것은 자료가 아니다
         self.assertEqual(sorted(er.자료_목록(case, [case])), ['단체협약.pdf', '대법원 2020다5678.pdf'])
+
+    def test_unpacked_zip_in_material_folder_is_read_once_from_its_folder(self):
+        """`--자료` 폴더에서 같은 이름 폴더로 푼 압축(`공통/운영.md` '메일 첨부 받기')은 그 폴더의 파일만 읽고 압축은 세지 않는다. 이름은 nfc 로
+        견주고, 푼 폴더가 없거나 비었으면 압축을 그대로 센다. 2026. 11. 12. GGM 변호인의견서: 메일로 받은 압축 4개를 같은 이름 폴더에 풀자 압축
+        기록과 푼 파일 기록이 함께 생겨 같은 글을 두 번 읽게 하였고, 압축 기록을 지우자 `check --자료` 가 압축 4건을 '기록 없음'으로 막았다."""
+        case = self.root / '4_서면작성' / '사건' / 'GGM_정직'
+        자료 = case / '라운드1' / '참고자료' / '받은 압축'
+        묶음 = '자료 묶음'
+        for d in (자료 / 'a', 자료 / 묶음, 자료 / 'd'):
+            d.mkdir(parents=True, exist_ok=True)
+        for 이름, 안 in (('a.zip', 'a.txt'), ('b.zip', 'b.txt'), (unicodedata.normalize('NFD', 묶음) + '.zip', 'c.txt'), ('d.zip', 'd.txt')):
+            with zipfile.ZipFile(자료 / 이름, 'w') as z:
+                z.writestr(안, f'{안} 압축 안의 글')
+        (자료 / 'a' / 'a.txt').write_text('a.txt 압축 안의 글', encoding='utf-8')          # 같은 이름 폴더에 푼 것
+        (자료 / 묶음 / 'c.txt').write_text('c.txt 압축 안의 글', encoding='utf-8')         # 압축 이름은 자모가 풀린 꼴(맥), 푼 폴더는 nfc
+        self.assertEqual(sorted(er.자료_목록(case, [자료])), ['a.txt', 'b.zip', 'c.txt', 'd.zip'])   # b 는 풀지 않았고 d/ 는 풀다 만 빈 폴더
+        with mock.patch.dict(os.environ, {'EVIDENCE_READ_ROOT': str(self.root)}):
+            code, out = run('make', case, '--자료', 자료, '--no-ocr')
+        self.assertEqual(code, 0, out)
+        self.assertEqual(sorted(p.stem for p in (case / '작업' / '자료읽기').glob('*.md')), ['a.txt', 'b.zip', 'c.txt', 'd.zip'])
+        자 = er.자리(case, True)
+        for k, p in er.자료_목록(case, [자료]).items():
+            자료_채우기(case, k, er.기대_확인표(자, k, p))
+        code, out = run('check', case, '--자료', 자료)
+        self.assertEqual(code, 0, out)                                                     # 압축 기록이 없어도 막지 않는다
+        self.assertIn('호증(자료) 4건 모두 채워졌고', out)
+        self.assertNotIn('a.zip', out)
 
     def test_split_drafts_with_own_numbering_read_every_exhibit(self):
         """서면마다 호증 번호를 따로 매긴 라운드는 같은 번호의 두 서면 호증과 앞 절차의 같은 번호 원자료를 모두 읽는다(2026. 11. 8. `/하자보완`:

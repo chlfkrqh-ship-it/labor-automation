@@ -225,6 +225,20 @@ def 갈음(p: Path) -> Path | None:
                                               q.is_file() and q.suffix.lower() in 갈음_꼴 and nfc(q.stem) == 이름)), None)
 
 
+def 푼_압축(p: Path) -> bool:
+    """같은 자리에 같은 이름 폴더로 푼 압축파일인가. 압축은 받은 자리에 두고 같은 이름 하위 폴더에 풀므로(`공통/운영.md` '메일 첨부 받기')
+    그 폴더의 파일을 읽고 압축은 세지 않는다(세면 같은 글을 두 번 읽는다). 이름은 nfc 로 견주고(맥·휴대전화에서 만든 이름은 자모가 풀린 꼴일
+    수 있다), 폴더에 파일이 하나도 없으면(풀다 만 것) 압축을 그대로 센다."""
+    if p.suffix.lower() != '.zip':
+        return False
+    이름 = nfc(p.stem)
+    try:
+        폴더들 = [q for q in p.parent.iterdir() if q.is_dir() and nfc(q.name) == 이름]
+    except OSError:
+        return False
+    return any(x.is_file() for q in 폴더들 for x in q.rglob('*'))
+
+
 def 읽을_파일(p: Path) -> bool:
     """전 면 읽기 대상으로 셀 파일인가. 알려진 형식(DOCS)과, 시스템·작업 파일이 아닌 그 밖의 형식이다. 그 밖의 형식은 같은 이름의
     PDF 등이나 폴더(`갈음`)가 있으면 그것을 읽으므로 세지 않는다."""
@@ -382,12 +396,15 @@ def 자료_목록(사건: Path, 폴더들: list) -> dict:
     """자료 이름 → 파일. 이름은 파일 이름(확장자 포함)이고, 같은 이름이 여럿이면 폴더 이름을 앞에 붙인다.
     우리가 만든 산출물(검토의견서·회신초안·수정본·한글 초안, `1_검토의견/CLAUDE.md` 7절의 이름, 엔진이 만든 계산표)과
     작업·계산·백업·전환작업(Word 변환 부품)·별첨(붙이려고 받은 판결·회시)·법제처 수확 폴더는 뺀다. 상대방의 별지 계산표는 자료이다.
-    다만 인용한 판결문(작업/인용판결_PDF)은 인정사실까지 전문을 읽어야 하므로 넣는다(루트 CLAUDE.md '판례 인용과 증거 인용')."""
+    다만 인용한 판결문(작업/인용판결_PDF)은 인정사실까지 전문을 읽어야 하므로 넣는다(루트 CLAUDE.md '판례 인용과 증거 인용').
+    같은 이름 폴더에 푼 압축은 그 폴더의 파일을 읽으므로 뺀다(`푼_압축`). 2026. 11. 12. GGM 변호인의견서: 메일로 받은 압축 4개를 같은 이름
+    폴더에 풀어 `make --자료` 를 돌리자 압축 기록과 푼 파일 기록이 함께 생겨 같은 글을 두 번 읽게 하였고, 압축 기록을 지우자 `check --자료` 가
+    압축 4건을 '기록 없음'으로 막았다."""
     out = {}
     for d in 폴더들:
         d = Path(d)
         for p in sorted(d.rglob('*')):
-            if not p.is_file() or not 읽을_파일(p) or 산출물_이름.search(p.name):
+            if not p.is_file() or not 읽을_파일(p) or 산출물_이름.search(p.name) or 푼_압축(p):
                 continue
             if any(우리_폴더.search(x) for x in p.relative_to(d).parts[:-1]) and p.relative_to(d).parts[:-1] != ('작업', '인용판결_PDF'):
                 continue      # 우리 작업 폴더는 빼되, 검토의견에 인용한 판결문(작업/인용판결_PDF)은 전문을 읽는다
