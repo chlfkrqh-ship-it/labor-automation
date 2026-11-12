@@ -231,11 +231,14 @@ class UsageTest(unittest.TestCase):
         self.put('skipped', [*말('서면'), *응답(1, 10, 0, 1, 도구=부름), *응답(2, 10, 0, 1, 명령='전면재검토')])
         self.put('maxed', [*말('서면'), *응답(1, 10, 0, 1, 도구=부름), *응답(2, 10, 0, 1, 모델=F, 명령='전면재검토')])
         self.put('none', [*말('서면'), *응답(1, 10, 0, 1)])
+        # 담당자가 친 명령(앞 응답에 Skill 호출이 없음)인데도 바뀌지 않으면 앱 쪽 사유로 적는다
+        self.put('typed', [*말('서면'), *응답(1, 10, 0, 1), *말('/전면재검토 4_서면작성/사건/가나 서면 8-1'), *응답(2, 10, 0, 1, 명령='전면재검토')])
         # 두 번 불렀으면 마지막 것: 앞은 Fable, 뒤(고친 판)는 바뀌지 않음
         self.put('again', [*말('서면'), *응답(1, 10, 0, 1, 모델=F, 노력='high', 명령='전면재검토'), *말('고쳐 줘'), *응답(2, 10, 0, 1),
                            *응답(3, 10, 0, 1, 명령='전면재검토')])
         for sid, 기대, 글 in (('ok', 0, '응답 2회 · 모델 claude-fable-5-2 · 노력 high — 맞음'),
-                             ('skipped', 1, '모델이 claude-fable-5-2 가 아니다'), ('maxed', 1, '노력이 high 가 아니다'),
+                             ('skipped', 1, '모델이 claude-fable-5-2 가 아니다(세션이 Skill 도구로 스스로 불러'),
+                             ('typed', 1, '모델이 claude-fable-5-2 가 아니다(앱이 모델을 바꾸지 않음)'), ('maxed', 1, '노력이 high 가 아니다'),
                              ('none', 1, '응답이 기록에 없다'), ('again', 1, '응답 1회 · 모델 claude-opus-5-5')):
             with mock.patch.dict(os.environ, {'CLAUDE_CODE_SESSION_ID': sid}):
                 buf = io.StringIO()

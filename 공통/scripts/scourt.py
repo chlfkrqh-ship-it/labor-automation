@@ -588,7 +588,8 @@ def ocr_pdf(doc):
             ls = e.get('lines') or []
             ls = [ls] if isinstance(ls, dict) else ls
             ls = sorted(ls, key=lambda l: (round(l['y'] / 12), l['x']))
-            out.append(f"[{int(re.search(r'(\d+)', e['file']).group(1))}면]\n" + '\n'.join(l['t'] for l in ls))
+            면 = int(re.search(r'(\d+)', e['file']).group(1))      # f-string 식 안의 역슬래시는 파이썬 3.11 에서 문법 오류다
+            out.append(f"[{면}면]\n" + '\n'.join(l['t'] for l in ls))
         return '\n'.join(out)
     except (OSError, subprocess.TimeoutExpired, ValueError):
         return None
