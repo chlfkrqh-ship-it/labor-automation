@@ -286,6 +286,32 @@ class LawGoTests(unittest.TestCase):
         self.assertEqual([r['사건번호'] for r in rows], ['2020다9', '2020다7', '2020다3', '2020다2', '2020다1'])
         self.assertEqual(result['종류별']['판례']['본문목록'], ['대법원 2020다9 보험료'])
 
+    def test_unquoted_variant_of_query(self):
+        self.assertEqual(lawgo.unquoted('"취하서" "소취하"'), '취하서 소취하')
+        self.assertEqual(lawgo.unquoted('"직장 내 괴롭힘"  징계양정'), '직장 내 괴롭힘 징계양정')
+        self.assertIsNone(lawgo.unquoted('취하서 소취하'))                    # 따옴표가 없으면 덧붙일 것이 없다
+        self.assertIsNone(lawgo.unquoted('"직장 내 괴롭힘" | 따돌림'))        # '|' 묶음은 섞으면 흔들리므로 손대지 않는다
+        self.assertIsNone(lawgo.unquoted('""'))
+
+    def test_harvest_adds_unquoted_variant_behind_original_hits(self):
+        # 따옴표로 묶은 낱말은 조사가 붙은 꼴을 놓치므로 따옴표 뗀 꼴을 함께 받는다(2026. 11. 12. 실제 사건 16건 시험, 72건 → 92건)
+        self.routes[('list', 'prec', '"취하서" "소취하"', '1')] = {'PrecSearch': {'totalCnt': '1', 'prec': [prec(1, date='2020.01.01')]}}
+        self.routes[('list', 'prec', '소송물', '1')] = {'PrecSearch': {'totalCnt': '1', 'prec': [prec(2, date='1994.01.01')]}}
+        self.routes[('list', 'prec', '취하서 소취하', '1')] = {'PrecSearch': {'totalCnt': '3', 'prec': [
+            prec(3, date='2026.01.01'), prec(1, date='2020.01.01'), prec(2, date='1994.01.01')]}}
+        result = lawgo.harvest(['판례'], ['"취하서" "소취하"', '소송물', '"취하서" "소취하"'])
+        self.assertEqual(result['따옴표뗀검색어'], ['취하서 소취하'])
+        self.assertEqual([(s['검색어'], s.get('원래')) for s in result['종류별']['판례']['검색']],
+                         [('"취하서" "소취하"', None), ('소송물', None), ('취하서 소취하', '"취하서" "소취하"')])
+        self.assertEqual(sum(1 for c in self.calls if c['path'] == 'lawSearch.do'), 3)      # 같은 검색어를 두 번 넣어도 한 번
+        # 넣은 검색어에 걸린 판결의 순서는 덧붙이지 않을 때와 같다(2020다2 가 따옴표 뗀 꼴에도 걸려 앞당겨지지 않는다).
+        # 따옴표 뗀 꼴에만 걸린 2020다3 은 가장 새 판결이어도 그 뒤에 온다
+        self.assertEqual([(r['사건번호'], r['검색어']) for r in result['목록']['판례']['rows']],
+                         [('2020다1', '"취하서" "소취하" / 취하서 소취하'), ('2020다2', '소송물 / 취하서 소취하'), ('2020다3', '취하서 소취하')])
+        self.calls.clear()
+        result = lawgo.harvest(['판례'], ['"취하서" "소취하"'], unquote=False)
+        self.assertEqual((result['따옴표뗀검색어'], len(result['종류별']['판례']['검색']), len(self.calls)), ([], 1, 1))
+
     def test_harvest_texts_title_picks_bodies_by_case_name(self):
         rows = [prec(1, date='2026.01.01'), prec(2, date='2025.01.01'), prec(3, date='2024.01.01')]
         for row, name in zip(rows, ('사기', '산재보험료 부과처분 취소', '근로자지위확인')):

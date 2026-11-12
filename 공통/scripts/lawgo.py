@@ -541,23 +541,50 @@ def citation_ranking(docs, rows=()):
              '목록에있음': (squash(court), number) in listed, 'lbox': lbox_url(court, number)} for court, number in ranked]
 
 
+def unquoted(query):
+    """따옴표가 든 검색어의 따옴표를 뗀 꼴(띄어 쓴 낱말 AND). 따옴표가 없거나 '|'(또는)가 든 검색어는 None 이다.
+
+    따옴표로 묶은 낱말은 조사가 붙은 꼴을 놓친다. 2026. 11. 12. 실제 사건 16건 시험(공통/검증/판례검색/README.md 7절)에서 판례 본문검색에
+    따옴표 검색어만 보내면 목록에 걸린 정답이 72건, 따옴표를 뗀 꼴을 함께 보내면 92건이었다(대법원 93누9460 은 '소취하'가 '일부소취하'·
+    '소취하에'로만 나와 '"취하서" "소취하"'에 걸리지 않고 '취하서 소취하'에 걸렸다). '|' 묶음은 다른 낱말·구절과 섞으면 결과가 흔들리므로
+    (법제처-검색 3항) 손대지 않는다."""
+    if '"' not in query or '|' in query:
+        return None
+    return ' '.join(query.replace('"', ' ').split()) or None
+
+
 def harvest(kinds, queries, *, body=False, court=None, source=None, period=None, org=None, rule_kind=None,
-            limit=300, texts=0, texts_title=(), exclude=(), oc=None, out=None):
+            limit=300, texts=0, texts_title=(), exclude=(), unquote=True, oc=None, out=None):
     """texts_title: 본문은 사건명·안건명에 이 낱말 가운데 하나가 든 것에서만 고른다. 넓은 검색어에 걸린 무관한 판결이 본문과 인용 순위를 채우지 않게 한다.
-    exclude: 목록·본문·인용 순위에서 뺄 사건번호. 검증에서 시험 사건 자신의 본문(정답인 참조판례가 적혀 있다)을 읽지 않게 한다."""
+    exclude: 목록·본문·인용 순위에서 뺄 사건번호. 검증에서 시험 사건 자신의 본문(정답인 참조판례가 적혀 있다)을 읽지 않게 한다.
+    unquote: 따옴표가 든 검색어마다 따옴표를 뗀 꼴(unquoted)을 덧붙여 함께 받는다(기본). 덧붙인 검색어는 결과의 '따옴표뗀검색어'와
+    종류별 '검색' 줄의 '원래' 칸에 적는다. 목록은 넣은 검색어에 걸린 판결을 먼저 세우고(덧붙이지 않을 때와 같은 순서라 본문·인용 순위도
+    같다), 따옴표 뗀 꼴에만 걸린 판결은 그 뒤에 세운다. 같은 검색어를 두 번 넣어도 한 번만 받는다."""
     oc = oc_value(oc)
     start, exclude = CALLS['n'], set(exclude)
+    plan = [(q, q) for q in dict.fromkeys(queries)]          # (보낼 검색어, 원래 검색어)
+    originals = {q for q, _ in plan}
+    sent = {q for q, _ in plan}
+    added = []
+    if unquote:
+        for q in dict.fromkeys(queries):
+            plain = unquoted(q)
+            if plain and plain not in sent:
+                sent.add(plain)
+                plan.append((plain, q))
+                added.append(plain)
     summary, listing = {}, {}
     for name in kinds:
         kind = kind_of(name)
-        merged, origin, searches, totals = {}, {}, [], {}
-        for query in queries:
+        merged, origin, bases, searches, totals = {}, {}, {}, [], {}
+        for query, base in plan:
             result = search(kind, query, body=body, court=court if kind == '판례' else None,
                             source=source if kind == '판례' else None,
                             period=period if TYPES[kind]['period'] else None,
                             org=org if kind in ('법령', '행정규칙') else None,
                             rule_kind=rule_kind if kind == '행정규칙' else None, limit=limit, oc=oc)
-            searches.append({'검색어': query, '전체': result['전체'], '받은건수': result['받은건수']})
+            searches.append({'검색어': query, '전체': result['전체'], '받은건수': result['받은건수'],
+                             **({'원래': base} if base != query else {})})
             totals[query] = result['전체']
             for row in result['rows']:
                 if exclude & {n.strip() for n in (row['사건번호'] or '').split(',')}:
@@ -569,10 +596,19 @@ def harvest(kinds, queries, *, body=False, court=None, source=None, period=None,
                 origin.setdefault(key, [])
                 if query not in origin[key]:
                     origin[key].append(query)
+                bases.setdefault(key, set()).add(base)
         # 여러 검색어에 걸린 것 → 전체 건수가 적은(좁은) 검색어에 걸린 것 → 최신 순. 최신순만 쓸 때보다 대법원 30건 시험의
-        # 목록 상위 50건 재현율이 55%에서 61%로 높았다(2026. 9. 17., 공통/검증/판례검색)
+        # 목록 상위 50건 재현율이 55%에서 61%로 높았다(2026. 9. 17., 공통/검증/판례검색).
+        # 따옴표 뗀 꼴에만 걸린 판결은 넣은 검색어에 걸린 판결 뒤에 같은 규칙(원래 검색어 단위로 센 수)으로 세운다. 섞어 세우면 넓은 따옴표 뗀
+        # 꼴에 함께 걸린 판결이 앞으로 올라와, 2026. 11. 12. 같은 시험에서 목록 전체는 72건 → 80건으로 늘었으나 앞 20건 본문으로 세운
+        # 인용 순위 상위 20건이 72건 → 68건으로 줄었다
+        def rank(k):
+            own = [q for q in origin[k] if q in originals]
+            if own:
+                return (0, -len(own), min(totals[q] for q in own))
+            return (1, -len(bases[k]), min(totals[q] for q in origin[k]))
         order = sorted(merged, key=lambda k: merged[k]['일자'], reverse=True)
-        order.sort(key=lambda k: (-len(origin[k]), min(totals[q] for q in origin[k])))
+        order.sort(key=rank)
         rows = [dict(merged[k], 검색어=' / '.join(origin[k])) for k in order]
         docs, failed = [], []
         tax = [r for r in rows if r.get('출처') == '국세법령정보시스템']      # API로 본문이 오지 않는다
@@ -607,7 +643,7 @@ def harvest(kinds, queries, *, body=False, court=None, source=None, period=None,
     if out:
         write(Path(out) / '법제처_목록.json', json.dumps(listing, ensure_ascii=False, indent=2))
     return {'목록파일': str(Path(out) / '법제처_목록.json') if out else None, '호출': CALLS['n'] - start,
-            '종류별': summary, **({} if out else {'목록': listing})}
+            '따옴표뗀검색어': added, '종류별': summary, **({} if out else {'목록': listing})}
 
 
 def jo_code(number):
@@ -909,6 +945,8 @@ def main():
     s.add_argument('--limit', type=int, default=300, help='검색어마다 받을 최대 건수')
     s.add_argument('--texts', type=int, default=0, help='종류마다 본문까지 받을 건수(목록 순서대로)')
     s.add_argument('--texts-title', help='본문은 사건명·안건명에 이 낱말 가운데 하나가 든 것에서만 고른다. 쉼표로 구분(예: 보험료,사업종류)')
+    s.add_argument('--no-unquote', action='store_true',
+                   help='따옴표가 든 검색어에 따옴표 뗀 꼴을 덧붙이지 않는다(기본은 덧붙여 함께 받는다)')
     s.add_argument('--out', help='결과를 쓸 폴더(예: 사건/라운드1/작업/법제처)')
     args = parser.parse_args()
     try:
@@ -947,7 +985,8 @@ def main():
             result = harvest([k.strip() for k in args.kinds.split(',') if k.strip()], args.query, body=args.body,
                              court=args.court, source=args.source, period=args.period, org=args.org,
                              rule_kind=args.rule_kind, limit=args.limit, texts=args.texts, oc=args.oc, out=args.out,
-                             texts_title=[w.strip() for w in (args.texts_title or '').split(',') if w.strip()])
+                             texts_title=[w.strip() for w in (args.texts_title or '').split(',') if w.strip()],
+                             unquote=not args.no_unquote)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if args.command != 'check' or result['ok'] else 1
     except (LawGoError, OSError, ValueError) as exc:
