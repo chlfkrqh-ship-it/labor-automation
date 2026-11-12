@@ -127,6 +127,18 @@ class SortTest(unittest.TestCase):
         self.run_main('--apply')
         self.assertTrue((d / 피고서증).is_file())
 
+    def test_new_round_without_our_files_takes_the_side_from_other_rounds(self):
+        """상대방의 새 서면만 받아 만든 라운드의 우리증거/ 에 그 서면이 들면 앞 라운드에서 평안이 낸 파일로 우리 쪽을 정해 옮긴다.
+        2026. 11. 13. `/하자보완`: 그 라운드만 보아 '우리 쪽을 알 수 없음'으로 두고 --확인 이 지나갔다(관문의 맞대기도 건너뛴다)."""
+        r2 = self.case / '라운드2'
+        (r2 / '우리증거').mkdir(parents=True)
+        (r2 / '상대증거').mkdir()
+        (r2 / '우리증거' / 피고서면).write_bytes(b'x')
+        새자리 = {n: 새 for _, 새, n, _ in es.계획(self.case, r2)['옮김']}
+        self.assertEqual(새자리, {피고서면: es.상대})
+        code, 글 = self.run_main('--라운드', '2', '--확인')
+        self.assertEqual(code, 1, 글)
+
     def test_unknown_side_is_left_alone(self):
         for n in os.listdir(self.r / '우리증거'):
             (self.r / '우리증거' / n).unlink()

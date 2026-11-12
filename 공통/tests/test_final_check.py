@@ -66,7 +66,8 @@ def make_opinion_docx(path: Path, 문단들):
 
 def fake_run(args):
     name = Path(str(args[0])).name
-    if name in ('style_check.py', 'citation_check.py', 'cite_pdf_check.py', 'evidence_zip.py', 'cite_check.py', 'qna_check.py'):
+    if name in ('style_check.py', 'citation_check.py', 'cite_pdf_check.py', 'evidence_zip.py', 'cite_check.py', 'qna_check.py',
+                'docx_tables.py'):          # 가짜 병합본('PK')으로 보는 시험이 많다. 표 넘침은 아래 test_docx_table_cell_off_the_page_blocks 가 본다
         return 0, 'ok'
     args = [str(a) for a in args]
     if name in ('evidence_read.py', 'evidence_words.py') and '--no-ocr' not in args and 'check' not in args and '--확인' not in args:
@@ -236,6 +237,34 @@ class BriefGateTest(unittest.TestCase):
         self.assertEqual(status(fc.서면(self.case, 초안없음_허용=True), 'DOCX'), '막힘')
         os.utime(docx, (time.time() + 100, time.time() + 100))
         self.assertEqual(status(fc.서면(self.case, 대상=docx), 'DOCX'), '통과')
+
+    def test_docx_table_cell_off_the_page_blocks(self):
+        """글이 든 표 칸이 오른쪽 여백 밖에서 시작하면 막는다. 2026. 11. 12. 템플릿 프레임 2면 사건 표의 빈 셋째 칸(표 너비 17949)에
+        값을 넣은 이승민 준비서면(2)의 사건번호·당사자가 쪽 밖으로 잘렸는데, DOCX 는 병합 시각만 보아 지나갔다(11. 13. `/하자보완`)."""
+        self.complete()
+        docx = self.r / '출력' / '(GGM) 답변서_초안.docx'
+
+        def 판(셋째):
+            칸 = lambda w, t: (f'<w:tc><w:tcPr><w:tcW w:w="{w}" w:type="dxa"/></w:tcPr><w:p>'
+                              + (f'<w:r><w:t>{t}</w:t></w:r>' if t else '') + '</w:p></w:tc>')
+            행 = ''.join(f'<w:tr>{칸(1443, 이름)}{칸(8253, 값 if not 셋째 else "")}{칸(8253, 값 if 셋째 else "")}</w:tr>'
+                        for 이름, 값 in (('사건', '전남2026부해1'), ('신청인', '김갑동')))
+            표 = ('<w:tbl><w:tblPr><w:tblW w:w="17949" w:type="dxa"/></w:tblPr><w:tblGrid><w:gridCol w:w="1443"/>'
+                 f'<w:gridCol w:w="8253"/><w:gridCol w:w="8253"/></w:tblGrid>{행}</w:tbl>')
+            with zipfile.ZipFile(docx, 'w') as z:
+                z.writestr('word/document.xml', '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                           f'<w:body><w:p><w:r><w:t>답변서</w:t></w:r></w:p>{표}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
+                           '<w:pgMar w:top="2552" w:right="1134" w:bottom="1701" w:left="1134"/></w:sectPr></w:body></w:document>')
+            later(docx)
+
+        표만_진짜로 = lambda args: REAL_RUN(args) if Path(str(args[0])).name == 'docx_tables.py' else fake_run(args)
+        with mock.patch.object(fc, 'RUN', 표만_진짜로):
+            판(셋째=True)
+            res = fc.서면(self.case, 대상=docx)
+            self.assertEqual(status(res, 'DOCX'), '막힘', res.줄)
+            self.assertIn('전남2026부해1', next(m for n, _, m in res.줄 if n == 'DOCX'))
+            판(셋째=False)                      # 빈 셋째 칸은 쪽 밖에 있어도 보이지 않는다(그전에 낸 서면 261개가 이 꼴이다)
+            self.assertEqual(status(fc.서면(self.case, 대상=docx), 'DOCX'), '통과')
 
     def test_submission_copy_must_match_the_handed_over_docx(self):
         """제출/ 의 _제출본 은 넘길 판과 같아야 한다(2026. 11. 3. 한전 "서면도 그때그때 바꿔주면 좋겠고 (_제출본)으로"). 옛 이름 사본만 있으면 참고."""

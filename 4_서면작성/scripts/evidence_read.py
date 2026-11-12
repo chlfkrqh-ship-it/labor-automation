@@ -239,6 +239,43 @@ def 푼_압축(p: Path) -> bool:
     return any(x.is_file() for q in 폴더들 for x in q.rglob('*'))
 
 
+def 겹친_압축(p: Path) -> bool:
+    """안의 파일이 모두 같은 폴더(그 아래 포함)의 다른 파일과 바이트까지 같은 압축인가. 그 파일들을 읽으므로 압축은 세지 않는다.
+    크기가 같은 파일만 해시로 맞대므로 겹치지 않는 압축은 안의 글을 꺼내지 않는다. 작업·백업처럼 읽을 목록에서 빠지는 하위 폴더의 파일과는
+    맞대지 않는다(거기에만 같은 파일이 있으면 그 글을 아무 데서도 읽지 않게 된다). 2026. 11. 13. `/하자보완`: 이케아 이월 연차 검토의
+    `작업/인용판결_PDF/` 에 인용 판결 PDF 와 그것을 묶은 압축 둘이 함께 있어, 압축 안 10개가 모두 옆의 PDF 와 같은데도 압축을 따로
+    '기록 없음'으로 셌다."""
+    if p.suffix.lower() != '.zip':
+        return False
+    try:
+        with zipfile.ZipFile(p) as z:
+            속 = [i for i in z.infolist() if not i.is_dir()]
+            if not 속:
+                return False
+            크기 = {}
+            for q in p.parent.rglob('*'):
+                if (q.is_file() and q != p and q.suffix.lower() != '.zip'
+                        and not any(우리_폴더.search(x) or x == '원고별 정리' for x in q.relative_to(p.parent).parts[:-1])):
+                    크기.setdefault(q.stat().st_size, []).append(q)
+            if any(i.file_size not in 크기 for i in 속):
+                return False
+            for i in 속:
+                h = hashlib.sha1(z.read(i)).hexdigest()[:12]
+                if not any(해시(q) == h for q in 크기[i.file_size]):
+                    return False
+    except (OSError, zipfile.BadZipFile, RuntimeError, NotImplementedError, ValueError):
+        return False
+    return True
+
+
+def 읽지_않을_압축(p: Path) -> bool:
+    """같은 글을 다른 파일로 읽으므로 세지 않는 압축(같은 이름 폴더에 푼 것, 안의 파일이 모두 옆 파일과 같은 것). 서면의 호증 밖 자료
+    (`서면류_파일`)와 검토의견·계산의 자료(`자료_목록`)가 이 한 벌을 쓴다. 2026. 11. 13. `/하자보완`: 푼 압축을 빼는 규칙이 `자료_목록`
+    (8cedbb4)과 `우리_자료`(이름만 견줌)에 따로 있고 상대증거·참고자료에는 없어, GGM 변호인의견서 참고자료에 같은 이름 폴더로 푼 포렌식
+    목록 압축 4개를 서면 관문이 '기록 없음'으로 막았다."""
+    return 푼_압축(p) or 겹친_압축(p)
+
+
 def 읽을_파일(p: Path) -> bool:
     """전 면 읽기 대상으로 셀 파일인가. 알려진 형식(DOCS)과, 시스템·작업 파일이 아닌 그 밖의 형식이다. 그 밖의 형식은 같은 이름의
     PDF 등이나 폴더(`갈음`)가 있으면 그것을 읽으므로 세지 않는다."""
@@ -288,9 +325,11 @@ def 서면_호증(사건: Path) -> dict:
 
 
 def 서면류_파일(p: Path, 뿌리_: Path) -> bool:
-    """읽을 문서인가. 임시 파일과 작업·백업·원고별 정리 폴더의 것은 뺀다(노동위원회_기록의 우리 서면도 읽는다)."""
+    """읽을 문서인가. 임시 파일과 작업·백업·원고별 정리 폴더의 것, 다른 파일로 같은 글을 읽는 압축(`읽지_않을_압축`)은 뺀다
+    (노동위원회_기록의 우리 서면도 읽는다)."""
     return (p.is_file() and 읽을_파일(p)
-            and not any(x in ('작업', '백업', '원고별 정리') for x in p.relative_to(뿌리_).parts[:-1]))
+            and not any(x in ('작업', '백업', '원고별 정리') for x in p.relative_to(뿌리_).parts[:-1])
+            and not 읽지_않을_압축(p))
 
 
 def 서면_자료(사건: Path, 호증: dict) -> dict:
@@ -370,7 +409,7 @@ def 우리_자료(사건: Path, 라운드: Path) -> list:
         쪽, _ = _es.분류(p.name, 목록부호, 우리표)
         if 쪽 in (_es.우리, _es.참고) or (쪽 == _es.상대 and p.parent == d and not 상대없음):
             continue
-        if (p.suffix.lower() == '.zip' and (p.parent / p.stem).is_dir()) or re.search(r'호증\s*(?:~|내지)', nfc(p.name)):
+        if re.search(r'호증\s*(?:~|내지)', nfc(p.name)):      # 푼 압축은 서면류_파일 이 뺀다(읽지_않을_압축)
             continue
         out.append(p)
     return out
@@ -404,7 +443,7 @@ def 자료_목록(사건: Path, 폴더들: list) -> dict:
     for d in 폴더들:
         d = Path(d)
         for p in sorted(d.rglob('*')):
-            if not p.is_file() or not 읽을_파일(p) or 산출물_이름.search(p.name) or 푼_압축(p):
+            if not p.is_file() or not 읽을_파일(p) or 산출물_이름.search(p.name) or 읽지_않을_압축(p):
                 continue
             if any(우리_폴더.search(x) for x in p.relative_to(d).parts[:-1]) and p.relative_to(d).parts[:-1] != ('작업', '인용판결_PDF'):
                 continue      # 우리 작업 폴더는 빼되, 검토의견에 인용한 판결문(작업/인용판결_PDF)은 전문을 읽는다

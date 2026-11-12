@@ -51,6 +51,8 @@ docx_merge.py — 서면초안.md 를 서면_프레임.docx 의 "다음" 이후�
   4. docx_normalize: 원문자 글꼴 통일
   5. 세 점검(--check)을 다시 돌려 출력하고, 남은 것이 있으면 종료 코드 1을 낸다.
      초안에 ⑯~⑳ 이 있으면 본문 글꼴에 그 글자가 없어 4 로 고쳐지지 않고 원문자 점검에 남는다.
+     이어 글이 든 표 칸이 쪽 오른쪽 여백 밖이나 종이 밖에 놓였는지 본다(docx_tables. 2026. 11. 13. 템플릿 프레임 2면 사건 표의
+     빈 셋째 칸 때문에 사건번호·당사자가 쪽 밖으로 잘린 이승민 준비서면(2)을 이 점검이 지나보냈다).
   1~5 는 출력 폴더의 임시 파일에서 하고, 모두 끝난 뒤에만 출력 파일 자리로 옮긴다. 중간에 실패하면
   출력 파일은 그대로 두고 임시 파일을 지운다.
   출력 파일이 이미 있으면 <출력>.bak_merge_<연월일_시분초>.docx 로 보관한 뒤 바꾼다. 같은 이름의
@@ -63,7 +65,7 @@ from docx.text.paragraph import Paragraph
 from docx.oxml.ns import qn
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import docx_restyle, docx_footnotes, docx_normalize  # noqa: E402
+import docx_restyle, docx_footnotes, docx_normalize, docx_tables  # noqa: E402
 
 CAPTION_RE = re.compile(r"^\[(?:(?:갑|을가|을나|을|사|노|증)\s*제\d+호증[^\]]*|[^\]]*(?:준비서면|참고서면|답변서|이유서|판결|논문)[^\]]*)\]$")
 KEY_RE = re.compile(r"^\[(갑|을가|을나|을|사|노|증)\s*제(\d+)호증(?:의\s*(\d+))?")
@@ -251,7 +253,7 @@ def _final_check(path):
     print("원문자 글꼴 비정합 " + docx_normalize.count_text(bad, detail))
     if detail['no_glyph']:
         print(docx_normalize.glyph_note(detail))
-    return left + (1 if bad else 0)
+    return left + (1 if bad else 0) + docx_tables.check(path)
 
 
 def merge(frame, md, out):

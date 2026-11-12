@@ -68,7 +68,7 @@ import unicodedata
 import zipfile
 from pathlib import Path
 
-import fitz
+import pymupdf as fitz      # 'fitz' 이름은 PyMuPDF 가 없앨 예정이라 경고를 낸다(다른 스크립트처럼 pymupdf 로 부른다. 2026. 11. 13.)
 
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -1086,7 +1086,8 @@ def 확인(설정경로: Path) -> int:
             # 면 높이가 정수 pt 가 아니어서 생기는 1화소 미만 어긋남(흑백 글자 그림에서 화소 차이가 크게 나옴)에는 둔하도록 칸 평균끼리 뺀다.
             # 2026. 11. 3. OES 정상 면 최대 6, 회전을 잘못 놓은 시험 면 36.
             칸크기 = (max(1, w // 12), max(1, h // 12))
-            칸 = max(ImageChops.difference(a.crop((0, 0, w, h)).resize(칸크기, resample=2), b.crop((0, 0, w, h)).resize(칸크기, resample=2)).getdata())
+            # 흑백(L) 그림의 가장 큰 칸 차이. getdata() 는 Pillow 14(2027. 10.)에서 없어지므로 getextrema() 의 최댓값으로 잰다(2026. 11. 13.)
+            칸 = ImageChops.difference(a.crop((0, 0, w, h)).resize(칸크기, resample=2), b.crop((0, 0, w, h)).resize(칸크기, resample=2)).getextrema()[1]
             최대평균 = max(최대평균, 평균)
             최대칸 = max(최대칸, 칸)
             if 칸 > (15 if 손실 else 10) or (손실 and 평균 > 6) or (not 손실 and 큰차 > 0.01):

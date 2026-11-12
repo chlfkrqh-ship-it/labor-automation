@@ -1497,6 +1497,43 @@ class WholeCaseReadingTest(unittest.TestCase):
         self.assertIn('호증(자료) 4건 모두 채워졌고', out)
         self.assertNotIn('a.zip', out)
 
+    def test_zip_read_through_other_files_is_not_counted_in_briefs_or_reviews(self):
+        """서면의 상대증거·참고자료에서 같은 이름 폴더로 푼 압축과, 안의 파일이 모두 옆 파일과 같은 압축은 세지 않는다. 검토의견 자료도 같다.
+        2026. 11. 13. `/하자보완`: 푼 압축을 빼는 규칙이 `자료_목록`·`우리_자료` 에만 있어 GGM 변호인의견서 참고자료의 포렌식 목록 압축 4개를
+        서면 관문이 '기록 없음'으로 막았고, 이케아 이월 연차 검토는 인용 판결 PDF 를 묶은 압축을 따로 셌다."""
+        case = self.root / '4_서면작성' / '사건' / 'GGM_정직'
+        r1 = case / '라운드1'
+        참고 = r1 / '참고자료'
+        for d in (r1 / '우리증거', r1 / '상대증거', 참고 / '포렌식' / '양동걸', 참고 / '판결'):
+            d.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(참고 / '포렌식' / '양동걸.zip', 'w') as z:
+            z.writestr('목록.txt', '목록 글')
+        (참고 / '포렌식' / '양동걸' / '목록.txt').write_text('목록 글', encoding='utf-8')          # 같은 이름 폴더에 푼 것
+        make_pdf(참고 / '판결' / '대법원 2020다1.pdf', [글 + '판결1'])
+        make_pdf(참고 / '판결' / '대법원 2021다2.pdf', [글 + '판결2'])
+        with zipfile.ZipFile(참고 / '판결' / '인용판결.zip', 'w') as z:                          # 옆 PDF 둘을 묶은 것
+            for n in ('대법원 2020다1.pdf', '대법원 2021다2.pdf'):
+                z.write(참고 / '판결' / n, n)
+        with zipfile.ZipFile(참고 / '판결' / '다른 묶음.zip', 'w') as z:                         # 하나가 옆 파일과 다르다
+            z.write(참고 / '판결' / '대법원 2020다1.pdf', '대법원 2020다1.pdf')
+            z.writestr('새 판결.pdf', b'%PDF-1.4 other')
+        (참고 / '메일' / '작업').mkdir(parents=True)
+        (참고 / '메일' / '작업' / '본문.txt').write_text('메일 본문', encoding='utf-8')         # 같은 파일이 읽지 않는 작업 폴더에만 있다
+        with zipfile.ZipFile(참고 / '메일' / '메일 묶음.zip', 'w') as z:
+            z.writestr('본문.txt', '메일 본문'.encode('utf-8'))
+        키 = sorted(k for k in er.서면_자료(case, er.서면_호증(case)) if ' 참고 ' in k)
+        self.assertEqual(키, ['라운드1 참고 다른 묶음.zip', '라운드1 참고 대법원 2020다1.pdf', '라운드1 참고 대법원 2021다2.pdf',
+                             '라운드1 참고 메일 묶음.zip', '라운드1 참고 목록.txt'])
+        검토 = self.root / '1_검토의견' / '사건' / '이케아_연차'
+        판결 = 검토 / '작업' / '인용판결_PDF'
+        판결.mkdir(parents=True)
+        for n in ('대법원 2020다1.pdf', '대법원 2021다2.pdf'):
+            (판결 / f'각주_{n}').write_bytes((참고 / '판결' / n).read_bytes())
+        with zipfile.ZipFile(판결 / '인용판결_pdf.zip', 'w') as z:
+            for n in ('각주_대법원 2020다1.pdf', '각주_대법원 2021다2.pdf'):
+                z.write(판결 / n, n)
+        self.assertEqual(sorted(er.자료_목록(검토, [검토])), ['각주_대법원 2020다1.pdf', '각주_대법원 2021다2.pdf'])
+
     def test_split_drafts_with_own_numbering_read_every_exhibit(self):
         """서면마다 호증 번호를 따로 매긴 라운드는 같은 번호의 두 서면 호증과 앞 절차의 같은 번호 원자료를 모두 읽는다(2026. 11. 8. `/하자보완`:
         한 번호에 한 파일만 두어 상병별로 나눈 심사청구의 제출 호증 41건 가운데 31건이 읽을 대상에서 빠졌다)."""
