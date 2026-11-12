@@ -295,20 +295,21 @@ def 이_기록(폴더: Path, sid: str | None = None) -> Path | None:
 
 
 def 재검토(폴더: Path, sid: str | None = None) -> tuple:
-    """(세션 기록, 응답들). `전면재검토` 명령이 낸 응답(기록 줄의 attributionSkill)이 이어진 마지막 묶음이다. 한 세션에서 여러 번
-    불렀으면 마지막에 부른 것만 본다. 명령을 부른 응답은 명령을 읽기 전의 모델이 낸 것이어서 묶음에 들지 않는다."""
+    """(세션 기록, 응답들, 스스로 불렀는가). 응답들은 `전면재검토` 명령이 낸 응답(기록 줄의 attributionSkill)이 이어진 마지막 묶음이다.
+    한 세션에서 여러 번 불렀으면 마지막 것만 본다. 묶음 바로 앞 응답이 Skill 도구로 그 명령을 불렀으면 세션이 스스로 부른 것이다.
+    그러면 모델이 바뀌지 않는다(2026. 11. 12. GGM 세션 9796777a: 담당자가 친 명령만 그 차례의 요청 모델을 바꾼다)."""
     f = 이_기록(폴더, sid)
     if f is None:
-        return None, []
-    묶음 = []
-    for x in reversed(읽기(f)['응답']):
-        if x['모델'] == '<synthetic>':             # 연결 오류 때 앱이 넣는 빈 응답은 묶음을 끊지 않는다
-            continue
-        if 재검토_명령 in x.get('명령', ''):
-            묶음.append(x)
-        elif 묶음:
-            break
-    return f, 묶음[::-1]
+        return None, [], False
+    응답 = [x for x in 읽기(f)['응답'] if x['모델'] != '<synthetic>']     # 연결 오류 때 앱이 넣는 빈 응답은 묶음을 끊지 않는다
+    끝 = next((i for i in range(len(응답) - 1, -1, -1) if 재검토_명령 in 응답[i].get('명령', '')), None)
+    if 끝 is None:
+        return f, [], False
+    처음 = 끝
+    while 처음 > 0 and 재검토_명령 in 응답[처음 - 1].get('명령', ''):
+        처음 -= 1
+    스스로 = 처음 > 0 and any(n == 'Skill' and 재검토_명령 in 입력 for n, 입력 in 응답[처음 - 1]['도구'])
+    return f, 응답[처음:끝 + 1], 스스로
 
 
 def 이세션(폴더: Path, sid: str | None = None) -> tuple:
@@ -341,14 +342,16 @@ def main(argv=None) -> int:
               + ('맞음' if 맞음 else f'맞지 않음(하자보완은 {모델}·{노력}, `.claude/commands/하자보완.md`)'))
         return 0 if 맞음 else 1
     if a.재검토:
-        f, 묶음 = 재검토(폴더)
+        f, 묶음, 스스로 = 재검토(폴더)
         if not 묶음:
-            print(f"세션 {f.stem[:8] if f else '없음'} · 전면재검토 명령이 낸 응답이 기록에 없다 — 명령을 Skill 도구로 불렀는지 본다"
+            print(f"세션 {f.stem[:8] if f else '없음'} · 전면재검토 명령이 낸 응답이 기록에 없다 — 담당자가 이 창에 `/전면재검토 …` 를 쳤는지 본다"
                   "(`.claude/commands/전면재검토.md`)")
             return 1
         모델들 = sorted({x['모델'] for x in 묶음 if x['모델']})
         노력들 = sorted({str(x['노력']) for x in 묶음 if x['노력']})
-        틀린것 = ([f'모델이 {재검토_모델} 가 아니다(앱이 모델을 바꾸지 않음)'] if 모델들 != [재검토_모델] else []) \
+        왜 = ('세션이 Skill 도구로 스스로 불러 모델이 바뀌지 않음. 담당자가 이 창에 `/전면재검토 …` 를 쳐야 바뀐다' if 스스로
+             else '앱이 모델을 바꾸지 않음')
+        틀린것 = ([f'모델이 {재검토_모델} 가 아니다({왜})'] if 모델들 != [재검토_모델] else []) \
             + ([f"노력이 {재검토_노력} 가 아니다(`.claude/settings.json` 의 modelSettings 상한이 먹지 않음)"] if 노력들 != [재검토_노력] else [])
         print(f"세션 {f.stem[:8]} · 전면 재검토 응답 {len(묶음)}회 · 모델 {', '.join(모델들) or '모름'} · 노력 {', '.join(노력들) or '모름'} — "
               + ('맞음' if not 틀린것 else f"맞지 않음({'; '.join(틀린것)}. `.claude/commands/전면재검토.md` 1.)"))
