@@ -25,8 +25,10 @@
    담당 노무사 "발췌그림때문에 공백이 너무 남는 문제는 조금 해소 부탁").
  - 바꾸는 것은 그림의 표시 크기(wp:extent, a:ext)와 1단계의 keepNext 뿐이다. 글자·그림 파일·캡션은 건드리지 않고 변경 내용
    추적에도 남지 않는다. 검토본(변경 추적본)에 돌리면 클린본은 그 검토본에서 다시 만든다(목차 쪽 번호도 그때 맞춘다).
- - OneDrive 밖(%TEMP%/figure_fit)의 사본에서 고치고 확인한 뒤에 원래 자리에 쓴다. 고치기 전 파일은 docx_merge.py 처럼
+ - OneDrive 밖(%TEMP%/figure_fit/run_…)의 사본에서 고치고 확인한 뒤에 원래 자리에 쓴다. 고치기 전 파일은 docx_merge.py 처럼
    '{이름}.bak_그림맞춤_{일시}.docx' 로 같은 폴더(--보관 을 주면 그 폴더)에 남긴다. Word 는 이 스크립트가 띄운 것만 닫는다.
+ - 사본 폴더는 실행마다 따로 만든다. 2026. 11. 13. 두 세션이 같은 때에 돌리자 같은 %TEMP%/figure_fit/work.docx 를 서로 덮어
+   한국북부발전 변호인 의견서(5) 병합본에 GGM 2026누5742 서면이 저장되었다(직전 보관본으로 되돌림).
 
 쓰는 법:
     python -B 4_서면작성/scripts/figure_fit.py "<서면.docx>"             # 고친다
@@ -431,8 +433,9 @@ def main(argv=None) -> int:
                 pass
         except PermissionError:
             raise SystemExit('파일이 Word 에서 열려 있어 고칠 수 없다. 닫고 다시 돌린다: %s' % docx)
-    작업 = os.path.join(tempfile.gettempdir(), 'figure_fit')
-    os.makedirs(작업, exist_ok=True)
+    기준 = os.path.join(tempfile.gettempdir(), 'figure_fit')
+    os.makedirs(기준, exist_ok=True)
+    작업 = tempfile.mkdtemp(prefix='run_', dir=기준)      # 실행마다 따로(같은 때에 도는 다른 세션과 work.docx 가 섞이지 않게)
     일본 = os.path.join(작업, 'work.docx')
     shutil.copyfile(docx, 일본)
     app = 워드열기()
@@ -443,6 +446,7 @@ def main(argv=None) -> int:
             app.Quit()
     if not 바뀜:
         print('바꾼 것이 없다')
+        shutil.rmtree(작업, ignore_errors=True)
         return 0
     if a.확인:
         print('확인만 하였다(원래 파일은 그대로). 해 본 결과: %s' % 일본)
@@ -450,6 +454,7 @@ def main(argv=None) -> int:
     bak = 보관이름(docx, a.보관)
     shutil.copyfile(docx, bak)
     shutil.copyfile(일본, docx)
+    shutil.rmtree(작업, ignore_errors=True)
     print('저장: %s\n고치기 전: %s' % (docx, bak))
     return 0
 
