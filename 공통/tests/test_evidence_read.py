@@ -1504,11 +1504,11 @@ class WholeCaseReadingTest(unittest.TestCase):
         case = self.root / '4_서면작성' / '사건' / 'GGM_정직'
         r1 = case / '라운드1'
         참고 = r1 / '참고자료'
-        for d in (r1 / '우리증거', r1 / '상대증거', 참고 / '포렌식' / '양동걸', 참고 / '판결'):
+        for d in (r1 / '우리증거', r1 / '상대증거', 참고 / '포렌식' / '이○○', 참고 / '판결'):
             d.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(참고 / '포렌식' / '양동걸.zip', 'w') as z:
+        with zipfile.ZipFile(참고 / '포렌식' / '이○○.zip', 'w') as z:
             z.writestr('목록.txt', '목록 글')
-        (참고 / '포렌식' / '양동걸' / '목록.txt').write_text('목록 글', encoding='utf-8')          # 같은 이름 폴더에 푼 것
+        (참고 / '포렌식' / '이○○' / '목록.txt').write_text('목록 글', encoding='utf-8')          # 같은 이름 폴더에 푼 것
         make_pdf(참고 / '판결' / '대법원 2020다1.pdf', [글 + '판결1'])
         make_pdf(참고 / '판결' / '대법원 2021다2.pdf', [글 + '판결2'])
         with zipfile.ZipFile(참고 / '판결' / '인용판결.zip', 'w') as z:                          # 옆 PDF 둘을 묶은 것
