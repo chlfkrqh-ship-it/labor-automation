@@ -641,6 +641,86 @@ class ClosingBlockTests(CaseDir):
                 self.assertEqual(etree.tostring(d.element.body), before)
 
 
+class EvidenceItemTests(CaseDir):
+    """입증방법 호증 줄이 번호 없는 본문 문단으로 조용히 들어가지 않는다. 줄을 들여 쓰지 않았거나 프레임에 항목 틀이
+    없으면 멈춘다(2026. 11. 13. 나승배 준비서면(2): 프레임의 틀 줄을 지우고 초안 줄도 들여 쓰지 않아 번호가 빠지고
+    서명 블록이 다음 면으로 밀렸다)."""
+
+    BODY = '1. 이 사건의 경위\n\n피고는 원고를 징계하였습니다.\n\n2. 결론\n\n원고의 청구는 기각되어야 합니다.\n'
+    BOTTOM = '\n---\n① [확인 필요 사항]\n- 없음\n'
+
+    def draft(self, items):
+        return self.BODY + '\n입 증 방 법\n\n' + items + self.BOTTOM
+
+    def stops(self, draft, frame_ready=False):
+        if not frame_ready:
+            make_frame(self.frame)
+        self.md.write_text(draft, encoding='utf-8')
+        with self.assertRaises(SystemExit) as cm:
+            run(docx_merge.merge, str(self.frame), str(self.md), str(self.out))
+        self.assertFalse(self.out.exists())
+        self.assertEqual(self.leftovers(), [])
+        return str(cm.exception.code)
+
+    def drop_item_template(self):
+        make_frame(self.frame)
+        d = docx.Document(str(self.frame))
+        for p in d.paragraphs:
+            if p.style.name == '(가)번호매기기_내용' and '호증' in p.text:
+                p._p.getparent().remove(p._p)
+        d.save(str(self.frame))
+
+    def items(self):
+        return [p.text for p in docx.Document(str(self.out)).paragraphs if p.style.name == '(가)번호매기기_내용']
+
+    def test_unindented_item_stops(self):
+        for line in ('을나 제1호증    징계위원회 회의록\n', '을나 제2호증의1     회의록\n', '\t을나 제1호증\t회의록\n',
+                     '  을나 제1호증    회의록\n', '을나 제1호증\n'):
+            with self.subTest(line=line):
+                msg = self.stops(self.draft('    을나 제3호증  인사위원회 규정\n' + line))
+                self.assertIn('4칸', msg)
+                self.assertNotIn('항목 틀', msg)
+
+    def test_numbered_or_bulleted_item_stops(self):
+        for line in ('1. 을나 제23호증의1     봉사단 결과보고\n', '    1. 을나 제1호증  회의록\n', '- 사 제71호증     창고 이용료 비교표\n'):
+            with self.subTest(line=line):
+                self.assertIn('번호·글머리', self.stops(self.draft(line)))
+
+    def test_single_space_between_number_and_name_stops(self):
+        self.assertIn('두 칸 이상', self.stops(self.draft('    을나 제1호증 징계위원회 회의록\n')))
+
+    def test_frame_without_item_template_stops(self):
+        self.drop_item_template()
+        msg = self.stops(self.draft('    을나 제1호증  징계위원회 회의록\n'), frame_ready=True)
+        self.assertIn('항목 틀', msg)
+
+    def test_frame_without_item_template_is_fine_without_new_evidence(self):
+        self.drop_item_template()
+        self.md.write_text(self.BODY + '\n입 증 방 법\n' + self.BOTTOM, encoding='utf-8')
+        code, log = run(docx_merge.merge, str(self.frame), str(self.md), str(self.out))
+        self.assertEqual(code, 0, log)
+
+    def test_items_with_reference_lines_and_sentence_merge(self):
+        """항목 뒤의 문장('… 이미 낸 것과 같습니다.')·'참 고 자 료'·'참고자료 N'·'※' 줄은 본문 문단으로 두고 멈추지 않는다
+        (하나기술 변호인의견서, 소완영·진영균 서면의 모양)."""
+        items = ('    을나 제1호증     징계위원회 회의록\n    을나 제2호증의 1     회의록\n    을나 제3호증\n'
+                 '을나 제4호증 내지 을나 제9호증은 이미 낸 것과 같습니다.\n※ 갑 제1호증 내지 갑 제62호증은 기존에 제출한 바와 같습니다.\n'
+                 '\n참 고 자 료\n\n참고자료 1  대법원 2020. 1. 1. 선고 2019다1 판결\n')
+        code, log = self.merge(self.draft(items))
+        self.assertEqual(code, 0, log)
+        self.assertEqual(self.items(), ['을나 제1호증\t\t징계위원회 회의록', '을나 제2호증의 1\t\t회의록', '을나 제3호증\t\t'])
+        texts = [p.text for p in docx.Document(str(self.out)).paragraphs]
+        for s in ('을나 제4호증 내지 을나 제9호증은 이미 낸 것과 같습니다.', '참 고 자 료',
+                  '참고자료 1  대법원 2020. 1. 1. 선고 2019다1 판결'):
+            self.assertIn(s, texts)
+
+    def test_sentence_starting_with_exhibit_in_body_is_not_checked(self):
+        """입증방법 위 본문에 호증으로 시작하는 문장·줄이 있어도 멈추지 않는다."""
+        body = self.BODY.replace('피고는 원고를 징계하였습니다.', '을나 제1호증    회의록에 의하면 피고는 원고를 징계하였습니다.')
+        code, log = self.merge(body + '\n입 증 방 법\n\n    을나 제1호증  회의록\n' + self.BOTTOM)
+        self.assertEqual(code, 0, log)
+
+
 class DraftBoundaryTests(CaseDir):
     """본문과 하단 목록의 경계('---' 대시 3개 이상)와 병합 전 점검."""
 
