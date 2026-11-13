@@ -170,6 +170,29 @@ class CiteCheckTest(unittest.TestCase):
         res = cite_check.check(table, [self.p("산출물.md")])
         self.assertIn("산출물의 2003다8862 가 대조표에 없다", "\n".join(res["내용"]))
 
+    def test_bottom_number_without_a_row_names_what_to_do(self):
+        """2026. 11. 14. `/하자보완`: 11. 13. GGM 항소심 두 서면이 유관 사건을 하단 ①에 적으며 넣은 관련 사건·사무소 다른 사건 번호에 줄이 없었다.
+        하단 목록에만 나오는 번호는 할 일('참고(하단 ②)'·'참고(이 사건)')을 함께 알리고, 넘길 DOCX 로 돌린 관문은 짝 초안의 하단 목록을
+        bottom_unlisted 로 본다(DOCX 에는 하단 목록이 없다)."""
+        os.makedirs(self.p("사건/라운드1/작업"), exist_ok=True)
+        table = os.path.join(self.p("사건/라운드1/작업"), "인용대조표.md")
+        own = "| 참고(이 사건) | 서울고등법원 2026누1001 | | | | | | | |\n"
+        with open(table, "w", encoding="utf-8") as f:
+            f.write(HEAD + ROW + own)
+        body = TARGET.split("\n\n## 보완 메모")[0]
+        self.write("산출물.md", body + "\n\n---\n\n① 1. 같은 의뢰인의 유관 사건은 2026누1002, 2026누1001(이 사건)입니다.\n")
+        res = cite_check.check(table, [self.p("산출물.md")])
+        글 = "\n".join(res["내용"])
+        self.assertEqual(res["불일치"], 1, 글)
+        self.assertIn("산출물의 2026누1002 가 대조표에 없다", 글)
+        self.assertIn("'참고(이 사건)' 줄에 사건 표시만", 글)
+        self.assertEqual(cite_check.bottom_unlisted(table, self.p("산출물.md")), ["2026누1002"])
+        self.write("산출물.md", "2026누1002 를 본문에 적었다. " + body)      # 본문의 번호에는 하단 안내를 붙이지 않는다
+        글 = "\n".join(cite_check.check(table, [self.p("산출물.md")])["내용"])
+        self.assertIn("산출물의 2026누1002 가 대조표에 없다", 글)
+        self.assertNotIn("하단 목록의 번호이다", 글)
+        self.assertEqual(cite_check.bottom_unlisted(table, self.p("산출물.md")), [])
+
     def test_each_place_of_a_case_mark_matches_the_table(self):
         """2026. 11. 9. `/하자보완`: 3)은 산출물 어딘가에 그 날짜가 있는지만 보아, 같은 판결을 두 번 적은 산출물의 둘째 자리 날짜가 틀려도
         지나갔고 법원 이름은 어디서도 맞대지 않았다(실제 산출물 사본으로 날짜 302곳 가운데 122곳, 법원 301곳 가운데 246곳이 지나감)."""

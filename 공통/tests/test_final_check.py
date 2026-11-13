@@ -238,6 +238,27 @@ class BriefGateTest(unittest.TestCase):
         os.utime(docx, (time.time() + 100, time.time() + 100))
         self.assertEqual(status(fc.서면(self.case, 대상=docx), 'DOCX'), '통과')
 
+    def test_docx_gate_checks_the_draft_bottom_numbers_against_the_table(self):
+        """2026. 11. 14. `/하자보완`: 넘기기 직전의 관문(`--대상 docx`, `/서면` 9-2)은 DOCX 에 하단 목록이 없어 8-1 뒤 하단에 보탠 번호를
+        대조표와 맞대지 않았다. 11. 13. GGM 항소심 두 서면이 하단 ①에 적은 유관 사건 번호를 밤 관문(대상 초안 MD)만 막았다."""
+        self.complete()
+        표 = self.r / '작업' / '인용대조표.md'
+        머리 = '| 번호 | 사건 표시 | 본문 문장 | 원문 문장 | 자리 | 주문·결론 | 다른 사유·전제 | 확정 | 원문 |\n|---|---|---|---|---|---|---|---|---|\n'
+        표.write_text(머리 + '| 참고(이 사건) | 서울고등법원 2026누1001 | | | | | | | |\n', encoding='utf-8')
+        self.draft.write_text(self.draft.read_text(encoding='utf-8')
+                              + '\n---\n\n① 1. 같은 의뢰인의 유관 사건은 서울고법 2026누1002, 2026누1001(이 사건)입니다.\n', encoding='utf-8')
+        docx = self.r / '출력' / '(GGM) 답변서_초안.docx'
+        docx.write_bytes(b'PK')
+        later(docx)
+        res = fc.서면(self.case, 대상=docx)
+        self.assertEqual(status(res, '판례 대조(하단 목록)'), '막힘', res.줄)
+        말 = next(m for n, _, m in res.줄 if n == '판례 대조(하단 목록)')
+        self.assertIn('2026누1002', 말)
+        self.assertNotIn('2026누1001', 말)
+        표.write_text(표.read_text(encoding='utf-8') + '| 참고(이 사건) | 서울고등법원 2026누1002 | | | | | | | |\n', encoding='utf-8')
+        self.assertEqual(status(fc.서면(self.case, 대상=docx), '판례 대조(하단 목록)'), '통과')
+        self.assertNotIn('판례 대조(하단 목록)', [n for n, _, _ in fc.서면(self.case).줄])     # 초안 MD 대상은 cite_check 가 하단까지 본다
+
     def test_docx_table_cell_off_the_page_blocks(self):
         """글이 든 표 칸이 오른쪽 여백 밖에서 시작하면 막는다. 2026. 11. 12. 템플릿 프레임 2면 사건 표의 빈 셋째 칸(표 너비 17949)에
         값을 넣은 이승민 준비서면(2)의 사건번호·당사자가 쪽 밖으로 잘렸는데, DOCX 는 병합 시각만 보아 지나갔다(11. 13. `/하자보완`)."""
@@ -1314,6 +1335,30 @@ class OpinionGateTest(unittest.TestCase):
         self.reply.write_text('1. 검토 요지\n\n개정의 목적은 바람직해 보입니다.\n\n## 보완 메모\n\n`작업/검색기록.md` 에 적었다.\n', encoding='utf-8')
         os.utime(self.reply, (time.time() + 10, time.time() + 10))
         self.assertEqual(status(fc.검토의견(self.case), '문체(낙관 표현·적다)'), '통과')
+
+    def test_banned_phrases_are_caught_in_their_inflected_forms(self):
+        """2026. 11. 14. `/하자보완`(표본): 글자 조각('유력하', '승소 가능성이 높')으로 맞대어 합니다체 '유력합니다'·'유력한 것으로 보입니다'와
+        '인정될 가능성이 매우 높습니다'·'승소할 가능성이 높습니다'·'다툴 실익이 큽니다'를 지나보냈다. 판례 법리의 '상대적으로 유력한 원인',
+        따옴표로 옮긴 담당자 질의, 상대방의 대응을 내다본 말은 막지 않는다."""
+        self.docx.unlink()
+        self.reply.write_text('1. 검토 요지\n\n구제신청은 받아들여질 것이 유력합니다.\n', encoding='utf-8')
+        os.utime(self.reply, (time.time() + 10, time.time() + 10))
+        res = fc.검토의견(self.case)
+        self.assertEqual(status(res, '문체(낙관 표현·적다)'), '막힘')
+        self.assertIn('유력합', next(m for n, s, m in res.줄 if n == '문체(낙관 표현·적다)'))
+        막을 = ['유력합니다', '유력해 보입니다', '유력한 것으로 보입니다', '유력하다', '유력시됩니다',
+              '인정될 가능성이 높습니다', '인정될 가능성이 매우 높습니다', '인정될 가능성이 큽니다', '인정받을 가능성이 상당히 높아 보입니다',
+              '승소할 가능성이 높습니다', '승소 가능성이 높습니다', '이길 가능성이 높습니다', '인용 가능성이 높아 보입니다',
+              '받아들여질 가능성이 충분합니다', '구제될 개연성이 큰 것으로 보입니다',
+              '다툴 실익이 충분합니다', '다툴 실익이 충분해 보입니다', '다툴 실익이 큽니다', '다툴 실익이 상당합니다']
+        둘 = ['업무가 질병의 상대적으로 유력한 원인이 되었는지를 봅니다', '확정된 형사판결은 유력한 증거자료가 됩니다',
+             '담당자 질의("이 자료는 유력한 증거자료가 아닌지?")에 따라 붙임을 되살렸습니다',
+             '“인정될 가능성이 높다”는 신청인의 주장', '상대방이 이 점을 다툴 가능성이 높습니다', '결과를 단정하기 어렵습니다',
+             '인정될 여지가 있습니다', '유력 일간지 보도']
+        for s in 막을:
+            self.assertTrue(fc.문체_걸림(s), s)
+        for s in 둘:
+            self.assertEqual(fc.문체_걸림(s), [], s)
 
     def test_highest_revision_is_the_target_even_if_an_older_one_was_touched_later(self):
         """_Rev_1 을 만든 뒤 _초안 이나 회신초안의 수정 시각이 뒤로 가도 맞댈 판은 _Rev_1 이다(2026. 11. 2. 첫 밤 점검)."""

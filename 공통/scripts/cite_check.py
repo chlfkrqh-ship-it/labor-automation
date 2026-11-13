@@ -97,7 +97,8 @@ def read_target(path):
                     x = z.read(part).decode("utf-8")
                     out.append(html.unescape("".join(re.findall(r"<w:t(?: [^>]*)?>([^<]*)</w:t>", x))))
         return "\n".join(out)
-    t = open(path, encoding="utf-8").read()
+    with open(path, encoding="utf-8") as f:
+        t = f.read()
     i = t.find("## 보완 메모")
     return t if i < 0 else t[:i]
 
@@ -105,7 +106,9 @@ def read_target(path):
 def table_rows(path):
     """대조표의 줄을 {칸 이름: 글} 로 돌려준다."""
     rows, head = [], None
-    for line in open(path, encoding="utf-8").read().splitlines():
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    for line in text.splitlines():
         if not line.strip().startswith("|"):
             head = None if not line.strip() else head
             continue
@@ -164,6 +167,34 @@ def is_body(row, table=None):
     return not (re.match(r"[①②③]", no) and (table is None or brief_table(table)))
 
 
+def known_numbers(rows, table_path):
+    """(본문 번호를 받치는 번호, 하단 목록 줄의 번호, 뺀 줄의 번호). 본문의 번호는 본문 인용 줄이나 참고 줄(가리킴·다른 심급)이 받치고,
+    하단 목록의 번호는 셋 모두가 받친다(4))."""
+    def nums(rs):
+        out = set()
+        for r in rs:
+            out |= cases(" ".join(r.values()))
+        return out
+    ref = [r for r in rows if "참고" in r.get("번호", "") and "하단" not in r.get("번호", "") and not is_gone(r)]
+    return (nums([r for r in rows if is_body(r, table_path)] + ref),
+            nums([r for r in rows if not is_gone(r) and not is_body(r, table_path)]),
+            nums([r for r in rows if is_gone(r)]))
+
+
+# 하단 세 목록에만 나오는 번호에 줄이 없을 때 할 일(`/서면` 8-1). 2026. 11. 14. `/하자보완`: 11. 13. GGM 항소심 두 서면이 같은 의뢰인의
+# 유관 사건(`공통/사건상태.md` '시작')을 하단 ①에 적으며 이 사건·관련 사건·사무소의 다른 사건 번호를 넣었는데 그 줄을 두지 않았다
+BOTTOM_HINT = ("하단 목록의 번호이다. 판결의 판단을 옮겼으면 번호 칸을 '참고(하단 ②)'처럼 적은 줄을 원문과 함께 두고, "
+               "이 사건·관련 사건·유관 사건·사무소의 다른 사건을 가리키기만 하면 '참고(이 사건)' 줄에 사건 표시만 둔다")
+
+
+def bottom_unlisted(table_path, md_path):
+    """서면 초안 MD 의 하단 세 목록('---' 아래)에 나오는데 대조표에 받치는 줄이 없는 사건번호. 관문을 넘길 DOCX 로 돌리면 DOCX 에는
+    하단 목록이 없어 4)가 하단을 보지 않는다. 그때 짝 초안의 하단 목록을 따로 본다(밤 관문은 초안 MD 를 대상으로 하여 4)가 본다)."""
+    body_known, bottom_known, gone_known = known_numbers(table_rows(table_path), table_path)
+    _, bottom = body_and_bottom(md_path, read_target(md_path))
+    return sorted(cases(bottom) - body_known - bottom_known - gone_known)
+
+
 def body_and_bottom(path, text):
     """산출물의 본문과 하단 목록. 서면 MD 는 첫 줄이 아닌 '---' 줄 아래가 하단 세 목록이고(`4_서면작성/CLAUDE.md`), DOCX 에는 하단 목록이 없다."""
     if path.lower().endswith(".docx"):
@@ -207,7 +238,8 @@ def source_text(cell, table_path, key):
     for p in source_files(cell, table_path):
         if p.lower().endswith(".pdf"):      # PDF 글은 cite_pdf_check.py 가 본다
             continue
-        t = open(p, encoding="utf-8", errors="replace").read()
+        with open(p, encoding="utf-8", errors="replace") as f:
+            t = f.read()
         parts = re.split(r"\n(?=## \[)", t)
         if len(parts) > 2:      # 여러 건을 묶은 법제처 본문 파일
             hit = [s for s in parts if key and key in norm(s[:400])] or [s for s in parts if key and key in norm(s)]
@@ -277,19 +309,11 @@ def check(table_path, targets):
     #    하단 목록 줄과 뺀 줄만 있는 번호가 본문에 있으면 그 문장은 3)을 거치지 않는다(2026. 11. 3. 점검: '② 2.' 줄이나 '뺌' 줄 하나로 본문 인용이 빠져나갔다).
     #    하단 목록에서는 뺀 줄도 받친다. 2026. 11. 4. `/하자보완`: 하단 ① 메모가 '이번 판에서 … 뺐습니다'라고 적으며 뺀 판결 번호를 들자
     #    '본문 인용 줄을 두라'고 막았다(본문이 아닌 자리에 본문 인용 줄을 요구하였다)
-    def nums(rs):
-        out = set()
-        for r in rs:
-            out |= cases(" ".join(r.values()))
-        return out
-    ref = [r for r in rows if "참고" in r.get("번호", "") and "하단" not in r.get("번호", "") and not is_gone(r)]
-    body_known = nums([r for r in rows if is_body(r, table_path)] + ref)
-    bottom_known = nums([r for r in rows if not is_gone(r) and not is_body(r, table_path)])
-    gone_known = nums([r for r in rows if is_gone(r)])
+    body_known, bottom_known, gone_known = known_numbers(rows, table_path)
     for p, t in tgt:
         body, bottom = body_and_bottom(p, t)
         seen = set()
-        for part, ok in ((body, body_known), (bottom, body_known | bottom_known | gone_known)):
+        for part, ok, in_bottom in ((body, body_known, False), (bottom, body_known | bottom_known | gone_known, True)):
             for c in sorted(cases(part) - ok - seen):
                 seen.add(c)
                 bad += 1
@@ -299,7 +323,8 @@ def check(table_path, targets):
                 elif c in gone_known:
                     lines.append("불일치: 뺀 인용의 %s 가 산출물에 남아 있다 — 지우거나, 남길 것이면 본문 인용 줄을 둔다(%s)" % (c, os.path.basename(p)))
                 else:
-                    lines.append("불일치: 산출물의 %s 가 대조표에 없다(%s)" % (c, os.path.basename(p)))
+                    lines.append("불일치: 산출물의 %s 가 대조표에 없다(%s)" % (c, os.path.basename(p))
+                                 + (" — " + BOTTOM_HINT if in_bottom else ""))
     # 6) 산출물에 적은 판결 표시를 자리마다 대조표의 사건 표시와 맞댄다. 2026. 11. 9. `/하자보완`: 3)은 산출물 어딘가에 그 날짜가 있는지만 보아
     #    같은 판결을 두 번 적은 산출물의 둘째 자리 날짜가 틀려도 지나갔고, 법원 이름은 어디서도 맞대지 않았다. 실제 산출물 사본의 표시 자리를
     #    하나씩 바꾸어 보니 날짜 302곳 가운데 122곳, 법원 301곳 가운데 246곳이 지나갔다(사건 표시를 잘못 옮기는 것, 루트 CLAUDE.md 판례 인용 ①)

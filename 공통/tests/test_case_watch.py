@@ -236,7 +236,10 @@ class CaseWatchTests(unittest.TestCase):
                       '항상 그렇듯이 이분은 길게 쓰면 못알아들으니 결론 위주로 간략하게 써줘',
                       # 2026. 11. 12. 회사 PC 의 지적이 '이상한데' 꼴이어서 걸리지 않았다(11. 13. `/하자보완`)
                       '그리고 2면 상단 원고 피고 있는 표도 이상한데',
-                      '표 모양이 좀 이상함'):
+                      '표 모양이 좀 이상함',
+                      # 2026. 11. 13. 회사 PC 의 다그치는 말과 한국어로 쓰라는 말이 걸리지 않아 사건상태로만 찾았다(11. 14. `/하자보완`)
+                      '뭐야.. 전면재검토하라니까 오푸스로 했네',
+                      '한글로해'):
                 self.assertIsNotNone(cw.log_feedback({'prompt': 말, 'session_id': 's'}, self.root), 말)
             for 말 in ('좋아 진행해', '둘 다 넣어 줘', '팀즈에 심문회의 결과 올림 확인해봐 수고 많았다'):
                 self.assertIsNone(cw.log_feedback({'prompt': 말, 'session_id': 's'}, self.root), 말)
