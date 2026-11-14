@@ -316,8 +316,11 @@ def hwp_app():
 
 
 def convert(src: Path, dst: Path) -> None:
-    """한글로 열어 다른 형식으로 저장한다(hwp ↔ hwpx). 이미 떠 있는 한글 창은 쓰지 않는다."""
+    """한글로 열어 다른 형식으로 저장한다(hwp ↔ hwpx). 이미 떠 있는 한글 창은 쓰지 않는다.
+    한글은 따로 뜬 프로그램이어서 이 스크립트의 작업 폴더를 모르므로 절대경로로 넘긴다. 2026. 11. 15. `/하자보완`: 11. 13. OES 근골격계
+    의견서 별지 검토본을 저장소 루트 기준 상대경로로 넘기자 '열지 못했습니다'로 멈췄고, 그 세션은 절대경로로 다시 넘겼다."""
     fmt = {'.hwp': 'HWP', '.hwpx': 'HWPX'}
+    src, dst = Path(src).resolve(), Path(dst).resolve()
     hwp = hwp_app()
     try:
         if not hwp.Open(str(src), fmt[src.suffix.lower()], 'forceopen:true'):

@@ -239,7 +239,9 @@ class CaseWatchTests(unittest.TestCase):
                       '표 모양이 좀 이상함',
                       # 2026. 11. 13. 회사 PC 의 다그치는 말과 한국어로 쓰라는 말이 걸리지 않아 사건상태로만 찾았다(11. 14. `/하자보완`)
                       '뭐야.. 전면재검토하라니까 오푸스로 했네',
-                      '한글로해'):
+                      '한글로해',
+                      # 2026. 11. 14. 이 PC 의 바로잡는 말('A 말고 B')이 걸리지 않아 세션 기록으로만 찾았다(11. 15. `/하자보완`)
+                      '따로합산 말고 동시에 돌렸으니 다 하나의 사건이라고 봤을때의  tc'):
                 self.assertIsNotNone(cw.log_feedback({'prompt': 말, 'session_id': 's'}, self.root), 말)
             for 말 in ('좋아 진행해', '둘 다 넣어 줘', '팀즈에 심문회의 결과 올림 확인해봐 수고 많았다'):
                 self.assertIsNone(cw.log_feedback({'prompt': 말, 'session_id': 's'}, self.root), 말)

@@ -151,6 +151,17 @@ class BriefGateTest(unittest.TestCase):
             self.assertEqual(status(res, 이름), '막힘', 이름)
         self.assertEqual(status(res, '판례 대조'), '해당 없음')
 
+    def test_bare_target_name_is_found_in_the_round(self):
+        """2026. 11. 15. `/하자보완`: `--대상` 에 파일 이름만 주면 저장소 루트에서 찾아 '초안이 없다'로 막혔다. 라운드의 출력/ 에서 찾는다."""
+        self.assertEqual(Path(fc.대상_자리(self.case, self.draft.name)), self.draft)
+        self.assertEqual(Path(fc.대상_자리(self.case, self.draft.name, 1)), self.draft)
+        self.assertEqual(fc.대상_자리(self.case, '없는 초안.md'), '없는 초안.md')          # 못 찾으면 준 그대로(관문이 막는다)
+        self.assertEqual(fc.대상_자리(self.case, str(self.draft)), str(self.draft))      # 있는 경로는 그대로
+        with redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(fc.main([str(self.case), '--대상', self.draft.name]), 1)
+        self.assertIn('라운드1/출력/서면초안.md', out.getvalue())
+        self.assertNotIn('초안이 없다', out.getvalue())
+
     def test_complete_work_passes_and_editing_the_draft_reopens_the_gates(self):
         self.complete()
         res = fc.서면(self.case)
@@ -1327,6 +1338,18 @@ class OpinionGateTest(unittest.TestCase):
             er.main(['make', str(self.case), '--자료', str(self.case), '--no-ocr'])
         recs = sorted(p.name for p in (self.case / '작업' / '자료읽기').glob('*.md'))
         self.assertEqual(recs, ['HPS 단체협약.pdf.md'])          # 우리가 만든 검토의견서는 자료로 세지 않는다
+
+    def test_bare_target_name_is_found_in_the_case_folder(self):
+        """2026. 11. 15. `/하자보완`: 11. 14. 의견서 별지 검토의 회신 초안을 `--대상` 에 파일 이름만 주자 저장소 루트에서 찾아
+        '검토의견서·회신초안이 없다'로 막혔다. 사건 폴더에서 찾고, 없는 파일이면 그 이름을 들어 막는다."""
+        self.assertEqual(Path(fc.대상_자리(self.case, self.reply.name)), self.reply)
+        with redirect_stdout(io.StringIO()) as out:
+            fc.main([str(self.case), '--대상', self.reply.name])
+        self.assertIn(f'대상: {self.reply.name}', out.getvalue())
+        self.assertNotIn('검토의견서·회신초안이 없다', out.getvalue())
+        res = fc.검토의견(self.case, fc.대상_자리(self.case, 'HPS_근로시간면제-없는 회신초안.md'))
+        self.assertEqual(status(res, '산출물'), '막힘')
+        self.assertIn('--대상 파일이 없다: HPS_근로시간면제-없는 회신초안.md', next(m for n, s, m in res.줄 if n == '산출물'))
 
     def test_memo_and_other_words_are_not_style_hits(self):
         """보완 메모는 의뢰인에게 가는 글이 아니고, '목적은 바람직' 같은 말은 '적다'가 아니다(2026. 11. 2. 첫 밤 점검).

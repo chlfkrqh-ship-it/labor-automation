@@ -5,6 +5,7 @@
 """
 import importlib.util
 import io
+import os
 import shutil
 import sys
 import tempfile
@@ -336,6 +337,38 @@ class HwpxTests(unittest.TestCase):
             calls.clear()
             self.assertEqual(memo.run(hwp, original_hwp), 0)                             # 바꿀 것이 없으면 다시 저장하지 않는다
             self.assertEqual(calls, [('.hwp', '.hwpx'), ('.hwp', '.hwpx')])
+
+    def test_hangul_gets_absolute_paths(self):
+        """한글은 따로 뜬 프로그램이라 상대경로를 이 스크립트의 작업 폴더로 풀지 못한다(2026. 11. 13. OES 근골격계 의견서 별지 검토본이
+        '열지 못했습니다'로 멈췄다). 상대경로로 불러도 한글에는 절대경로가 간다."""
+        base = Path(self.tmp.name)
+        (base / '검토본.hwp').write_bytes(b'hwp')
+        본 = []
+
+        class 가짜한글:
+            def Open(self, path, fmt, arg):
+                본.append(('열기', path))
+                return Path(path).is_file()
+
+            def SaveAs(self, path, fmt, arg):
+                본.append(('저장', path))
+                Path(path).write_bytes(b'hwpx')
+
+            def Clear(self, n):
+                pass
+
+            def Quit(self):
+                pass
+
+        cwd = os.getcwd()
+        os.chdir(base)
+        try:
+            with mock.patch.object(memo, 'hwp_app', 가짜한글):
+                memo.convert(Path('검토본.hwp'), Path('검토본.hwpx'))
+        finally:
+            os.chdir(cwd)
+        self.assertEqual(본, [('열기', str((base / '검토본.hwp').resolve())), ('저장', str((base / '검토본.hwpx').resolve()))])
+        self.assertTrue((base / '검토본.hwpx').is_file())
 
     def test_hwp_needs_hangul_automation(self):
         with mock.patch.dict(sys.modules, {'win32com': None, 'win32com.client': None}):
